@@ -39,6 +39,8 @@ evaluate = "0 18 * * 5"
 
 [plugins.yfinance]
 enabled = true
+# yfinance ticker suffix per market; add a market here, not in code
+suffixes = { us = "", asx = ".AX" }
 
 [plugins.ensemble]
 enabled = true

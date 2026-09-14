@@ -127,3 +127,52 @@ def test_signal_metadata_round_trips(tmp_engine):
     with Session(tmp_engine) as session:
         row = session.exec(select(SignalTable).where(SignalTable.id == "sig-meta")).one()
         assert row.metadata_ == {"critic": {"verdict": "reduce", "risks": ["a", "b"]}}
+
+
+def test_ingest_stores_all_row_types(tmp_engine):
+    from datetime import UTC, date, datetime
+
+    from sqlmodel import select
+
+    from rigger.cli import _store_fetched
+    from rigger.core.db import EventTable, FundamentalTable, NewsItemTable
+    from rigger.core.models import Bar, Event, Fundamental, NewsItem
+
+    now = datetime.now(UTC)
+    fetched = [
+        Bar(
+            instrument_id="US:AAPL",
+            ts=now,
+            open=1,
+            high=2,
+            low=0.5,
+            close=1.5,
+            volume=10,
+            source="t",
+        ),
+        NewsItem(
+            id="n1", instrument_ids=["US:AAPL"], published=now, title="x", url="u", source="t"
+        ),
+        Fundamental(
+            instrument_id="US:AAPL", as_of=date(2026, 1, 1), metric="eps", value=1.0, source="t"
+        ),
+        Event(
+            id="e1",
+            instrument_id="US:AAPL",
+            ts=now,
+            kind="earnings",
+            summary="s",
+            sentiment=0.0,
+            extracted_by="t",
+            prompt_version="n/a",
+        ),
+    ]
+    first = _store_fetched(tmp_engine, fetched)
+    second = _store_fetched(tmp_engine, fetched)  # re-ingest must not duplicate
+    assert first == {"bars": 1, "news": 1, "fundamentals": 1, "events": 1}
+    assert second["fundamentals"] == 0
+    with Session(tmp_engine) as session:
+        assert len(session.exec(select(NewsItemTable)).all()) == 1
+        assert len(session.exec(select(FundamentalTable)).all()) == 1
+        assert len(session.exec(select(EventTable)).all()) == 1
+        assert session.exec(select(BarTable)).all().__len__() == 1

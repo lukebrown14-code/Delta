@@ -16,7 +16,7 @@ from typing import Any
 
 import httpx
 
-from rigger.core.models import Bar, Fundamental, Instrument, NewsItem
+from rigger.core.models import Bar, Event, Fundamental, Instrument, NewsItem
 from rigger.core.plugin import DataPlugin
 
 log = logging.getLogger(__name__)
@@ -64,9 +64,9 @@ class ASXAnnouncements(DataPlugin):
 
     async def fetch(
         self, instruments: list[Instrument], since: datetime
-    ) -> list[Bar | NewsItem | Fundamental]:
+    ) -> list[Bar | NewsItem | Fundamental | Event]:
         since_utc = since.astimezone(UTC) if since.tzinfo else since.replace(tzinfo=UTC)
-        items: list[Bar | NewsItem | Fundamental] = []
+        items: list[Bar | NewsItem | Fundamental | Event] = []
         headers = {"User-Agent": self.user_agent, "Accept": "application/json"}
         async with httpx.AsyncClient(timeout=self.timeout, headers=headers) as client:
             for inst in instruments:

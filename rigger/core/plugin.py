@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any
 
 from rigger.core.models import (
     Bar,
+    Event,
     Fill,
     Fundamental,
     Instrument,
@@ -50,7 +51,7 @@ class DataPlugin(Plugin):
 
     async def fetch(
         self, instruments: list[Instrument], since: datetime
-    ) -> list[Bar | NewsItem | Fundamental]:
+    ) -> list[Bar | NewsItem | Fundamental | Event]:
         raise NotImplementedError
 
 

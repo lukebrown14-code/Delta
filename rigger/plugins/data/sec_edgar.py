@@ -17,7 +17,7 @@ from typing import Any
 
 import httpx
 
-from rigger.core.models import Bar, Fundamental, Instrument, NewsItem
+from rigger.core.models import Bar, Event, Fundamental, Instrument, NewsItem
 from rigger.core.plugin import DataPlugin
 
 log = logging.getLogger(__name__)
@@ -62,9 +62,9 @@ class SECEdgar(DataPlugin):
     # ------------------------------------------------------------------ #
     async def fetch(
         self, instruments: list[Instrument], since: datetime
-    ) -> list[Bar | NewsItem | Fundamental]:
+    ) -> list[Bar | NewsItem | Fundamental | Event]:
         since_date = since.date()
-        out: list[Bar | NewsItem | Fundamental] = []
+        out: list[Bar | NewsItem | Fundamental | Event] = []
         async with httpx.AsyncClient(
             headers={"User-Agent": self.user_agent, "Accept-Encoding": "gzip, deflate"},
             timeout=30.0,
