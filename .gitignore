@@ -1,6 +1,7 @@
 .env
-data/*.db
-reports/
+/data/*.db
+/reports/
 __pycache__/
 .venv/
 *.pyc
+.claude/
