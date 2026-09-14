@@ -32,6 +32,7 @@ llm_analyst = "rigger.plugins.strategies.llm_analyst:LLMAnalyst"
 paper_broker = "rigger.plugins.brokers.paper:PaperBroker"
 markdown_report = "rigger.plugins.reports.markdown:MarkdownReport"
 rss = "rigger.plugins.data.rss:RSSData"
+momentum = "rigger.plugins.strategies.momentum:Momentum"
 
 [build-system]
 requires = ["uv_build>=0.12.13,<0.13.0"]
