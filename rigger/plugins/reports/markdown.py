@@ -32,7 +32,9 @@ class MarkdownReport(ReportPlugin):
         if not report.signals:
             lines.append("_No signals generated._")
         for s in report.signals:
-            lines.append(f"### {s.instrument_id} — {s.direction.upper()} (conviction {s.conviction:.2f})")
+            lines.append(
+                f"### {s.instrument_id} — {s.direction.upper()} (conviction {s.conviction:.2f})"
+            )
             lines.append("")
             lines.append(f"- **Strategy:** {s.strategy}")
             lines.append(f"- **Model:** {s.model or 'n/a'}")
@@ -55,7 +57,9 @@ class MarkdownReport(ReportPlugin):
         if not report.fills:
             lines.append("_No fills._")
         for f in report.fills:
-            lines.append(f"- {f.qty:.4f} @ {f.price:.2f} (fee {f.fee:.2f}, slippage {f.slippage:.4f})")
+            lines.append(
+                f"- {f.qty:.4f} @ {f.price:.2f} (fee {f.fee:.2f}, slippage {f.slippage:.4f})"
+            )
         lines.append("")
 
         lines += ["## Positions", ""]
