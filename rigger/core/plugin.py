@@ -28,6 +28,10 @@ class Plugin:
     name: str  # unique, snake_case
     version: str = "0.1.0"
     enabled: bool = True
+    # Name of another plugin whose [plugins.<shared>] table supplies defaults
+    # for this one, so sibling plugins (e.g. the yfinance bars and calendar
+    # plugins) read one mapping instead of two that drift.
+    shared_config: str | None = None
 
     def configure(self, cfg: dict[str, Any]) -> None:
         """Receives its [plugins.<name>] TOML table."""
@@ -115,7 +119,11 @@ def discover_plugins() -> dict[str, Plugin]:
 
 def apply_config(plugins: dict[str, Plugin], plugin_cfg: dict[str, dict[str, Any]]) -> None:
     for name, plugin in plugins.items():
-        table = plugin_cfg.get(name, {})
+        table = dict(plugin_cfg.get(name, {}))
         if "enabled" in table:
             plugin.enabled = bool(table["enabled"])
+        shared = plugin.shared_config
+        if shared and shared != name:
+            defaults = {k: v for k, v in plugin_cfg.get(shared, {}).items() if k != "enabled"}
+            table = {**defaults, **table}
         plugin.configure(table)

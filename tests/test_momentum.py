@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 import pytest
 from sqlmodel import Session, select
@@ -18,6 +18,7 @@ from rigger.plugins.strategies.momentum import (
     SKIP_BARS,
     Momentum,
 )
+from tests.conftest import seed_bars
 
 N_BARS = 260
 START = datetime(2025, 9, 1, tzinfo=UTC)
@@ -47,25 +48,6 @@ PRICE_FN: dict[str, Callable[[int], float]] = {
 }
 
 
-def _seed(engine, instrument_id: str, price_fn: Callable[[int], float], n: int = N_BARS) -> None:
-    with Session(engine) as session:
-        for i in range(n):
-            p = price_fn(i)
-            session.add(
-                BarTable(
-                    instrument_id=instrument_id,
-                    ts=START + timedelta(days=i),
-                    open=p,
-                    high=p + 1,
-                    low=p - 1,
-                    close=p,
-                    volume=1000.0,
-                    source="test",
-                )
-            )
-        session.commit()
-
-
 def _expected_momentum(price_fn: Callable[[int], float]) -> float:
     return price_fn(N_BARS - SKIP_BARS) / price_fn(N_BARS - LOOKBACK_BARS) - 1
 
@@ -74,9 +56,9 @@ def _expected_momentum(price_fn: Callable[[int], float]) -> float:
 def universe(tmp_engine) -> list[Instrument]:
     insts = [_inst(sym) for sym in PRICE_FN]
     for inst in insts:
-        _seed(tmp_engine, inst.id, PRICE_FN[inst.symbol])
+        seed_bars(tmp_engine, inst.id, n=N_BARS, start=START, price_fn=PRICE_FN[inst.symbol])
     short = _inst("SHORT")  # 100 bars only, must be skipped
-    _seed(tmp_engine, short.id, _linear(0.01), n=100)
+    seed_bars(tmp_engine, short.id, n=100, start=START, price_fn=_linear(0.01))
     return [*insts, short]
 
 
@@ -132,7 +114,7 @@ def test_signal_fields_and_evidence(tmp_engine, universe):
 
 def test_single_instrument_is_long_with_full_conviction(tmp_engine):
     inst = _inst("ONLY")
-    _seed(tmp_engine, inst.id, _linear(-0.001))
+    seed_bars(tmp_engine, inst.id, n=N_BARS, start=START, price_fn=_linear(-0.001))
     sig = _run(tmp_engine, [inst])[inst.id]
     assert sig.direction == "long" and sig.conviction == 1.0
 

@@ -78,7 +78,7 @@ Already in place, no work needed: `Event`/`EventTable`, `Fundamental`/`Fundament
 
 ### G — Critic strategy
 - `[plugins.critic].wraps = "llm_analyst"`. `generate` runs the wrapped strategy, then for each signal sends thesis + brief to the `critique` route asking for the strongest counter-argument, a list of risks, and a revised conviction 0..1.
-- Stores `metadata["critic"] = {counter, risks, original_conviction, model, prompt_version}` and overwrites `conviction`. Keeps `strategy = "critic:llm_analyst"` so the scorecard can compare.
+- Stores `metadata["critic"] = {counter, risks, original_conviction, verdict}` (model and prompt_version on the top-level signal fields) and overwrites `conviction`. Keeps `strategy = "critic:llm_analyst"` so the scorecard can compare.
 - `critic_v1.j2`. Tests with `FakeLLM`.
 
 ### H — Ensemble strategy

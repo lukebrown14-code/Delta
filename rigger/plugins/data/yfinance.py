@@ -23,9 +23,14 @@ def yf_symbol(inst: Instrument, suffixes: dict[str, str] | None = None) -> str:
 
 
 class YFinanceSymbols(DataPlugin):
-    """Base for yfinance-backed plugins: shares the ``suffixes`` config table."""
+    """Base for yfinance-backed plugins: shares the ``suffixes`` config table.
+
+    Every subclass reads ``[plugins.yfinance].suffixes`` (via ``shared_config``)
+    so a market added there applies to bars and calendar alike.
+    """
 
     market = None  # works for any market with a known suffix
+    shared_config = "yfinance"
 
     def __init__(self) -> None:
         self.suffixes: dict[str, str] = dict(DEFAULT_SUFFIXES)

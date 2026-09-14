@@ -12,7 +12,6 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import UTC, date, datetime
-from itertools import zip_longest
 from typing import Any
 
 import httpx
@@ -104,12 +103,12 @@ class SECEdgar(DataPlugin):
     # HTTP
     # ------------------------------------------------------------------ #
     async def _get_json(self, client: httpx.AsyncClient, url: str) -> Any:
-        # A slot is held for at least 1/MAX_REQUESTS_PER_SECOND seconds after
-        # each request, so MAX_REQUESTS_PER_SECOND slots cap throughput.
+        # Each of the MAX_REQUESTS_PER_SECOND slots is held for a full second
+        # after its request, so at most that many requests start per second.
         async with self._semaphore:
             resp = await client.get(url)
             resp.raise_for_status()
-            await asyncio.sleep(1.0 / MAX_REQUESTS_PER_SECOND)
+            await asyncio.sleep(1.0)
             return resp.json()
 
     async def _company_tickers(self, client: httpx.AsyncClient) -> dict[str, str]:
@@ -134,8 +133,8 @@ class SECEdgar(DataPlugin):
         documents = recent.get("primaryDocument", [])
         descriptions = recent.get("primaryDocDescription", [])
         items: list[NewsItem] = []
-        for form, filed_raw, accession, document, description in zip_longest(
-            forms, dates, accessions, documents, descriptions
+        for form, filed_raw, accession, document, description in zip(
+            forms, dates, accessions, documents, descriptions, strict=True
         ):
             if form not in FORMS:
                 continue

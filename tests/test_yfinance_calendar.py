@@ -8,6 +8,8 @@ from datetime import UTC, datetime, timedelta
 import yfinance
 
 from rigger.core.models import Instrument
+from rigger.core.plugin import apply_config
+from rigger.plugins.data.yfinance import YFinanceData
 from rigger.plugins.data.yfinance_calendar import YFinanceCalendar, calendar_event_id
 
 AAPL = Instrument(id="US:AAPL", market="us", symbol="AAPL", currency="USD")
@@ -115,3 +117,15 @@ def test_ticker_errors_do_not_abort_the_batch(monkeypatch):
     events = asyncio.run(_plugin().fetch([AAPL, BHP], SINCE))
 
     assert [e.instrument_id for e in events] == [BHP.id]
+
+
+def test_suffixes_are_shared_with_the_bars_plugin(monkeypatch) -> None:
+    """A market added to [plugins.yfinance].suffixes must reach the calendar plugin too."""
+    bars, cal = YFinanceData(), YFinanceCalendar()
+    apply_config(
+        {bars.name: bars, cal.name: cal},
+        {"yfinance": {"suffixes": {"lse": ".L"}}, "yfinance_calendar": {"enabled": True}},
+    )
+    shel = Instrument(id="LSE:SHEL", market="lse", symbol="SHEL", currency="GBP")
+    assert bars.yf_symbol(shel) == "SHEL.L"
+    assert cal.yf_symbol(shel) == "SHEL.L"

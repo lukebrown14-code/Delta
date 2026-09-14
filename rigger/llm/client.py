@@ -8,7 +8,6 @@ The actual model call is delegated to a :class:`rigger.llm.providers.Provider`
 
 from __future__ import annotations
 
-import hashlib
 import time
 import uuid
 from dataclasses import dataclass
@@ -19,6 +18,7 @@ from sqlalchemy.engine import Engine
 from sqlmodel import Session, select
 
 from rigger.core.db import LLMCallTable
+from rigger.core.ids import stable_id
 from rigger.llm.providers import (
     LiteLLMProxyProvider,
     LiteLLMSDKProvider,
@@ -44,8 +44,7 @@ class LLMClient:
 
     @staticmethod
     def prompt_hash(model: str, prompt_version: str, prompt: str) -> str:
-        raw = f"{model}\0{prompt_version}\0{prompt}".encode()
-        return hashlib.sha256(raw).hexdigest()
+        return stable_id(model, prompt_version, prompt)
 
     async def complete(
         self,

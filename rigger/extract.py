@@ -135,8 +135,10 @@ async def extract_events(ctx: Context, since: datetime, batch_size: int = 20) ->
                         prompt_version=PROMPT_VERSION,
                     )
                 )
-            stored.extend(new_events)
+            # Persist per batch so a failure later in the run keeps what was
+            # already paid for.
+            if new_events:
+                store_items(ctx.engine, new_events)
+                stored.extend(new_events)
 
-    if stored:
-        store_items(ctx.engine, stored)
     return stored

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from sqlmodel import Session
 
@@ -158,3 +158,55 @@ def test_ingest_stores_all_row_types(tmp_engine):
         assert len(session.exec(select(FundamentalTable)).all()) == 1
         assert len(session.exec(select(EventTable)).all()) == 1
         assert len(session.exec(select(BarTable)).all()) == 1
+
+
+def test_store_items_chunks_large_batches(tmp_engine):
+    """One multi-row INSERT is capped by SQLite's bound-parameter limit; large
+    backfills must be split so a year of bars for many instruments still lands."""
+    from rigger.core.db import store_items
+    from rigger.core.models import Bar
+
+    start = datetime(2000, 1, 1, tzinfo=UTC)
+    bars = [
+        Bar(
+            instrument_id="US:AAPL",
+            ts=start + timedelta(days=i),
+            open=1.0,
+            high=2.0,
+            low=0.5,
+            close=1.5,
+            volume=10.0,
+            source="test",
+        )
+        for i in range(9000)  # 9000 x 8 columns > 32766 default variable ceiling
+    ]
+    assert store_items(tmp_engine, bars)["bar"] == 9000
+    assert store_items(tmp_engine, bars)["bar"] == 0
+
+
+def test_init_engine_dedupes_legacy_fundamentals(tmp_path):
+    """A DB written before the unique index may hold duplicate natural keys; the
+    migration must collapse them rather than fail every command at startup."""
+    import sqlite3
+
+    from sqlmodel import select
+
+    from rigger.core.db import FundamentalTable, init_engine
+
+    db = tmp_path / "legacy.db"
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "CREATE TABLE fundamental (id INTEGER PRIMARY KEY, instrument_id VARCHAR NOT NULL, "
+            "as_of DATE NOT NULL, metric VARCHAR NOT NULL, value FLOAT NOT NULL, "
+            "source VARCHAR NOT NULL)"
+        )
+        row = ("ASX:BHP", "2024-01-01", "pe", 10.0, "yf")
+        conn.executemany(
+            "INSERT INTO fundamental (instrument_id, as_of, metric, value, source) "
+            "VALUES (?, ?, ?, ?, ?)",
+            [row, row],
+        )
+
+    engine = init_engine(db)
+    with Session(engine) as session:
+        assert len(session.exec(select(FundamentalTable)).all()) == 1

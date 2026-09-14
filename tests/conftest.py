@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -31,12 +32,16 @@ def seed_bars(
     n: int = 80,
     base: float = 100.0,
     start: datetime | None = None,
+    price_fn: Callable[[int], float] | None = None,
 ) -> None:
-    """Insert n daily bars rising 0.5/day from ``base``, ending today unless ``start`` is given."""
+    """Insert n daily bars ending today unless ``start`` is given.
+
+    Prices rise 0.5/day from ``base`` unless ``price_fn(i)`` supplies them.
+    """
     start = start or datetime.now(UTC) - timedelta(days=n)
     with Session(engine) as session:
         for i in range(n):
-            price = base + i * 0.5
+            price = price_fn(i) if price_fn else base + i * 0.5
             session.add(
                 BarTable(
                     instrument_id=instrument_id,

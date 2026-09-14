@@ -12,7 +12,7 @@ from typing import Any
 
 from sqlalchemy import JSON, Column, UniqueConstraint
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
-from sqlalchemy.engine import Engine
+from sqlalchemy.engine import Connection, Engine
 from sqlmodel import Field, Session, SQLModel, create_engine
 
 from rigger.core.json import to_json
@@ -204,6 +204,18 @@ _ADDED_UNIQUE_INDEXES: list[tuple[str, str, tuple[str, ...]]] = [
 ]
 
 
+def _has_unique_index(conn: Connection, table: str, cols: tuple[str, ...]) -> bool:
+    """True when any unique index (named or constraint autoindex) covers exactly ``cols``."""
+    for row in conn.exec_driver_sql(f"PRAGMA index_list({table})"):
+        name, unique = row[1], row[2]
+        if not unique:
+            continue
+        indexed = tuple(r[2] for r in conn.exec_driver_sql(f"PRAGMA index_info({name})"))
+        if indexed == cols:
+            return True
+    return False
+
+
 def _migrate(engine: Engine) -> None:
     with engine.begin() as conn:
         for table, column, ddl_type in _ADDED_COLUMNS:
@@ -211,10 +223,20 @@ def _migrate(engine: Engine) -> None:
             if column not in existing:
                 conn.exec_driver_sql(f"ALTER TABLE {table} ADD COLUMN {column} {ddl_type}")
         for name, table, cols in _ADDED_UNIQUE_INDEXES:
+            if _has_unique_index(conn, table, cols):
+                continue  # fresh DB: the model's UniqueConstraint already created one
+            # Legacy rows were deduped in Python, which could not stop a concurrent
+            # ingest from writing the same key twice. Keep the first copy so the
+            # index can be created instead of failing every command at startup.
+            key = ", ".join(cols)
             conn.exec_driver_sql(
-                f"CREATE UNIQUE INDEX IF NOT EXISTS {name} ON {table} ({', '.join(cols)})"
+                f"DELETE FROM {table} WHERE id NOT IN (SELECT MIN(id) FROM {table} GROUP BY {key})"
             )
+            conn.exec_driver_sql(f"CREATE UNIQUE INDEX IF NOT EXISTS {name} ON {table} ({key})")
 
+
+# SQLITE_MAX_VARIABLE_NUMBER default since SQLite 3.32.
+_MAX_SQL_VARIABLES = 32766
 
 # (model, table, JSON-encoded list field or None, conflict key)
 _STORES: tuple[tuple[type, type[SQLModel], str | None, tuple[str, ...]], ...] = (
@@ -246,13 +268,17 @@ def store_items(
                     data[json_field] = to_json(data[json_field])
                 rows.append(data)
             name = str(table.__tablename__)
-            if not rows:
-                counts[name] = 0
-                continue
-            result = session.exec(
-                sqlite_insert(table).values(rows).on_conflict_do_nothing(index_elements=list(key))
-            )
-            counts[name] = int(result.rowcount)
+            counts[name] = 0
+            # One multi-row VALUES statement binds rows x columns parameters;
+            # SQLite's default ceiling is 32766, so chunk to stay under it.
+            chunk = _MAX_SQL_VARIABLES // (len(table.__table__.columns) + 1)  # type: ignore[attr-defined]
+            for start in range(0, len(rows), chunk):
+                result = session.exec(
+                    sqlite_insert(table)
+                    .values(rows[start : start + chunk])
+                    .on_conflict_do_nothing(index_elements=list(key))
+                )
+                counts[name] += int(result.rowcount)
         session.commit()
     return counts
 
