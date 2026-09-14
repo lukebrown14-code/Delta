@@ -56,3 +56,7 @@ count = 20            # announcements per company per fetch
 timeout = 20          # seconds
 max_retries = 3       # on 429/5xx, exponential backoff from backoff_seconds
 backoff_seconds = 1.0
+
+[plugins.sec_edgar]
+enabled = true
+contact = "you@example.com"  # SEC requires a contact address in the User-Agent
