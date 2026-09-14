@@ -28,10 +28,12 @@ INVALIDATION = "Falls out of top quintile of 12-1 momentum at next monthly rank.
 @dataclass
 class _Score:
     instrument: Instrument
-    momentum: float
-    start_close: float
-    end_close: float
-    evidence_ids: list[str]
+    start: BarTable  # close ~12 months ago
+    end: BarTable  # close ~1 month ago
+
+    @property
+    def momentum(self) -> float:
+        return self.end.close / self.start.close - 1
 
 
 def _score(session: Session, inst: Instrument, as_of: datetime) -> _Score | None:
@@ -44,17 +46,11 @@ def _score(session: Session, inst: Instrument, as_of: datetime) -> _Score | None
     ).all()
     if len(rows) < LOOKBACK_BARS:
         return None
-    bars = list(reversed(rows))
-    start, end = bars[-LOOKBACK_BARS], bars[-SKIP_BARS]
+    # rows are newest-first and exactly LOOKBACK_BARS long.
+    start, end = rows[-1], rows[SKIP_BARS - 1]
     if start.close <= 0:
         return None
-    return _Score(
-        instrument=inst,
-        momentum=end.close / start.close - 1,
-        start_close=start.close,
-        end_close=end.close,
-        evidence_ids=[str(start.id), str(end.id)],
-    )
+    return _Score(instrument=inst, start=start, end=end)
 
 
 class Momentum(StrategyPlugin):
@@ -89,11 +85,11 @@ class Momentum(StrategyPlugin):
                     horizon_days=HORIZON_DAYS,
                     thesis=(
                         f"12-1 month momentum {s.momentum:+.1%} "
-                        f"(close {s.start_close:.2f} -> {s.end_close:.2f}); "
+                        f"(close {s.start.close:.2f} -> {s.end.close:.2f}); "
                         f"ranked {rank + 1} of {n} in universe."
                     ),
                     invalidation=INVALIDATION,
-                    evidence_ids=s.evidence_ids,
+                    evidence_ids=[str(s.start.id), str(s.end.id)],
                     model=None,
                     prompt_version=None,
                     cost_usd=0.0,

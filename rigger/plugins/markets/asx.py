@@ -63,8 +63,3 @@ class ASXMarket(MarketPlugin):
     def fee(notional: float) -> float:
         """Brokerage: 0.1 % of notional with a $10 minimum."""
         return max(abs(notional) * FEE_RATE, FEE_MIN)
-
-    @staticmethod
-    def yf_symbol(instrument: Instrument) -> str:
-        """Map an ASX code to its yfinance ticker: BHP -> BHP.AX."""
-        return f"{instrument.symbol.upper()}.AX"

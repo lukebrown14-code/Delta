@@ -8,18 +8,18 @@ are returned so the scorecard can compare them side by side.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from datetime import UTC, datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, ValidationError
-from sqlmodel import Session, select
 
 from rigger.brief import build_brief
-from rigger.core.db import LLMCallTable
 from rigger.core.models import Instrument, Signal
 from rigger.core.plugin import Context, StrategyPlugin
+from rigger.llm.router import model_for
 
 CRITIC_TEMPLATE = "critic_v1.j2"
 PROMPT_VERSION = CRITIC_TEMPLATE.removesuffix(".j2")
@@ -55,20 +55,22 @@ class Critic(StrategyPlugin):
                 f"({type(base_plugin).__name__})"
             )
 
-        model = ctx.config.llm_routing.get("critique", "openai/gpt-4o")
+        model = model_for(ctx.config, "critique")
         instruments = {inst.id: inst for inst in ctx.universe}
 
         base_signals = await base_plugin.generate(ctx)
-        out: list[Signal] = list(base_signals)
+        targets = []
         for base in base_signals:
             inst = instruments.get(base.instrument_id)
             if inst is None:
                 log.warning("critic: %s not in universe; skipping", base.instrument_id)
                 continue
-            critic_signal = await self._critique(ctx, base, inst, model)
-            if critic_signal is not None:
-                out.append(critic_signal)
-        return out
+            targets.append((base, inst))
+        # Each critique is an independent LLM call; run them concurrently.
+        critiques = await asyncio.gather(
+            *(self._critique(ctx, base, inst, model) for base, inst in targets)
+        )
+        return list(base_signals) + [c for c in critiques if c is not None]
 
     async def _critique(
         self, ctx: Context, base: Signal, inst: Instrument, model: str
@@ -81,7 +83,7 @@ class Critic(StrategyPlugin):
             return None
 
         try:
-            draft, call_id = await structured_mod.structured(
+            draft, result = await structured_mod.structured(
                 ctx.llm,
                 task="critique",
                 model=model,
@@ -101,7 +103,6 @@ class Critic(StrategyPlugin):
             log.exception("invalid critique output for %s from %s; skipping", inst.id, model)
             return None
 
-        critique_cost = _call_cost(ctx, call_id)
         direction = "flat" if draft.verdict == "reject" else base.direction
 
         return Signal(
@@ -114,10 +115,10 @@ class Critic(StrategyPlugin):
             horizon_days=base.horizon_days,
             thesis=base.thesis,
             invalidation=base.invalidation,
-            evidence_ids=list(brief.evidence_ids or base.evidence_ids),
+            evidence_ids=brief.evidence_ids,
             model=model,
             prompt_version=PROMPT_VERSION,
-            cost_usd=(base.cost_usd or 0.0) + critique_cost,
+            cost_usd=(base.cost_usd or 0.0) + result.cost_usd,
             metadata={
                 **base.metadata,
                 "critic": {
@@ -126,17 +127,6 @@ class Critic(StrategyPlugin):
                     "counter_argument": draft.counter_argument,
                     "risks": draft.risks,
                     "verdict": draft.verdict,
-                    "model": model,
-                    "prompt_version": PROMPT_VERSION,
                 },
             },
         )
-
-
-def _call_cost(ctx: Context, call_id: str) -> float:
-    """Cost of one logged LLM call. Cache hits (empty id) and unknown ids cost 0."""
-    if not call_id:
-        return 0.0
-    with Session(ctx.engine) as session:
-        row = session.exec(select(LLMCallTable).where(LLMCallTable.id == call_id)).first()
-    return row.cost_usd if row is not None else 0.0

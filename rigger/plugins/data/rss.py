@@ -8,7 +8,7 @@ news is still stored.
 
 from __future__ import annotations
 
-import hashlib
+import asyncio
 import html
 import logging
 import re
@@ -19,12 +19,14 @@ from typing import Any
 import feedparser
 import httpx
 
-from rigger.core.models import Bar, Fundamental, Instrument, NewsItem
+from rigger.core.http import user_agent
+from rigger.core.ids import stable_id
+from rigger.core.models import Bar, Event, Fundamental, Instrument, NewsItem
 from rigger.core.plugin import DataPlugin
+from rigger.core.time import to_utc
 
 log = logging.getLogger(__name__)
 
-USER_AGENT = "rigger/0.1 (research harness)"
 _TAG_RE = re.compile(r"<[^>]+>")
 _WS_RE = re.compile(r"\s+")
 
@@ -35,7 +37,7 @@ def strip_html(text: str) -> str:
 
 
 def news_id(link: str, published: datetime) -> str:
-    return hashlib.sha256(f"{link}{published.isoformat()}".encode()).hexdigest()
+    return stable_id(link, published.isoformat())
 
 
 class _Matcher:
@@ -69,13 +71,9 @@ def _published(entry: Any, fallback: datetime) -> datetime:
     return fallback
 
 
-def _aware(ts: datetime) -> datetime:
-    return ts if ts.tzinfo else ts.replace(tzinfo=UTC)
-
-
 def parse_feed(
     raw: bytes,
-    instruments: list[Instrument],
+    instruments: list[Instrument] | _Matcher,
     since: datetime,
     now: datetime | None = None,
 ) -> list[NewsItem]:
@@ -83,10 +81,11 @@ def parse_feed(
 
     ``now`` is the timestamp given to undated entries; pass one value for a
     whole fetch so the same undated story in two feeds gets the same id.
+    ``instruments`` may be a pre-built ``_Matcher`` to avoid recompiling per feed.
     """
-    since = _aware(since)
+    since = to_utc(since)
     now = now or datetime.now(UTC)
-    matcher = _Matcher(instruments)
+    matcher = instruments if isinstance(instruments, _Matcher) else _Matcher(instruments)
     parsed = feedparser.parse(raw)
     items: list[NewsItem] = []
     for entry in parsed.entries:
@@ -122,23 +121,26 @@ class RSSData(DataPlugin):
 
     def configure(self, cfg: dict[str, Any]) -> None:
         self.feeds = [str(f) for f in cfg.get("feeds", [])]
-        self.timeout = float(cfg.get("timeout_seconds", self.timeout))
+        self.timeout = float(cfg.get("timeout", self.timeout))
 
     async def fetch(
         self, instruments: list[Instrument], since: datetime
-    ) -> list[Bar | NewsItem | Fundamental]:
+    ) -> list[Bar | NewsItem | Fundamental | Event]:
         items: dict[str, NewsItem] = {}
         now = datetime.now(UTC)
+        matcher = _Matcher(instruments)
         async with httpx.AsyncClient(
-            timeout=self.timeout, follow_redirects=True, headers={"User-Agent": USER_AGENT}
+            timeout=self.timeout,
+            follow_redirects=True,
+            headers={"User-Agent": user_agent("research harness")},
         ) as client:
-            for url in self.feeds:
-                raw = await self._get(client, url)
-                if raw is None:
-                    continue
-                for item in parse_feed(raw, instruments, since, now):
-                    # The same story syndicated in two feeds has the same id.
-                    items.setdefault(item.id, item)
+            feeds = await asyncio.gather(*(self._get(client, url) for url in self.feeds))
+        for raw in feeds:
+            if raw is None:
+                continue
+            for item in parse_feed(raw, matcher, since, now):
+                # The same story syndicated in two feeds has the same id.
+                items.setdefault(item.id, item)
         return list(items.values())
 
     async def _get(self, client: httpx.AsyncClient, url: str) -> bytes | None:

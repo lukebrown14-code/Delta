@@ -30,7 +30,7 @@ class Ensemble(StrategyPlugin):
     name = "ensemble"
 
     async def generate(self, ctx: Context) -> list[Signal]:
-        models: list[str] = list(getattr(ctx.config, "llm_ensemble_models", []) or [])
+        models: list[str] = list(ctx.config.llm_ensemble_models)
         if len(models) < MIN_MODELS:
             raise ValueError(
                 "ensemble strategy needs at least two models in [llm.ensemble].models; "

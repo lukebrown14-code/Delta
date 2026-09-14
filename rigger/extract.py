@@ -7,22 +7,23 @@ persists them. The brief's events section then reads them from ``EventTable``.
 
 from __future__ import annotations
 
-import hashlib
 import logging
 from collections import defaultdict
-from datetime import UTC, datetime
+from datetime import datetime
 
 from pydantic import BaseModel, Field, ValidationError
 from sqlmodel import Session, select
 
-from rigger.core.db import EventTable, NewsItemTable
-from rigger.core.json import from_json, to_json
+from rigger.core.db import EventTable, NewsItemTable, store_items
+from rigger.core.ids import stable_id
+from rigger.core.json import from_json
 from rigger.core.models import Event, EventKind
 from rigger.core.plugin import Context
+from rigger.core.time import to_utc
+from rigger.llm.router import model_for
 
 EXTRACT_TEMPLATE = "extract_v1.j2"
 PROMPT_VERSION = EXTRACT_TEMPLATE.removesuffix(".j2")
-DEFAULT_EXTRACT_MODEL = "google/gemini-flash-1.5"
 
 log = logging.getLogger(__name__)
 
@@ -39,41 +40,22 @@ class EventBatch(BaseModel):
 
 
 def event_id(instrument_id: str, kind: str, summary: str) -> str:
-    return hashlib.sha256(f"{instrument_id}{kind}{summary}".encode()).hexdigest()
+    return stable_id(instrument_id, kind, summary)
 
 
-def _aware(ts: datetime) -> datetime:
-    return ts if ts.tzinfo is not None else ts.replace(tzinfo=UTC)
-
-
-def _uncovered_items(session: Session, since: datetime) -> list[NewsItemTable]:
+def _uncovered_items(session: Session, since: datetime) -> tuple[list[NewsItemTable], set[str]]:
+    """News not yet cited by any event, plus the ids of all existing events."""
     covered: set[str] = set()
-    for evidence in session.exec(select(EventTable.evidence_ids)).all():
+    existing_ids: set[str] = set()
+    for eid, evidence in session.exec(select(EventTable.id, EventTable.evidence_ids)).all():
+        existing_ids.add(eid)
         covered.update(from_json(evidence))
     rows = session.exec(
         select(NewsItemTable)
         .where(NewsItemTable.published >= since)
         .order_by(NewsItemTable.published.asc())  # type: ignore[attr-defined]
     ).all()
-    return [r for r in rows if r.id not in covered]
-
-
-def _store(session: Session, events: list[Event]) -> None:
-    for ev in events:
-        session.add(
-            EventTable(
-                id=ev.id,
-                instrument_id=ev.instrument_id,
-                ts=ev.ts,
-                kind=ev.kind,
-                summary=ev.summary,
-                sentiment=ev.sentiment,
-                evidence_ids=to_json(ev.evidence_ids),
-                extracted_by=ev.extracted_by,
-                prompt_version=ev.prompt_version,
-            )
-        )
-    session.commit()
+    return [r for r in rows if r.id not in covered], existing_ids
 
 
 async def extract_events(ctx: Context, since: datetime, batch_size: int = 20) -> list[Event]:
@@ -84,12 +66,11 @@ async def extract_events(ctx: Context, since: datetime, batch_size: int = 20) ->
     """
     from rigger.llm import structured as structured_mod
 
-    model = ctx.config.llm_routing.get("extract", DEFAULT_EXTRACT_MODEL)
+    model = model_for(ctx.config, "extract")
     symbols = {inst.id: inst.symbol for inst in ctx.universe}
 
     with Session(ctx.engine) as session:
-        items = _uncovered_items(session, since)
-        existing_ids = set(session.exec(select(EventTable.id)).all())
+        items, existing_ids = _uncovered_items(session, since)
 
     by_instrument: dict[str, list[NewsItemTable]] = defaultdict(list)
     for item in items:
@@ -103,7 +84,7 @@ async def extract_events(ctx: Context, since: datetime, batch_size: int = 20) ->
             batch = rows[start : start + batch_size]
             by_id = {r.id: r for r in batch}
             try:
-                draft, _call_id = await structured_mod.structured(
+                draft, _result = await structured_mod.structured(
                     ctx.llm,
                     task="extract",
                     model=model,
@@ -114,7 +95,7 @@ async def extract_events(ctx: Context, since: datetime, batch_size: int = 20) ->
                         "items": [
                             {
                                 "id": r.id,
-                                "published": _aware(r.published).isoformat(),
+                                "published": to_utc(r.published).isoformat(),
                                 "source": r.source,
                                 "title": r.title,
                                 "body": r.body or "",
@@ -145,7 +126,7 @@ async def extract_events(ctx: Context, since: datetime, batch_size: int = 20) ->
                     Event(
                         id=eid,
                         instrument_id=instrument_id,
-                        ts=max(_aware(by_id[e].published) for e in evidence),
+                        ts=max(to_utc(by_id[e].published) for e in evidence),
                         kind=ev.kind,
                         summary=ev.summary,
                         sentiment=ev.sentiment,
@@ -154,9 +135,8 @@ async def extract_events(ctx: Context, since: datetime, batch_size: int = 20) ->
                         prompt_version=PROMPT_VERSION,
                     )
                 )
-            if new_events:
-                with Session(ctx.engine) as session:
-                    _store(session, new_events)
-                stored.extend(new_events)
+            stored.extend(new_events)
 
+    if stored:
+        store_items(ctx.engine, stored)
     return stored

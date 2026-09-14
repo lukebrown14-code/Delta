@@ -12,8 +12,7 @@ from rigger.core.models import Instrument
 from rigger.core.plugin import Context
 from rigger.llm.client import LLMResult
 from rigger.plugins.strategies.ensemble import Ensemble
-from tests.conftest import FakeLLM
-from tests.test_pipeline import _seed_bars
+from tests.conftest import FakeConfig, FakeLLM, seed_bars
 
 MODELS = ["m/a", "m/b", "m/c"]
 
@@ -57,17 +56,15 @@ class PerModelLLM(FakeLLM):
         return LLMResult(text=text, call_id=f"fake-{len(self.calls)}", cost_usd=0.01, cached=False)
 
 
-class _Cfg:
-    def __init__(self, models: list[str]) -> None:
-        self.llm_ensemble_models = models
-        self.llm_routing = {}
-
-
 def _ctx(engine, llm, models: list[str] = MODELS) -> tuple[Context, Instrument]:
     inst = Instrument(id="US:AAPL", market="us", symbol="AAPL", currency="USD")
-    _seed_bars(engine, inst.id)
+    seed_bars(engine, inst.id)
     return Context(
-        engine=engine, settings=None, config=_Cfg(models), llm=llm, universe=[inst]
+        engine=engine,
+        settings=None,
+        config=FakeConfig(llm_ensemble_models=models),
+        llm=llm,
+        universe=[inst],
     ), inst
 
 
@@ -150,6 +147,12 @@ def test_requires_at_least_two_models(tmp_engine):
 def test_skips_instrument_without_bars(tmp_engine):
     llm = PerModelLLM({m: _answer("long", 0.5) for m in MODELS}, expected=3)
     inst = Instrument(id="US:NOBARS", market="us", symbol="NOBARS", currency="USD")
-    ctx = Context(engine=tmp_engine, settings=None, config=_Cfg(MODELS), llm=llm, universe=[inst])
+    ctx = Context(
+        engine=tmp_engine,
+        settings=None,
+        config=FakeConfig(llm_ensemble_models=MODELS),
+        llm=llm,
+        universe=[inst],
+    )
     assert asyncio.run(Ensemble().generate(ctx)) == []
     assert llm.calls == []

@@ -32,9 +32,9 @@ class _FakeTicker:
         return _FakeTicker.calendars.get(self.symbol, {})
 
 
-def _plugin(markets: dict | None = None) -> YFinanceCalendar:
+def _plugin(suffixes: dict[str, str] | None = None) -> YFinanceCalendar:
     plugin = YFinanceCalendar()
-    plugin.markets = markets or {}
+    plugin.configure({"suffixes": suffixes or {}})
     return plugin
 
 
@@ -91,16 +91,12 @@ def test_past_dates_are_dropped(monkeypatch):
     assert asyncio.run(_plugin().fetch([AAPL], SINCE)) == []
 
 
-def test_uses_market_plugin_yf_symbol_when_present(monkeypatch):
+def test_market_suffix_maps_asx_tickers(monkeypatch):
     _patch(monkeypatch, {"BHP.AX": {"Earnings Date": [EARNINGS]}, "AAPL": {}})
 
-    class _ASX:
-        def yf_symbol(self, inst: Instrument) -> str:
-            return f"{inst.symbol}.AX"
+    events = asyncio.run(_plugin().fetch([BHP, AAPL], SINCE))
 
-    events = asyncio.run(_plugin({"asx": _ASX()}).fetch([BHP, AAPL], SINCE))
-
-    assert _FakeTicker.requested == ["BHP.AX", "AAPL"]
+    assert sorted(_FakeTicker.requested) == ["AAPL", "BHP.AX"]
     assert [e.instrument_id for e in events] == [BHP.id]
 
 
@@ -112,7 +108,7 @@ def test_ticker_errors_do_not_abort_the_batch(monkeypatch):
                 raise RuntimeError("yahoo down")
             return super().calendar
 
-    _FakeTicker.calendars = {"BHP": {"Ex-Dividend Date": EX_DIV}}
+    _FakeTicker.calendars = {"BHP.AX": {"Ex-Dividend Date": EX_DIV}}
     _FakeTicker.requested = []
     monkeypatch.setattr(yfinance, "Ticker", _Boom)
 

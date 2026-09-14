@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 from sqlmodel import Session
 
@@ -14,37 +14,20 @@ from rigger.paper.portfolio import PaperPortfolio
 from rigger.paper.risk import RiskLimits, size_signal
 from rigger.plugins.reports.markdown import MarkdownReport
 from rigger.plugins.strategies.llm_analyst import LLMAnalyst
-
-
-def _seed_bars(engine, instrument_id: str, n: int = 80, base: float = 100.0) -> None:
-    with Session(engine) as session:
-        ts = datetime.now(UTC) - timedelta(days=n)
-        for i in range(n):
-            price = base + i * 0.5
-            session.add(
-                BarTable(
-                    instrument_id=instrument_id,
-                    ts=ts + timedelta(days=i),
-                    open=price,
-                    high=price + 1,
-                    low=price - 1,
-                    close=price,
-                    volume=1000.0,
-                    source="test",
-                )
-            )
-        session.commit()
-
-
-class _Cfg:
-    llm_routing = {"analyse": "test/model"}
+from tests.conftest import FakeConfig, seed_bars
 
 
 def test_pipeline_end_to_end(tmp_engine, fake_llm, tmp_path):
     inst = Instrument(id="US:AAPL", market="us", symbol="AAPL", currency="USD", sector="Technology")
-    _seed_bars(tmp_engine, inst.id)
+    seed_bars(tmp_engine, inst.id)
 
-    ctx = Context(engine=tmp_engine, settings=None, config=_Cfg(), llm=fake_llm, universe=[inst])
+    ctx = Context(
+        engine=tmp_engine,
+        settings=None,
+        config=FakeConfig({"analyse": "test/model"}),
+        llm=fake_llm,
+        universe=[inst],
+    )
 
     analyst = LLMAnalyst()
     signals = asyncio.run(analyst.generate(ctx))
@@ -134,8 +117,7 @@ def test_ingest_stores_all_row_types(tmp_engine):
 
     from sqlmodel import select
 
-    from rigger.cli import _store_fetched
-    from rigger.core.db import EventTable, FundamentalTable, NewsItemTable
+    from rigger.core.db import EventTable, FundamentalTable, NewsItemTable, store_items
     from rigger.core.models import Bar, Event, Fundamental, NewsItem
 
     now = datetime.now(UTC)
@@ -167,12 +149,12 @@ def test_ingest_stores_all_row_types(tmp_engine):
             prompt_version="n/a",
         ),
     ]
-    first = _store_fetched(tmp_engine, fetched)
-    second = _store_fetched(tmp_engine, fetched)  # re-ingest must not duplicate
-    assert first == {"bars": 1, "news": 1, "fundamentals": 1, "events": 1}
-    assert second["fundamentals"] == 0
+    first = store_items(tmp_engine, fetched)
+    second = store_items(tmp_engine, fetched)  # re-ingest must not duplicate
+    assert first == {"bar": 1, "newsitem": 1, "event": 1, "fundamental": 1}
+    assert second == {"bar": 0, "newsitem": 0, "event": 0, "fundamental": 0}
     with Session(tmp_engine) as session:
         assert len(session.exec(select(NewsItemTable)).all()) == 1
         assert len(session.exec(select(FundamentalTable)).all()) == 1
         assert len(session.exec(select(EventTable)).all()) == 1
-        assert session.exec(select(BarTable)).all().__len__() == 1
+        assert len(session.exec(select(BarTable)).all()) == 1

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 from datetime import UTC, datetime
 from pathlib import Path
@@ -12,6 +11,8 @@ import httpx
 import pytest
 import respx
 
+from rigger.core.http import user_agent
+from rigger.core.ids import stable_id
 from rigger.core.models import Fundamental, Instrument, NewsItem
 from rigger.plugins.data.sec_edgar import (
     COMPANYFACTS_URL,
@@ -57,7 +58,7 @@ def test_cik_lookup_and_user_agent(edgar):
     assert plugin._cik_by_symbol == {"AAPL": "0000320193", "MSFT": "0000789019"}
     assert edgar.calls.call_count == 3
     for call in edgar.calls:
-        assert call.request.headers["User-Agent"] == "Rigger/0.1 (ops@example.com)"
+        assert call.request.headers["User-Agent"] == user_agent("ops@example.com")
 
 
 def test_filings_filtered_by_form_and_date(edgar):
@@ -79,7 +80,7 @@ def test_filing_url_and_id(edgar):
     assert eight_k.url == (
         "https://www.sec.gov/Archives/edgar/data/320193/000032019325000071/aapl-20250731.htm"
     )
-    assert eight_k.id == hashlib.sha256(b"0000320193-25-000071").hexdigest()
+    assert eight_k.id == stable_id("0000320193-25-000071")
     assert eight_k.published == datetime(2025, 7, 31, tzinfo=UTC)
 
 

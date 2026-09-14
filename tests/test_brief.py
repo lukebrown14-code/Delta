@@ -7,10 +7,11 @@ from datetime import UTC, date, datetime, timedelta
 from sqlmodel import Session
 
 from rigger.brief import build_brief
-from rigger.core.db import BarTable, EventTable, FundamentalTable, NewsItemTable
+from rigger.core.db import EventTable, FundamentalTable, NewsItemTable
 from rigger.core.json import to_json
 from rigger.core.models import Instrument
 from rigger.core.plugin import Context
+from tests.conftest import seed_bars
 
 AS_OF = datetime(2026, 3, 22, tzinfo=UTC)
 INST = Instrument(id="US:AAPL", market="us", symbol="AAPL", currency="USD", sector="Technology")
@@ -28,28 +29,8 @@ PHASE1_PRICE_SECTION = (
 )
 
 
-def _seed_bars(engine, instrument_id: str, n: int = 80) -> None:
-    with Session(engine) as session:
-        start = datetime(2026, 1, 1, tzinfo=UTC)
-        for i in range(n):
-            p = 100.0 + i * 0.5
-            session.add(
-                BarTable(
-                    instrument_id=instrument_id,
-                    ts=start + timedelta(days=i),
-                    open=p,
-                    high=p + 1,
-                    low=p - 1,
-                    close=p,
-                    volume=1000.0,
-                    source="test",
-                )
-            )
-        session.commit()
-
-
 def _seed_everything(engine) -> None:
-    _seed_bars(engine, INST.id)
+    seed_bars(engine, INST.id, start=datetime(2026, 1, 1, tzinfo=UTC))
     with Session(engine) as session:
         session.add(
             NewsItemTable(
@@ -129,7 +110,7 @@ def _seed_everything(engine) -> None:
 
 
 def test_price_section_matches_phase1(tmp_engine):
-    _seed_bars(tmp_engine, INST.id)
+    seed_bars(tmp_engine, INST.id, start=datetime(2026, 1, 1, tzinfo=UTC))
     ctx = Context(engine=tmp_engine, settings=None, config=None, universe=[INST])
     brief = build_brief(ctx, INST, as_of=AS_OF)
     assert brief is not None

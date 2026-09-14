@@ -1,28 +1,32 @@
 """yfinance calendar data plugin: upcoming earnings and ex-dividend dates as Event rows.
 
 The brief's calendar section reads ``EventTable`` where ``ts > as_of``, so
-these rows surface as "Upcoming events" without any further wiring.
+these rows surface as "Upcoming events" without any further wiring. Ticker
+mapping is shared with the yfinance bars plugin via ``[plugins.<name>].suffixes``.
 """
 
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import logging
 from datetime import UTC, date, datetime
 from typing import Any
 
-from rigger.core.models import Event, Instrument
-from rigger.core.plugin import DataPlugin, Plugin
+from rigger.core.ids import stable_id
+from rigger.core.models import Bar, Event, EventKind, Fundamental, Instrument, NewsItem
+from rigger.plugins.data.yfinance import YFinanceSymbols
 
 log = logging.getLogger(__name__)
 
-EARNINGS_KEY = "Earnings Date"
-EX_DIVIDEND_KEY = "Ex-Dividend Date"
+# (event kind, yfinance calendar key, summary label)
+CALENDAR_KINDS: tuple[tuple[EventKind, str, str], ...] = (
+    ("earnings", "Earnings Date", "Earnings expected"),
+    ("dividend", "Ex-Dividend Date", "Ex-dividend"),
+)
 
 
 def calendar_event_id(instrument_id: str, kind: str, day: date) -> str:
-    return hashlib.sha256(f"{instrument_id}{kind}{day.isoformat()}".encode()).hexdigest()
+    return stable_id(instrument_id, kind, day.isoformat())
 
 
 def _to_date(value: Any) -> date | None:
@@ -47,34 +51,8 @@ def _first_date(value: Any) -> date | None:
     return _to_date(value)
 
 
-class YFinanceCalendar(DataPlugin):
+class YFinanceCalendar(YFinanceSymbols):
     name = "yfinance_calendar"
-    market = None  # any market; the market plugin supplies the yfinance ticker
-
-    def __init__(self) -> None:
-        # Market plugins by name, used for `yf_symbol(instrument)` when present.
-        # Populated lazily from entry points; tests set it directly.
-        self.markets: dict[str, Plugin] | None = None
-
-    def _market_plugins(self) -> dict[str, Plugin]:
-        if self.markets is None:
-            try:
-                from rigger.core.plugin import MarketPlugin, discover_plugins
-
-                self.markets = {
-                    n: p for n, p in discover_plugins().items() if isinstance(p, MarketPlugin)
-                }
-            except Exception:  # pragma: no cover - discovery is best effort
-                log.exception("plugin discovery failed; using raw symbols")
-                self.markets = {}
-        return self.markets
-
-    def yf_symbol(self, inst: Instrument) -> str:
-        market = self._market_plugins().get(inst.market)
-        mapper = getattr(market, "yf_symbol", None)
-        if callable(mapper):
-            return str(mapper(inst))
-        return inst.symbol
 
     @staticmethod
     def _read_calendar(symbol: str) -> dict[str, Any]:
@@ -90,24 +68,23 @@ class YFinanceCalendar(DataPlugin):
             return {str(k): v for k, v in to_dict().items()}
         return {}
 
-    async def fetch(  # type: ignore[override]
+    async def fetch(
         self, instruments: list[Instrument], since: datetime
-    ) -> list[Event]:
+    ) -> list[Bar | NewsItem | Fundamental | Event]:
         today = datetime.now(UTC).date()
-        events: list[Event] = []
-        for inst in instruments:
-            symbol = self.yf_symbol(inst)
-            try:
-                cal = await asyncio.to_thread(self._read_calendar, symbol)
-            except Exception:
-                log.exception("calendar fetch failed for %s (%s)", inst.id, symbol)
+        # Independent blocking yfinance reads: run them in threads concurrently.
+        calendars = await asyncio.gather(
+            *(asyncio.to_thread(self._read_calendar, self.yf_symbol(inst)) for inst in instruments),
+            return_exceptions=True,
+        )
+        events: list[Bar | NewsItem | Fundamental | Event] = []
+        for inst, cal in zip(instruments, calendars, strict=True):
+            if isinstance(cal, BaseException):
+                log.error("calendar fetch failed for %s: %s", inst.id, cal)
                 continue
             if not cal:
                 continue
-            for kind, key, label in (
-                ("earnings", EARNINGS_KEY, "Earnings expected"),
-                ("dividend", EX_DIVIDEND_KEY, "Ex-dividend"),
-            ):
+            for kind, key, label in CALENDAR_KINDS:
                 day = _first_date(cal.get(key))
                 if day is None or day < today:
                     continue
@@ -116,7 +93,7 @@ class YFinanceCalendar(DataPlugin):
                         id=calendar_event_id(inst.id, kind, day),
                         instrument_id=inst.id,
                         ts=datetime(day.year, day.month, day.day, tzinfo=UTC),
-                        kind=kind,  # type: ignore[arg-type]
+                        kind=kind,
                         summary=f"{label} {day.isoformat()}",
                         sentiment=0.0,
                         evidence_ids=[],

@@ -8,7 +8,7 @@ from typing import Any
 
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
-from rigger.llm.client import LLMClient
+from rigger.llm.client import LLMClient, LLMResult
 
 PROMPTS_DIR = Path(__file__).parent / "prompts"
 
@@ -43,12 +43,14 @@ async def structured[T: BaseModel](
     template: str,
     vars: dict[str, Any],
     schema: type[T],
-) -> tuple[T, str]:
+) -> tuple[T, LLMResult]:
     """Render the template, call the model with a JSON schema, validate the result.
 
-    On validation failure, re-prompts once with the error appended.
+    On validation failure, re-prompts once with the error appended. Returns the
+    validated object and the ``LLMResult`` (call id, cost, cache flag).
     """
     prompt = render_prompt(template, vars)
+    prompt_version = template.removesuffix(".j2")
     response_format = {
         "type": "json_schema",
         "json_schema": {"name": schema.__name__, "schema": schema_from_model(schema)},
@@ -57,7 +59,7 @@ async def structured[T: BaseModel](
     result = await client.complete(
         task=task,
         model=model,
-        prompt_version=template.removesuffix(".j2"),
+        prompt_version=prompt_version,
         prompt=prompt,
         response_format=response_format,
     )
@@ -66,7 +68,7 @@ async def structured[T: BaseModel](
     adapter = TypeAdapter(schema)
     try:
         obj = adapter.validate_python(parsed)
-        return obj, result.call_id
+        return obj, result
     except ValidationError as exc:
         retry_prompt = (
             prompt + "\n\nYour previous answer was invalid JSON. Fix the following errors and "
@@ -75,12 +77,12 @@ async def structured[T: BaseModel](
         result2 = await client.complete(
             task=task,
             model=model,
-            prompt_version=template.removesuffix(".j2"),
+            prompt_version=prompt_version,
             prompt=retry_prompt,
             response_format=response_format,
         )
         parsed2 = _extract_json(result2.text)
-        return adapter.validate_python(parsed2), result2.call_id
+        return adapter.validate_python(parsed2), result2
 
 
 def _extract_json(text: str) -> Any:

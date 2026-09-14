@@ -16,6 +16,7 @@ from rigger.core.db import BarTable, EventTable, FundamentalTable, NewsItemTable
 from rigger.core.json import from_json
 from rigger.core.models import Instrument
 from rigger.core.plugin import Context
+from rigger.core.time import to_utc
 
 NEWS_WINDOW_DAYS = 14
 EVENT_WINDOW_DAYS = 14
@@ -46,27 +47,18 @@ class Brief:
     fundamentals: Section
     calendar: Section
 
-    def render(self) -> str:
+    @property
+    def sections(self) -> tuple[Section, ...]:
         # Price lines first with no title, matching the Phase 1 brief exactly.
-        parts = [
-            self.prices.render(),
-            self.fundamentals.render(),
-            self.events.render(),
-            self.calendar.render(),
-            self.news.render(),
-        ]
-        return "\n".join(parts)
+        return (self.prices, self.fundamentals, self.events, self.calendar, self.news)
+
+    def render(self) -> str:
+        return "\n".join(section.render() for section in self.sections)
 
     @property
     def evidence_ids(self) -> list[str]:
-        seen: set[str] = set()
-        out: list[str] = []
-        for section in (self.prices, self.news, self.events, self.fundamentals, self.calendar):
-            for eid in section.evidence_ids:
-                if eid not in seen:
-                    seen.add(eid)
-                    out.append(eid)
-        return out
+        """Ordered union of every section's evidence ids."""
+        return list(dict.fromkeys(eid for s in self.sections for eid in s.evidence_ids))
 
 
 def build_brief(
@@ -87,10 +79,6 @@ def build_brief(
             fundamentals=_fundamentals(session, instrument, as_of),
             calendar=_calendar(session, instrument, as_of),
         )
-
-
-def _aware(ts: datetime) -> datetime:
-    return ts if ts.tzinfo else ts.replace(tzinfo=UTC)
 
 
 def _prices(session: Session, inst: Instrument, as_of: datetime) -> Section | None:
@@ -140,7 +128,7 @@ def _news(session: Session, inst: Instrument, as_of: datetime) -> Section:
     for r in rows:
         if inst.id not in from_json(r.instrument_ids):
             continue
-        section.lines.append(f"{_aware(r.published):%Y-%m-%d} [{r.source}] {r.title}")
+        section.lines.append(f"{to_utc(r.published):%Y-%m-%d} [{r.source}] {r.title}")
         section.evidence_ids.append(r.id)
         if len(section.lines) >= NEWS_LIMIT:
             break
@@ -159,7 +147,7 @@ def _events(session: Session, inst: Instrument, as_of: datetime) -> Section:
     section = Section(title="Events")
     for r in rows:
         section.lines.append(
-            f"{_aware(r.ts):%Y-%m-%d} {r.kind}: {r.summary} (sentiment {r.sentiment:+.1f})"
+            f"{to_utc(r.ts):%Y-%m-%d} {r.kind}: {r.summary} (sentiment {r.sentiment:+.1f})"
         )
         section.evidence_ids.append(r.id)
     return section
@@ -192,6 +180,6 @@ def _calendar(session: Session, inst: Instrument, as_of: datetime) -> Section:
     ).all()
     section = Section(title="Upcoming events")
     for r in rows:
-        section.lines.append(f"{_aware(r.ts):%Y-%m-%d} {r.kind}: {r.summary}")
+        section.lines.append(f"{to_utc(r.ts):%Y-%m-%d} {r.kind}: {r.summary}")
         section.evidence_ids.append(r.id)
     return section

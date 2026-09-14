@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from datetime import UTC, datetime
@@ -12,8 +13,10 @@ from pydantic import BaseModel, Field, ValidationError
 from rigger.brief import Brief, build_brief
 from rigger.core.models import Instrument, Signal
 from rigger.core.plugin import Context, StrategyPlugin
+from rigger.llm.router import model_for
 
 ANALYST_TEMPLATE = "analyst_v1.j2"
+PROMPT_VERSION = ANALYST_TEMPLATE.removesuffix(".j2")
 log = logging.getLogger(__name__)
 
 
@@ -41,7 +44,7 @@ async def analyse_one(
     from rigger.llm import structured as structured_mod
 
     try:
-        draft, _call_id = await structured_mod.structured(
+        draft, result = await structured_mod.structured(
             ctx.llm,
             task="analyse",
             model=model,
@@ -66,7 +69,8 @@ async def analyse_one(
         invalidation=draft.invalidation,
         evidence_ids=brief.evidence_ids,
         model=model,
-        prompt_version=ANALYST_TEMPLATE.removesuffix(".j2"),
+        prompt_version=PROMPT_VERSION,
+        cost_usd=result.cost_usd,
     )
 
 
@@ -74,13 +78,10 @@ class LLMAnalyst(StrategyPlugin):
     name = "llm_analyst"
 
     async def generate(self, ctx: Context) -> list[Signal]:
-        model = ctx.config.llm_routing.get("analyse", "anthropic/claude-sonnet-4")
-        signals: list[Signal] = []
-        for inst in ctx.universe:
-            brief = build_brief(ctx, inst)
-            if brief is None:
-                continue
-            signal = await analyse_one(ctx, inst, model, brief, strategy=self.name)
-            if signal is not None:
-                signals.append(signal)
-        return signals
+        model = model_for(ctx.config, "analyse")
+        briefs = [(inst, b) for inst in ctx.universe if (b := build_brief(ctx, inst)) is not None]
+        # Independent LLM calls: run them concurrently, keep universe order.
+        results = await asyncio.gather(
+            *(analyse_one(ctx, inst, model, brief, strategy=self.name) for inst, brief in briefs)
+        )
+        return [s for s in results if s is not None]

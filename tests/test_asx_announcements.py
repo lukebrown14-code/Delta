@@ -6,6 +6,7 @@ import asyncio
 import json
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import cast
 
 import httpx
 import pytest
@@ -42,7 +43,7 @@ def _run(
 ) -> list[NewsItem]:
     items = asyncio.run(plugin.fetch(instruments, since))
     assert all(isinstance(i, NewsItem) for i in items)
-    return [i for i in items if isinstance(i, NewsItem)]
+    return cast(list[NewsItem], items)
 
 
 @respx.mock

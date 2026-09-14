@@ -5,13 +5,18 @@ Single-file SQLite DB, easy to back up and inspect.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
 from sqlalchemy import JSON, Column, UniqueConstraint
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Engine
 from sqlmodel import Field, Session, SQLModel, create_engine
+
+from rigger.core.json import to_json
+from rigger.core.models import Bar, Event, Fundamental, NewsItem
 
 
 class InstrumentTable(SQLModel, table=True):
@@ -68,6 +73,9 @@ class EventTable(SQLModel, table=True):
 
 class FundamentalTable(SQLModel, table=True):
     __tablename__ = "fundamental"
+    __table_args__ = (
+        UniqueConstraint("instrument_id", "as_of", "metric", "source", name="uq_fundamental_key"),
+    )
 
     id: int | None = Field(default=None, primary_key=True)
     instrument_id: str = Field(index=True)
@@ -189,12 +197,64 @@ _ADDED_COLUMNS: list[tuple[str, str, str]] = [
 ]
 
 
+# Unique indexes added after Phase 1; SQLite cannot ALTER a constraint in, but
+# a unique index is equivalent for ON CONFLICT purposes.
+_ADDED_UNIQUE_INDEXES: list[tuple[str, str, tuple[str, ...]]] = [
+    ("uq_fundamental_key", "fundamental", ("instrument_id", "as_of", "metric", "source")),
+]
+
+
 def _migrate(engine: Engine) -> None:
     with engine.begin() as conn:
         for table, column, ddl_type in _ADDED_COLUMNS:
             existing = {row[1] for row in conn.exec_driver_sql(f"PRAGMA table_info({table})")}
             if column not in existing:
                 conn.exec_driver_sql(f"ALTER TABLE {table} ADD COLUMN {column} {ddl_type}")
+        for name, table, cols in _ADDED_UNIQUE_INDEXES:
+            conn.exec_driver_sql(
+                f"CREATE UNIQUE INDEX IF NOT EXISTS {name} ON {table} ({', '.join(cols)})"
+            )
+
+
+# (model, table, JSON-encoded list field or None, conflict key)
+_STORES: tuple[tuple[type, type[SQLModel], str | None, tuple[str, ...]], ...] = (
+    (Bar, BarTable, None, ("instrument_id", "ts")),
+    (NewsItem, NewsItemTable, "instrument_ids", ("id",)),
+    (Event, EventTable, "evidence_ids", ("id",)),
+    (Fundamental, FundamentalTable, None, ("instrument_id", "as_of", "metric", "source")),
+)
+
+
+def store_items(
+    engine: Engine, items: Iterable[Bar | NewsItem | Fundamental | Event]
+) -> dict[str, int]:
+    """Persist data-plugin output idempotently. Returns rows actually inserted per table.
+
+    Existing rows (same natural key) are left untouched, so re-ingesting an
+    overlapping window never duplicates history.
+    """
+    items = list(items)
+    counts: dict[str, int] = {}
+    with Session(engine) as session:
+        for model, table, json_field, key in _STORES:
+            rows = []
+            for item in items:
+                if not isinstance(item, model):
+                    continue
+                data = item.model_dump()
+                if json_field:
+                    data[json_field] = to_json(data[json_field])
+                rows.append(data)
+            name = str(table.__tablename__)
+            if not rows:
+                counts[name] = 0
+                continue
+            result = session.exec(
+                sqlite_insert(table).values(rows).on_conflict_do_nothing(index_elements=list(key))
+            )
+            counts[name] = int(result.rowcount)
+        session.commit()
+    return counts
 
 
 def ensure_cash(engine: Engine, base_currency: str, starting_cash: float) -> None:

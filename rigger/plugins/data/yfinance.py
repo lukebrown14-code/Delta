@@ -16,19 +16,29 @@ from rigger.core.plugin import DataPlugin
 DEFAULT_SUFFIXES: dict[str, str] = {"us": "", "asx": ".AX"}
 
 
-class YFinanceData(DataPlugin):
-    name = "yfinance"
+def yf_symbol(inst: Instrument, suffixes: dict[str, str] | None = None) -> str:
+    """yfinance ticker for an instrument: BHP on asx -> BHP.AX. One source of truth."""
+    table = suffixes if suffixes is not None else DEFAULT_SUFFIXES
+    return f"{inst.symbol.upper()}{table.get(inst.market, '')}"
+
+
+class YFinanceSymbols(DataPlugin):
+    """Base for yfinance-backed plugins: shares the ``suffixes`` config table."""
+
     market = None  # works for any market with a known suffix
 
     def __init__(self) -> None:
         self.suffixes: dict[str, str] = dict(DEFAULT_SUFFIXES)
 
     def configure(self, cfg: dict[str, Any]) -> None:
-        super().configure(cfg)
         self.suffixes.update(cfg.get("suffixes", {}))
 
     def yf_symbol(self, inst: Instrument) -> str:
-        return f"{inst.symbol.upper()}{self.suffixes.get(inst.market, '')}"
+        return yf_symbol(inst, self.suffixes)
+
+
+class YFinanceData(YFinanceSymbols):
+    name = "yfinance"
 
     async def fetch(
         self, instruments: list[Instrument], since: datetime

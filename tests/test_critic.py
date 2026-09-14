@@ -3,18 +3,14 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime, timedelta
 
 import pytest
-from conftest import FakeLLM
-from sqlmodel import Session
 
-from rigger.core.db import BarTable, LLMCallTable
 from rigger.core.models import Instrument
 from rigger.core.plugin import Context
-from rigger.llm.client import LLMResult
 from rigger.plugins.strategies.critic import Critic
 from rigger.plugins.strategies.llm_analyst import LLMAnalyst
+from tests.conftest import FakeConfig, FakeLLM, seed_bars
 
 ANALYSE = {
     "direction": "long",
@@ -32,62 +28,6 @@ CRITIQUE_REDUCE = {
 CRITIQUE_REJECT = {**CRITIQUE_REDUCE, "revised_conviction": 0.1, "verdict": "reject"}
 
 
-class RecordingFakeLLM(FakeLLM):
-    """FakeLLM that also logs each call to the llmcall table like the real client."""
-
-    def __init__(self, engine, responses: dict[str, dict], cost: float) -> None:
-        super().__init__(responses)
-        self._engine = engine
-        self._cost = cost
-
-    async def complete(self, **kwargs) -> LLMResult:
-        result = await super().complete(**kwargs)
-        with Session(self._engine) as session:
-            session.add(
-                LLMCallTable(
-                    id=result.call_id,
-                    ts=datetime.now(UTC),
-                    task=kwargs["task"],
-                    model=kwargs["model"],
-                    prompt_version=kwargs["prompt_version"],
-                    prompt_hash="x",
-                    input_tokens=1,
-                    output_tokens=1,
-                    cost_usd=self._cost,
-                    latency_ms=1,
-                    cached=False,
-                )
-            )
-            session.commit()
-        return LLMResult(
-            text=result.text, call_id=result.call_id, cost_usd=self._cost, cached=False
-        )
-
-
-def _seed_bars(engine, instrument_id: str, n: int = 80) -> None:
-    with Session(engine) as session:
-        start = datetime.now(UTC) - timedelta(days=n)
-        for i in range(n):
-            price = 100.0 + i * 0.5
-            session.add(
-                BarTable(
-                    instrument_id=instrument_id,
-                    ts=start + timedelta(days=i),
-                    open=price,
-                    high=price + 1,
-                    low=price - 1,
-                    close=price,
-                    volume=1000.0,
-                    source="test",
-                )
-            )
-        session.commit()
-
-
-class _Cfg:
-    llm_routing = {"analyse": "test/analyst", "critique": "test/critic"}
-
-
 def _instruments() -> list[Instrument]:
     return [
         Instrument(id="US:AAPL", market="us", symbol="AAPL", currency="USD"),
@@ -98,14 +38,14 @@ def _instruments() -> list[Instrument]:
 def _ctx(engine, llm) -> Context:
     universe = _instruments()
     for inst in universe:
-        _seed_bars(engine, inst.id)
+        seed_bars(engine, inst.id)
     analyst = LLMAnalyst()
     critic = Critic()
     critic.configure({"enabled": True, "wraps": "llm_analyst"})
     return Context(
         engine=engine,
         settings=None,
-        config=_Cfg(),
+        config=FakeConfig({"analyse": "test/analyst", "critique": "test/critic"}),
         llm=llm,
         universe=universe,
         plugins={"llm_analyst": analyst, "critic": critic},
@@ -140,8 +80,6 @@ def test_critic_returns_base_and_revised_signal(tmp_engine):
             "counter_argument": CRITIQUE_REDUCE["counter_argument"],
             "risks": CRITIQUE_REDUCE["risks"],
             "verdict": "reduce",
-            "model": "test/critic",
-            "prompt_version": "critic_v1",
         }
 
     tasks = [c["task"] for c in llm.calls]
@@ -172,7 +110,7 @@ def test_reject_verdict_flattens_direction(tmp_engine):
 
 
 def test_cost_is_base_plus_critique(tmp_engine):
-    llm = RecordingFakeLLM(tmp_engine, {"analyse": ANALYSE, "critique": CRITIQUE_REDUCE}, 0.02)
+    llm = FakeLLM({"analyse": ANALYSE, "critique": CRITIQUE_REDUCE}, cost=0.02)
     ctx = _ctx(tmp_engine, llm)
     ctx.universe = ctx.universe[:1]
 
@@ -180,8 +118,9 @@ def test_cost_is_base_plus_critique(tmp_engine):
     base = next(s for s in signals if s.strategy == "llm_analyst")
     crit = next(s for s in signals if s.strategy == "critic:llm_analyst")
 
-    # The analyst does not record cost on its signal; the critic adds its own logged call.
-    assert crit.cost_usd == pytest.approx((base.cost_usd or 0.0) + 0.02)
+    # Both calls cost 0.02: the analyst records its own, the critic adds the critique.
+    assert base.cost_usd == pytest.approx(0.02)
+    assert crit.cost_usd == pytest.approx(0.04)
 
 
 def test_missing_wrapped_plugin_raises(tmp_engine):

@@ -3,15 +3,15 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import cast
 
 import httpx
 import respx
 
 from rigger.core.models import Instrument, NewsItem
-from rigger.plugins.data.rss import RSSData, strip_html
+from rigger.plugins.data.rss import RSSData, news_id, strip_html
 
 FIXTURE = Path(__file__).parent / "fixtures" / "business_feed.xml"
 FEED_URL = "https://feeds.example.com/business.xml"
@@ -35,7 +35,7 @@ def _plugin(*feeds: str) -> RSSData:
 def _fetch(plugin: RSSData, since: datetime = SINCE) -> list[NewsItem]:
     out = asyncio.run(plugin.fetch(UNIVERSE, since))
     assert all(isinstance(x, NewsItem) for x in out)
-    return [x for x in out if isinstance(x, NewsItem)]
+    return cast(list[NewsItem], out)
 
 
 def _by_url(items: list[NewsItem]) -> dict[str, NewsItem]:
@@ -94,10 +94,7 @@ def test_id_is_stable_and_derived_from_link_and_published():
     first = _by_url(_fetch(_plugin()))["https://example.com/news/apple-event"]
     second = _by_url(_fetch(_plugin()))["https://example.com/news/apple-event"]
     assert first.id == second.id
-    expected = hashlib.sha256(
-        b"https://example.com/news/apple-event" + first.published.isoformat().encode()
-    ).hexdigest()
-    assert first.id == expected
+    assert first.id == news_id("https://example.com/news/apple-event", first.published)
 
 
 @respx.mock

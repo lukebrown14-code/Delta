@@ -10,13 +10,15 @@ Compliance with SEC fair-access rules (https://www.sec.gov/os/accessing-edgar-da
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import logging
 from datetime import UTC, date, datetime
+from itertools import zip_longest
 from typing import Any
 
 import httpx
 
+from rigger.core.http import user_agent
+from rigger.core.ids import stable_id
 from rigger.core.models import Bar, Event, Fundamental, Instrument, NewsItem
 from rigger.core.plugin import DataPlugin
 
@@ -55,7 +57,7 @@ class SECEdgar(DataPlugin):
 
     @property
     def user_agent(self) -> str:
-        return f"Rigger/0.1 ({self.contact})"
+        return user_agent(self.contact)
 
     # ------------------------------------------------------------------ #
     # DataPlugin
@@ -66,10 +68,10 @@ class SECEdgar(DataPlugin):
         since_date = since.date()
         out: list[Bar | NewsItem | Fundamental | Event] = []
         async with httpx.AsyncClient(
-            headers={"User-Agent": self.user_agent, "Accept-Encoding": "gzip, deflate"},
-            timeout=30.0,
+            headers={"User-Agent": self.user_agent}, timeout=30.0
         ) as client:
             ciks = await self._company_tickers(client)
+            targets: list[tuple[Instrument, str]] = []
             for inst in instruments:
                 if inst.market != self.market:
                     continue
@@ -77,11 +79,26 @@ class SECEdgar(DataPlugin):
                 if cik is None:
                     log.warning("sec_edgar: no CIK for %s, skipping", inst.symbol)
                     continue
-                submissions = await self._get_json(client, SUBMISSIONS_URL.format(cik=cik))
-                out.extend(self._filings_to_news(inst, cik, submissions, since_date))
-                facts = await self._get_json(client, COMPANYFACTS_URL.format(cik=cik))
-                out.extend(self._facts_to_fundamentals(inst, facts))
+                targets.append((inst, cik))
+            # The semaphore in _get_json enforces the SEC rate cap, so fan out freely.
+            per_instrument = await asyncio.gather(
+                *(self._fetch_one(client, inst, cik, since_date) for inst, cik in targets)
+            )
+        for rows in per_instrument:
+            out.extend(rows)
         return out
+
+    async def _fetch_one(
+        self, client: httpx.AsyncClient, inst: Instrument, cik: str, since: date
+    ) -> list[NewsItem | Fundamental]:
+        submissions, facts = await asyncio.gather(
+            self._get_json(client, SUBMISSIONS_URL.format(cik=cik)),
+            self._get_json(client, COMPANYFACTS_URL.format(cik=cik)),
+        )
+        rows: list[NewsItem | Fundamental] = []
+        rows.extend(self._filings_to_news(inst, cik, submissions, since))
+        rows.extend(self._facts_to_fundamentals(inst, facts))
+        return rows
 
     # ------------------------------------------------------------------ #
     # HTTP
@@ -117,24 +134,24 @@ class SECEdgar(DataPlugin):
         documents = recent.get("primaryDocument", [])
         descriptions = recent.get("primaryDocDescription", [])
         items: list[NewsItem] = []
-        for i, form in enumerate(forms):
+        for form, filed_raw, accession, document, description in zip_longest(
+            forms, dates, accessions, documents, descriptions
+        ):
             if form not in FORMS:
                 continue
-            filed = date.fromisoformat(dates[i])
+            filed = date.fromisoformat(filed_raw)
             if filed < since:
                 continue
-            accession = accessions[i]
-            description = descriptions[i] if i < len(descriptions) and descriptions[i] else form
             items.append(
                 NewsItem(
-                    id=hashlib.sha256(accession.encode()).hexdigest(),
+                    id=stable_id(accession),
                     instrument_ids=[inst.id],
                     published=datetime(filed.year, filed.month, filed.day, tzinfo=UTC),
-                    title=f"{form}: {description}",
+                    title=f"{form}: {description or form}",
                     url=FILING_URL.format(
                         cik_int=int(cik),
                         accession=accession.replace("-", ""),
-                        document=documents[i],
+                        document=document,
                     ),
                     body=None,
                     source=self.name,

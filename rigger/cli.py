@@ -6,30 +6,25 @@ import asyncio
 import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated
 
 import typer
 from rich.console import Console
 from rich.table import Table
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
-from sqlalchemy.engine import Engine
 from sqlmodel import Session, select
 
 from rigger.core import config as config_mod
 from rigger.core.db import (
-    BarTable,
-    EventTable,
     FillTable,
-    FundamentalTable,
     LLMCallTable,
-    NewsItemTable,
     OrderTable,
     SignalTable,
     ensure_cash,
     init_engine,
+    store_items,
 )
 from rigger.core.json import from_json, to_json
-from rigger.core.models import Bar, Event, Fundamental, Instrument, NewsItem, Order, Signal
+from rigger.core.models import Instrument, Order, Signal
 from rigger.core.plugin import (
     Context,
     MarketPlugin,
@@ -38,6 +33,7 @@ from rigger.core.plugin import (
     apply_config,
     discover_plugins,
 )
+from rigger.core.time import parse_date
 from rigger.llm.client import build_client
 from rigger.paper.portfolio import PaperPortfolio
 from rigger.paper.risk import RiskLimits, size_signal
@@ -108,69 +104,6 @@ class Rigger:
             universe=universe,
             plugins=self.plugins,
         )
-
-
-def _store_fetched(engine: Engine, fetched: list[Any]) -> dict[str, int]:
-    """Persist whatever a DataPlugin returned. Re-ingesting an overlapping window
-    must not duplicate rows, so every insert ignores existing keys."""
-    bars = [x for x in fetched if isinstance(x, Bar)]
-    news = [x for x in fetched if isinstance(x, NewsItem)]
-    fundamentals = [x for x in fetched if isinstance(x, Fundamental)]
-    events = [x for x in fetched if isinstance(x, Event)]
-
-    with Session(engine) as session:
-        if bars:
-            session.exec(
-                sqlite_insert(BarTable)
-                .values([b.model_dump() for b in bars])
-                .on_conflict_do_nothing(index_elements=["instrument_id", "ts"])
-            )
-        if news:
-            rows = [
-                {
-                    **n.model_dump(exclude={"instrument_ids"}),
-                    "instrument_ids": to_json(n.instrument_ids),
-                }
-                for n in news
-            ]
-            session.exec(
-                sqlite_insert(NewsItemTable)
-                .values(rows)
-                .on_conflict_do_nothing(index_elements=["id"])
-            )
-        if events:
-            rows = [
-                {**e.model_dump(exclude={"evidence_ids"}), "evidence_ids": to_json(e.evidence_ids)}
-                for e in events
-            ]
-            session.exec(
-                sqlite_insert(EventTable).values(rows).on_conflict_do_nothing(index_elements=["id"])
-            )
-        stored_fundamentals = 0
-        if fundamentals:
-            # No unique constraint on `fundamental`; dedupe on the natural key in Python.
-            inst_ids = {f.instrument_id for f in fundamentals}
-            existing = {
-                (r.instrument_id, r.as_of, r.metric, r.source)
-                for r in session.exec(
-                    select(FundamentalTable).where(FundamentalTable.instrument_id.in_(inst_ids))  # type: ignore[attr-defined]
-                ).all()
-            }
-            for f in fundamentals:
-                key = (f.instrument_id, f.as_of, f.metric, f.source)
-                if key in existing:
-                    continue
-                existing.add(key)
-                session.add(FundamentalTable(**f.model_dump()))
-                stored_fundamentals += 1
-        session.commit()
-
-    return {
-        "bars": len(bars),
-        "news": len(news),
-        "fundamentals": stored_fundamentals,
-        "events": len(events),
-    }
 
 
 def _store_signal(session: Session, s: Signal) -> None:
@@ -259,7 +192,7 @@ def ingest(
         wanted = set(tickers.split(","))
         instruments = [i for i in instruments if i.symbol in wanted]
 
-    since_dt = datetime.strptime(since, "%Y-%m-%d").replace(tzinfo=UTC)
+    since_dt = parse_date(since)
 
     async def run() -> None:
         for name, plugin in rig.plugins.items():
@@ -272,11 +205,8 @@ def ingest(
                 continue
             console.print(f"Ingesting via [bold]{name}[/bold] ({len(target)} instruments)...")
             fetched = await plugin.fetch(target, since_dt)
-            counts = _store_fetched(rig.engine, fetched)
-            console.print(
-                f"  stored {counts['bars']} bars, {counts['news']} news, "
-                f"{counts['fundamentals']} fundamentals, {counts['events']} events"
-            )
+            counts = store_items(rig.engine, fetched)
+            console.print("  stored " + ", ".join(f"{n} {t}" for t, n in counts.items()))
 
     asyncio.run(run())
     console.print("[green]Ingest complete.[/green]")
@@ -534,7 +464,7 @@ def extract(
 
     if since is None:
         since = (datetime.now(UTC) - timedelta(days=14)).strftime("%Y-%m-%d")
-    since_dt = datetime.strptime(since, "%Y-%m-%d").replace(tzinfo=UTC)
+    since_dt = parse_date(since)
     rig = Rigger()
     ctx = rig.context(rig.universe())
     events = asyncio.run(extract_events(ctx, since_dt))
@@ -604,7 +534,7 @@ def llm_costs(
     since: Annotated[str | None, typer.Option("--since")] = None,
 ) -> None:
     rig = Rigger()
-    since_dt = datetime.strptime(since, "%Y-%m-%d").replace(tzinfo=UTC) if since else None
+    since_dt = parse_date(since) if since else None
     with Session(rig.engine) as session:
         query = select(LLMCallTable)
         if since_dt:

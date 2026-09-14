@@ -14,7 +14,7 @@ from rigger.core.models import Instrument
 from rigger.core.plugin import Context
 from rigger.extract import event_id, extract_events
 from rigger.llm.client import LLMResult
-from tests.conftest import FakeLLM
+from tests.conftest import FakeConfig, FakeLLM
 
 NOW = datetime(2026, 3, 22, tzinfo=UTC)
 SINCE = NOW - timedelta(days=14)
@@ -22,12 +22,14 @@ AAPL = Instrument(id="US:AAPL", market="us", symbol="AAPL", currency="USD")
 MSFT = Instrument(id="US:MSFT", market="us", symbol="MSFT", currency="USD")
 
 
-class _Config:
-    llm_routing = {"extract": "fake/extract-model"}
-
-
 def _ctx(engine, llm) -> Context:
-    return Context(engine=engine, settings=None, config=_Config(), llm=llm, universe=[AAPL, MSFT])
+    return Context(
+        engine=engine,
+        settings=None,
+        config=FakeConfig({"extract": "fake/extract-model"}),
+        llm=llm,
+        universe=[AAPL, MSFT],
+    )
 
 
 def _seed_news(engine, rows: list[tuple[str, list[str], int]]) -> None:

@@ -32,19 +32,19 @@ class MarkdownReport(ReportPlugin):
         if not report.signals:
             lines.append("_No signals generated._")
         for s in report.signals:
-            lines.append(
-                f"### {s.instrument_id} — {s.direction.upper()} (conviction {s.conviction:.2f})"
-            )
-            lines.append("")
-            lines.append(f"- **Strategy:** {s.strategy}")
-            lines.append(f"- **Model:** {s.model or 'n/a'}")
-            lines.append(f"- **Horizon:** {s.horizon_days} days")
-            lines.append(f"- **Evidence:** {', '.join(s.evidence_ids) or 'none'}")
-            lines.append("")
-            lines.append(f"**Thesis:** {s.thesis}")
-            lines.append("")
-            lines.append(f"**Invalidation:** {s.invalidation}")
-            lines.append("")
+            lines += [
+                f"### {s.instrument_id} — {s.direction.upper()} (conviction {s.conviction:.2f})",
+                "",
+                f"- **Strategy:** {s.strategy}",
+                f"- **Model:** {s.model or 'n/a'}",
+                f"- **Horizon:** {s.horizon_days} days",
+                f"- **Evidence:** {', '.join(s.evidence_ids) or 'none'}",
+                "",
+                f"**Thesis:** {s.thesis}",
+                "",
+                f"**Invalidation:** {s.invalidation}",
+                "",
+            ]
 
         lines += ["## Orders", ""]
         if not report.orders:

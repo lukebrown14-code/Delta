@@ -7,7 +7,6 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from rigger.core.models import Instrument
 from rigger.plugins.markets.asx import ASXMarket
 
 SYDNEY = ZoneInfo("Australia/Sydney")
@@ -52,13 +51,6 @@ def test_is_open(asx: ASXMarket, local: datetime, expected: bool) -> None:
     assert asx.is_open(local.astimezone(UTC)) is expected
 
 
-def test_is_open_from_utc_instant(asx: ASXMarket) -> None:
-    # 2026-09-14 01:00 UTC == 11:00 AEST Monday -> open
-    assert asx.is_open(datetime(2026, 9, 14, 1, 0, tzinfo=UTC))
-    # 2026-09-14 07:00 UTC == 17:00 AEST Monday -> closed
-    assert not asx.is_open(datetime(2026, 9, 14, 7, 0, tzinfo=UTC))
-
-
 def test_next_open_from_weekend(asx: ASXMarket) -> None:
     saturday = datetime(2026, 9, 12, 12, 0, tzinfo=SYDNEY)
     nxt = asx.next_open(saturday)
@@ -83,8 +75,3 @@ def test_fee_minimum_and_percentage(asx: ASXMarket) -> None:
     assert asx.fee(10_000.0) == 10.0  # exactly at the minimum
     assert asx.fee(50_000.0) == pytest.approx(50.0)
     assert asx.fee(0.0) == 10.0
-
-
-def test_yf_symbol(asx: ASXMarket) -> None:
-    bhp = Instrument(id="ASX:BHP", market="asx", symbol="BHP", currency="AUD")
-    assert asx.yf_symbol(bhp) == "BHP.AX"
