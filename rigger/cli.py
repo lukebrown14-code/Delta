@@ -1,4 +1,4 @@
-"""Typer CLI exposing the `fh` command."""
+"""Typer CLI exposing the `rig` command."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from typing import Annotated
 import typer
 from rich.console import Console
 from rich.table import Table
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlmodel import Session, select
 
 from rigger.core import config as config_mod
@@ -24,10 +25,12 @@ from rigger.core.db import (
     init_engine,
 )
 from rigger.core.json import from_json, to_json
-from rigger.core.models import Instrument, Order, Signal
+from rigger.core.models import Bar, Instrument, Order, Signal
 from rigger.core.plugin import (
     Context,
+    MarketPlugin,
     Report,
+    ReportPlugin,
     apply_config,
     discover_plugins,
 )
@@ -58,6 +61,11 @@ class Rigger:
 
         self.plugins = discover_plugins()
         apply_config(self.plugins, self.cfg.plugins)
+        for plugin in self.plugins.values():
+            if isinstance(plugin, ReportPlugin):
+                table = dict(self.cfg.plugins.get(plugin.name, {}))
+                table.setdefault("reports_dir", self.cfg.reports_dir)
+                plugin.configure(table)
 
         for market_name, tickers in self.cfg.universe.items():
             mp = self.plugins.get(market_name)
@@ -74,7 +82,6 @@ class Rigger:
         self.portfolio = PaperPortfolio(
             self.engine,
             self.cfg.base_currency,
-            self.cfg.paper_starting_cash,
             self.cfg.paper_slippage_bps,
         )
         broker = self.plugins.get("paper")
@@ -83,8 +90,8 @@ class Rigger:
 
     def universe(self) -> list[Instrument]:
         out: list[Instrument] = []
-        for _name, plugin in self.plugins.items():
-            if hasattr(plugin, "universe"):
+        for plugin in self.plugins.values():
+            if plugin.enabled and isinstance(plugin, MarketPlugin):
                 out.extend(plugin.universe())
         return out
 
@@ -117,16 +124,6 @@ def _store_signal(session: Session, s: Signal) -> None:
             cost_usd=s.cost_usd,
         )
     )
-
-
-def _latest_price(engine, instrument_id: str) -> float:
-    with Session(engine) as session:
-        row = session.exec(
-            select(BarTable)
-            .where(BarTable.instrument_id == instrument_id)
-            .order_by(BarTable.ts.desc())
-        ).first()
-    return row.close if row else 0.0
 
 
 # --------------------------------------------------------------------------- #
@@ -181,9 +178,11 @@ def _set_enabled(name: str, value: bool) -> None:
 def ingest(
     market: Annotated[str | None, typer.Option("--market")] = None,
     tickers: Annotated[str | None, typer.Option("--tickers")] = None,
-    since: Annotated[str, typer.Option("--since")] = (datetime.now(UTC) - timedelta(days=365)).strftime("%Y-%m-%d"),
+    since: Annotated[str | None, typer.Option("--since")] = None,
 ) -> None:
     """Fetch market data into the database."""
+    if since is None:
+        since = (datetime.now(UTC) - timedelta(days=365)).strftime("%Y-%m-%d")
     rig = Rigger()
     instruments = rig.universe()
     if market:
@@ -205,22 +204,17 @@ def ingest(
                 continue
             console.print(f"Ingesting via [bold]{name}[/bold] ({len(target)} instruments)...")
             fetched = await plugin.fetch(target, since_dt)
-            bars = [x for x in fetched if hasattr(x, "source") and hasattr(x, "close")]
-            with Session(rig.engine) as session:
-                for b in bars:
-                    session.add(
-                        BarTable(
-                            instrument_id=b.instrument_id,
-                            ts=b.ts,
-                            open=b.open,
-                            high=b.high,
-                            low=b.low,
-                            close=b.close,
-                            volume=b.volume,
-                            source=b.source,
-                        )
+            bars = [x for x in fetched if isinstance(x, Bar)]
+            if bars:
+                # Re-ingesting an overlapping window must not duplicate history:
+                # (instrument_id, ts) is unique on `bar`, so ignore existing rows.
+                with Session(rig.engine) as session:
+                    session.exec(
+                        sqlite_insert(BarTable)
+                        .values([b.model_dump() for b in bars])
+                        .on_conflict_do_nothing(index_elements=["instrument_id", "ts"])
                     )
-                session.commit()
+                    session.commit()
             console.print(f"  stored {len(bars)} bars")
 
     asyncio.run(run())
@@ -248,6 +242,9 @@ def analyse(
             plugin = rig.plugins.get(sname)
             if plugin is None or not hasattr(plugin, "generate"):
                 console.print(f"[red]Unknown strategy: {sname}[/red]")
+                continue
+            if not plugin.enabled:
+                console.print(f"[yellow]Strategy {sname} is disabled; skipping[/yellow]")
                 continue
             console.print(f"Running strategy [bold]{sname}[/bold]...")
             signals = await plugin.generate(ctx)
@@ -283,16 +280,38 @@ def execute() -> None:
         signals = session.exec(select(SignalTable)).all()
 
     broker = rig.plugins["paper"]
+    universe_by_id = {i.id: i for i in rig.universe()}
     orders: list[Order] = []
     fills = []
+
+    def exposures(equity: float) -> tuple[dict[str, float], float]:
+        """Current (sector -> pct of equity, gross pct of equity) from open positions."""
+        by_sector: dict[str, float] = {}
+        gross = 0.0
+        if equity <= 0:
+            return by_sector, gross
+        for pos in rig.portfolio.positions():
+            pct = abs(pos.qty * pos.avg_price) / equity * 100
+            gross += pct
+            held = universe_by_id.get(pos.instrument_id)
+            sector = held.sector if held else None
+            if sector:
+                by_sector[sector] = by_sector.get(sector, 0.0) + pct
+        return by_sector, gross
 
     async def run() -> None:
         for sig in signals:
             if sig.id in executed_signal_ids or sig.direction == "flat":
                 continue
-            price = _latest_price(rig.engine, sig.instrument_id)
-            inst = next((i for i in rig.universe() if i.id == sig.instrument_id), None)
+            inst = universe_by_id.get(sig.instrument_id)
+            if inst is None:
+                console.print(
+                    f"[yellow]{sig.instrument_id}: skipped — not in current universe[/yellow]"
+                )
+                continue
+            price = rig.portfolio.latest_price(sig.instrument_id) or 0.0
             equity = rig.portfolio.equity()
+            sector_pct, gross_pct = exposures(equity)
             decision = size_signal(
                 Signal(
                     id=sig.id,
@@ -305,21 +324,34 @@ def execute() -> None:
                     thesis=sig.thesis,
                     invalidation=sig.invalidation,
                 ),
-                inst or Instrument(id=sig.instrument_id, market="us", symbol=sig.instrument_id, currency="USD"),
+                inst,
                 equity,
                 price,
                 limits,
+                sector_exposure_pct=sector_pct.get(inst.sector or "", 0.0),
+                gross_exposure_pct=gross_pct,
+                cash=rig.portfolio.cash(),
             )
             if not decision.approved:
                 console.print(f"[yellow]{sig.instrument_id}: skipped — {decision.reason}[/yellow]")
                 continue
             side = "buy" if sig.direction == "long" else "sell"
+            qty = decision.qty
+            if side == "sell":
+                # The paper portfolio is long-only: a short signal can only close what is held.
+                held = rig.portfolio.position_qty(sig.instrument_id)
+                if held <= 0:
+                    console.print(
+                        f"[yellow]{sig.instrument_id}: skipped — short signal with no position[/yellow]"
+                    )
+                    continue
+                qty = min(qty, held)
             order = Order(
                 id=uuid.uuid4().hex,
                 signal_id=sig.id,
                 instrument_id=sig.instrument_id,
                 side=side,  # type: ignore[arg-type]
-                qty=decision.qty,
+                qty=qty,
                 type="market",
                 submitted_ts=datetime.now(UTC),
                 broker="paper",
@@ -358,12 +390,14 @@ def execute() -> None:
 @app.command()
 def report(
     format: Annotated[str, typer.Option("--format")] = "markdown",
-    date: Annotated[str, typer.Option("--date")] = datetime.now(UTC).date().isoformat(),
+    date: Annotated[str | None, typer.Option("--date")] = None,
 ) -> None:
     """Render a report for a date."""
+    if date is None:
+        date = datetime.now(UTC).date().isoformat()
     rig = Rigger()
     plugin = rig.plugins.get(format)
-    if plugin is None or not hasattr(plugin, "render"):
+    if plugin is None or not hasattr(plugin, "render") or not plugin.enabled:
         console.print(f"[red]Unknown report format: {format}[/red]")
         raise typer.Exit(1)
 
@@ -427,15 +461,10 @@ def report(
 @app.command()
 def run() -> None:
     """ingest → analyse → execute → report."""
-    from rigger.cli import analyse as _analyse
-    from rigger.cli import execute as _execute
-    from rigger.cli import ingest as _ingest
-    from rigger.cli import report as _report
-
-    _ingest()
-    _analyse()
-    _execute()
-    _report()
+    ingest()
+    analyse()
+    execute()
+    report()
 
 
 # --------------------------------------------------------------------------- #

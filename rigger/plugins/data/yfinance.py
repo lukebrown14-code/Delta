@@ -27,7 +27,7 @@ class YFinanceData(DataPlugin):
                 bars.append(
                     Bar(
                         instrument_id=inst.id,
-                        ts=ts.to_pydatetime().replace(tzinfo=UTC),
+                        ts=ts.to_pydatetime().astimezone(UTC),
                         open=float(row["Open"]),
                         high=float(row["High"]),
                         low=float(row["Low"]),

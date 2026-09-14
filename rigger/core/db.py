@@ -8,6 +8,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from pathlib import Path
 
+from sqlalchemy import UniqueConstraint
 from sqlalchemy.engine import Engine
 from sqlmodel import Field, Session, SQLModel, create_engine
 
@@ -25,6 +26,7 @@ class InstrumentTable(SQLModel, table=True):
 
 class BarTable(SQLModel, table=True):
     __tablename__ = "bar"
+    __table_args__ = (UniqueConstraint("instrument_id", "ts", name="uq_bar_instrument_ts"),)
 
     id: int | None = Field(default=None, primary_key=True)
     instrument_id: str = Field(index=True)

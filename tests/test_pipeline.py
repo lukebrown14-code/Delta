@@ -62,7 +62,7 @@ def test_pipeline_end_to_end(tmp_engine, fake_llm, tmp_path):
         session.commit()
 
     # risk + sizing + paper fill
-    portfolio = PaperPortfolio(tmp_engine, "AUD", 100_000.0, 5.0)
+    portfolio = PaperPortfolio(tmp_engine, "AUD", 5.0)
     limits = RiskLimits()
     decision = size_signal(sig, inst, portfolio.equity(), 140.0, limits)
     assert decision.approved

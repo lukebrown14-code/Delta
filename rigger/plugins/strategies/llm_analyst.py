@@ -1,12 +1,13 @@
-"""LLM analyst strategy: assemble a facts-only brief and request a signal.""" 
+"""LLM analyst strategy: assemble a facts-only brief and request a signal."""
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import UTC, datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 from sqlmodel import Session, select
 
 from rigger.core.db import BarTable
@@ -14,6 +15,7 @@ from rigger.core.models import Instrument, Signal
 from rigger.core.plugin import Context, StrategyPlugin
 
 ANALYST_TEMPLATE = "analyst_v1.j2"
+log = logging.getLogger(__name__)
 
 
 class SignalDraft(BaseModel):
@@ -38,14 +40,19 @@ class LLMAnalyst(StrategyPlugin):
             if brief is None:
                 continue
 
-            draft, _call_id = await structured_mod.structured(
-                ctx.llm,
-                task="analyse",
-                model=model,
-                template=ANALYST_TEMPLATE,
-                vars={"symbol": inst.symbol, "instrument_id": inst.id, "brief": brief},
-                schema=SignalDraft,
-            )
+            try:
+                draft, _call_id = await structured_mod.structured(
+                    ctx.llm,
+                    task="analyse",
+                    model=model,
+                    template=ANALYST_TEMPLATE,
+                    vars={"symbol": inst.symbol, "instrument_id": inst.id, "brief": brief},
+                    schema=SignalDraft,
+                )
+            except ValidationError:
+                # One bad model answer must not discard the rest of the universe.
+                log.exception("invalid model output for %s; skipping", inst.id)
+                continue
 
             signal = Signal(
                 id=uuid.uuid4().hex,

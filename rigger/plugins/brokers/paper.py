@@ -33,4 +33,4 @@ class PaperBroker(BrokerPlugin):
 
     @staticmethod
     def _market_of(instrument_id: str) -> str:
-        return instrument_id.split(":", 1)[0] if ":" in instrument_id else "us"
+        return instrument_id.split(":", 1)[0].lower() if ":" in instrument_id else "us"

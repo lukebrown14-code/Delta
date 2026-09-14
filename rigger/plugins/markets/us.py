@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, time, timedelta, timezone
+from datetime import UTC, datetime, time, timedelta
+from zoneinfo import ZoneInfo
 
 from rigger.core.models import Instrument
 from rigger.core.plugin import MarketPlugin
 
-US_EASTERN = timezone(timedelta(hours=-5))
+US_EASTERN = ZoneInfo("America/New_York")
 MARKET_OPEN = time(9, 30)
 MARKET_CLOSE = time(16, 0)
 

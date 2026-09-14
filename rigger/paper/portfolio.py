@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from sqlalchemy.engine import Engine
 from sqlmodel import Session, select
 
-from rigger.core.db import CashTable, FillTable, PositionTable
+from rigger.core.db import BarTable, CashTable, FillTable, PositionTable
 from rigger.core.models import Fill, Order, Position
 
 MARKET_FEES = {
@@ -22,7 +22,6 @@ class PaperPortfolio:
         self,
         engine: Engine,
         base_currency: str,
-        starting_cash: float,
         slippage_bps: float = 5.0,
     ) -> None:
         self.engine = engine
@@ -56,7 +55,7 @@ class PaperPortfolio:
     ) -> Fill:
         price = order.limit_price if order.type == "limit" and order.limit_price else fill_price
         if price is None:
-            price = self._latest_price(order.instrument_id)
+            price = self.latest_price(order.instrument_id)
         assert price is not None and price > 0, (
             f"no fill price available for {order.instrument_id}"
         )
@@ -72,13 +71,20 @@ class PaperPortfolio:
         with Session(self.engine) as session:
             cash = session.get(CashTable, 1)
             assert cash is not None, "cash row missing"
+            pos = session.get(PositionTable, order.instrument_id)
+            if order.side == "sell" and (pos is None or pos.qty + 1e-9 < order.qty):
+                held = pos.qty if pos is not None else 0.0
+                raise ValueError(
+                    f"cannot sell {order.qty} {order.instrument_id}: only {held} held "
+                    "(short positions are not supported by the paper portfolio)"
+                )
+
             notional = executed * order.qty
             if order.side == "buy":
                 cash.balance -= (notional + fee)
             else:
                 cash.balance += (notional - fee)
 
-            pos = session.get(PositionTable, order.instrument_id)
             if order.side == "buy":
                 if pos is None:
                     session.add(
@@ -129,9 +135,12 @@ class PaperPortfolio:
                 total += pos.qty * pos.avg_price
         return total
 
-    def _latest_price(self, instrument_id: str) -> float | None:
-        from rigger.core.db import BarTable
+    def position_qty(self, instrument_id: str) -> float:
+        with Session(self.engine) as session:
+            pos = session.get(PositionTable, instrument_id)
+            return pos.qty if pos is not None else 0.0
 
+    def latest_price(self, instrument_id: str) -> float | None:
         with Session(self.engine) as session:
             row = session.exec(
                 select(BarTable)

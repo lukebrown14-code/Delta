@@ -88,7 +88,7 @@ uv run rig config validate
 ## Project layout
 
 ```
-src/rigger/
+rigger/
 ├── core/        models, SQLite (SQLModel), config, plugin registry, event bus
 ├── llm/         provider-agnostic client, routing, structured JSON calls, prompt templates
 ├── paper/       portfolio accounting, fee/slippage model, risk rules
@@ -104,7 +104,7 @@ Plugins are discovered through the `rigger.plugins` entry-point group in `pyproj
 ```bash
 uv run pytest
 uv run ruff check . && uv run ruff format .
-uv run mypy src/rigger/core src/rigger/llm
+uv run mypy rigger/core rigger/llm
 ```
 
 ## Roadmap

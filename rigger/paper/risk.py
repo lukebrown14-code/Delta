@@ -30,6 +30,8 @@ def size_signal(
     price: float,
     limits: RiskLimits,
     sector_exposure_pct: float = 0.0,
+    gross_exposure_pct: float = 0.0,
+    cash: float | None = None,
 ) -> SizingDecision:
     if signal.direction == "flat":
         return SizingDecision(approved=False, reason="flat signal")
@@ -43,11 +45,18 @@ def size_signal(
     if equity <= 0:
         return SizingDecision(approved=False, reason="no equity")
 
-    fraction = limits.max_position_pct / 100.0 * signal.conviction
-    notional = equity * min(fraction, limits.max_position_pct / 100.0)
+    # conviction <= 1 (validated on Signal), so this is already capped at max_position_pct.
+    notional = equity * limits.max_position_pct / 100.0 * signal.conviction
+    notional_pct = notional / equity * 100
 
-    if instrument.sector and sector_exposure_pct + (notional / equity * 100) > limits.max_sector_pct:
+    if instrument.sector and sector_exposure_pct + notional_pct > limits.max_sector_pct:
         return SizingDecision(approved=False, reason="exceeds sector exposure limit")
+
+    if gross_exposure_pct + notional_pct > limits.max_gross_exposure_pct:
+        return SizingDecision(approved=False, reason="exceeds gross exposure limit")
+
+    if cash is not None and signal.direction == "long" and notional > cash:
+        return SizingDecision(approved=False, reason="insufficient cash")
 
     if price <= 0:
         return SizingDecision(approved=False, reason="non-positive price")
