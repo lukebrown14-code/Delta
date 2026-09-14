@@ -4,6 +4,7 @@ reports_dir = "reports"
 
 [universe]
 us = ["AAPL", "MSFT", "NVDA", "GOOGL", "AMZN"]
+asx = ["BHP", "CBA", "CSL", "WES", "FMG"]
 
 [llm]
 provider = "openrouter"                # litellm | openrouter | litellm-proxy
@@ -37,4 +38,7 @@ report = "15 10 * * 1-5"
 evaluate = "0 18 * * 5"
 
 [plugins.yfinance]
+enabled = true
+
+[plugins.asx]
 enabled = true
