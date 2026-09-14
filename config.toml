@@ -38,3 +38,7 @@ evaluate = "0 18 * * 5"
 
 [plugins.yfinance]
 enabled = true
+
+[plugins.critic]
+enabled = true
+wraps = "llm_analyst"
