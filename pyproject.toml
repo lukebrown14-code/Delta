@@ -28,6 +28,7 @@ rig = "rigger.cli:app"
 us_market = "rigger.plugins.markets.us:USMarket"
 yfinance_data = "rigger.plugins.data.yfinance:YFinanceData"
 llm_analyst = "rigger.plugins.strategies.llm_analyst:LLMAnalyst"
+ensemble = "rigger.plugins.strategies.ensemble:Ensemble"
 paper_broker = "rigger.plugins.brokers.paper:PaperBroker"
 markdown_report = "rigger.plugins.reports.markdown:MarkdownReport"
 
