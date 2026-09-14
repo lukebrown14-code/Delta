@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Example Business News</title>
+    <link>https://feeds.example.com/business</link>
+    <description>Fixture feed for RSSData tests</description>
+    <item>
+      <title>Apple unveils new iPhone line-up at September event</title>
+      <link>https://example.com/news/apple-event</link>
+      <pubDate>Sat, 14 Mar 2026 09:00:00 GMT</pubDate>
+      <description><![CDATA[<p>Apple Inc. showed off <b>four</b> new phones &amp; a watch.</p>]]></description>
+    </item>
+    <item>
+      <title>Cloud spending keeps climbing</title>
+      <link>https://example.com/news/cloud-spend</link>
+      <pubDate>Fri, 13 Mar 2026 15:30:00 GMT</pubDate>
+      <description>Analysts point to MSFT as the main beneficiary of enterprise cloud budgets.</description>
+    </item>
+    <item>
+      <title>Fed holds rates steady, signals patience</title>
+      <link>https://example.com/news/fed-holds</link>
+      <pubDate>Thu, 12 Mar 2026 18:00:00 GMT</pubDate>
+      <description>The Federal Reserve left its benchmark rate unchanged.</description>
+    </item>
+    <item>
+      <title>Chipmakers rally as NVDA and Microsoft report demand</title>
+      <link>https://example.com/news/chip-rally</link>
+      <pubDate>Wed, 11 Mar 2026 12:00:00 GMT</pubDate>
+      <description>Strong AI demand lifted the sector.</description>
+    </item>
+    <item>
+      <title>Undated wire item</title>
+      <link>https://example.com/news/undated</link>
+      <description>No pubDate on this entry.</description>
+    </item>
+    <item>
+      <title>Apple reports record quarter (archive)</title>
+      <link>https://example.com/news/apple-2020</link>
+      <pubDate>Fri, 01 May 2020 10:00:00 GMT</pubDate>
+      <description>Old archived story that should be filtered by since.</description>
+    </item>
+  </channel>
+</rss>

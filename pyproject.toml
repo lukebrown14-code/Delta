@@ -19,6 +19,7 @@ dependencies = [
     "numpy>=1.26",
     "tomli-w>=1.0",
     "litellm>=1.100.1",
+    "feedparser>=6.0",
 ]
 
 [project.scripts]
@@ -30,6 +31,7 @@ yfinance_data = "rigger.plugins.data.yfinance:YFinanceData"
 llm_analyst = "rigger.plugins.strategies.llm_analyst:LLMAnalyst"
 paper_broker = "rigger.plugins.brokers.paper:PaperBroker"
 markdown_report = "rigger.plugins.reports.markdown:MarkdownReport"
+rss = "rigger.plugins.data.rss:RSSData"
 
 [build-system]
 requires = ["uv_build>=0.12.13,<0.13.0"]
