@@ -1,0 +1,53 @@
+{
+  "cik": 320193,
+  "entityName": "Apple Inc.",
+  "facts": {
+    "dei": {
+      "EntityCommonStockSharesOutstanding": {
+        "label": "Entity Common Stock, Shares Outstanding",
+        "units": {
+          "shares": [
+            {"end": "2024-10-18", "val": 15115823000, "accn": "0000320193-24-000123", "fy": 2024, "fp": "FY", "form": "10-K", "filed": "2024-11-01", "frame": "CY2024Q3I"},
+            {"end": "2025-04-18", "val": 14935826000, "accn": "0000320193-25-000057", "fy": 2025, "fp": "Q2", "form": "10-Q", "filed": "2025-05-02"},
+            {"end": "2025-07-18", "val": 14840390000, "accn": "0000320193-25-000073", "fy": 2025, "fp": "Q3", "form": "10-Q", "filed": "2025-08-01", "frame": "CY2025Q2I"}
+          ]
+        }
+      }
+    },
+    "us-gaap": {
+      "RevenueFromContractWithCustomerExcludingAssessedTax": {
+        "label": "Revenue from Contract with Customer, Excluding Assessed Tax",
+        "units": {
+          "USD": [
+            {"start": "2022-09-25", "end": "2023-09-30", "val": 383285000000, "accn": "0000320193-24-000123", "fy": 2024, "fp": "FY", "form": "10-K", "filed": "2024-11-01"},
+            {"start": "2023-10-01", "end": "2024-09-28", "val": 391035000000, "accn": "0000320193-24-000123", "fy": 2024, "fp": "FY", "form": "10-K", "filed": "2024-11-01", "frame": "CY2024"},
+            {"start": "2024-09-29", "end": "2024-12-28", "val": 124300000000, "accn": "0000320193-25-000006", "fy": 2025, "fp": "Q1", "form": "10-Q", "filed": "2025-01-31", "frame": "CY2024Q4"},
+            {"start": "2024-12-29", "end": "2025-03-29", "val": 95359000000, "accn": "0000320193-25-000057", "fy": 2025, "fp": "Q2", "form": "10-Q", "filed": "2025-05-02", "frame": "CY2025Q1"},
+            {"start": "2024-09-29", "end": "2025-03-29", "val": 219659000000, "accn": "0000320193-25-000057", "fy": 2025, "fp": "Q2", "form": "10-Q", "filed": "2025-05-02"},
+            {"start": "2025-03-30", "end": "2025-06-28", "val": 94036000000, "accn": "0000320193-25-000073", "fy": 2025, "fp": "Q3", "form": "10-Q", "filed": "2025-08-01", "frame": "CY2025Q2"},
+            {"start": "2024-09-29", "end": "2025-06-28", "val": 313695000000, "accn": "0000320193-25-000073", "fy": 2025, "fp": "Q3", "form": "10-Q", "filed": "2025-08-01"}
+          ]
+        }
+      },
+      "NetIncomeLoss": {
+        "label": "Net Income (Loss) Attributable to Parent",
+        "units": {
+          "USD": [
+            {"start": "2023-10-01", "end": "2024-09-28", "val": 93736000000, "accn": "0000320193-24-000123", "fy": 2024, "fp": "FY", "form": "10-K", "filed": "2024-11-01", "frame": "CY2024"},
+            {"start": "2025-03-30", "end": "2025-06-28", "val": 23434000000, "accn": "0000320193-25-000073", "fy": 2025, "fp": "Q3", "form": "10-Q", "filed": "2025-08-01", "frame": "CY2025Q2"},
+            {"start": "2024-09-29", "end": "2025-06-28", "val": 78939000000, "accn": "0000320193-25-000073", "fy": 2025, "fp": "Q3", "form": "10-Q", "filed": "2025-08-01"}
+          ]
+        }
+      },
+      "EarningsPerShareDiluted": {
+        "label": "Earnings Per Share, Diluted",
+        "units": {
+          "USD/shares": [
+            {"start": "2023-10-01", "end": "2024-09-28", "val": 6.08, "accn": "0000320193-24-000123", "fy": 2024, "fp": "FY", "form": "10-K", "filed": "2024-11-01", "frame": "CY2024"},
+            {"start": "2025-03-30", "end": "2025-06-28", "val": 1.57, "accn": "0000320193-25-000073", "fy": 2025, "fp": "Q3", "form": "10-Q", "filed": "2025-08-01", "frame": "CY2025Q2"}
+          ]
+        }
+      }
+    }
+  }
+}

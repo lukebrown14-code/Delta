@@ -38,3 +38,7 @@ evaluate = "0 18 * * 5"
 
 [plugins.yfinance]
 enabled = true
+
+[plugins.sec_edgar]
+enabled = true
+contact = "you@example.com"  # SEC requires a contact address in the User-Agent
