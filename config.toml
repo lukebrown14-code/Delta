@@ -41,3 +41,7 @@ enabled = true
 
 [plugins.ensemble]
 enabled = true
+
+[plugins.critic]
+enabled = true
+wraps = "llm_analyst"
