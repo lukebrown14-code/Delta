@@ -27,6 +27,7 @@ rig = "rigger.cli:app"
 [project.entry-points."rigger.plugins"]
 us_market = "rigger.plugins.markets.us:USMarket"
 yfinance_data = "rigger.plugins.data.yfinance:YFinanceData"
+yfinance_calendar = "rigger.plugins.data.yfinance_calendar:YFinanceCalendar"
 llm_analyst = "rigger.plugins.strategies.llm_analyst:LLMAnalyst"
 paper_broker = "rigger.plugins.brokers.paper:PaperBroker"
 markdown_report = "rigger.plugins.reports.markdown:MarkdownReport"

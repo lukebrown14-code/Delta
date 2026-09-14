@@ -38,3 +38,6 @@ evaluate = "0 18 * * 5"
 
 [plugins.yfinance]
 enabled = true
+
+[plugins.yfinance_calendar]
+enabled = true
