@@ -97,3 +97,33 @@ def test_pipeline_end_to_end(tmp_engine, fake_llm, tmp_path):
     content = path.read_text()
     assert "AAPL" in content
     assert sig.thesis in content
+
+
+def test_signal_metadata_round_trips(tmp_engine):
+    from datetime import UTC, datetime
+
+    from sqlmodel import select
+
+    from rigger.cli import _store_signal
+    from rigger.core.db import SignalTable
+    from rigger.core.models import Signal
+
+    sig = Signal(
+        id="sig-meta",
+        ts=datetime.now(UTC),
+        instrument_id="US:AAPL",
+        strategy="critic:llm_analyst",
+        direction="long",
+        conviction=0.5,
+        horizon_days=10,
+        thesis="t",
+        invalidation="i",
+        evidence_ids=["1"],
+        metadata={"critic": {"verdict": "reduce", "risks": ["a", "b"]}},
+    )
+    with Session(tmp_engine) as session:
+        _store_signal(session, sig)
+        session.commit()
+    with Session(tmp_engine) as session:
+        row = session.exec(select(SignalTable).where(SignalTable.id == "sig-meta")).one()
+        assert row.metadata_ == {"critic": {"verdict": "reduce", "risks": ["a", "b"]}}

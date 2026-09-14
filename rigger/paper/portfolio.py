@@ -56,9 +56,7 @@ class PaperPortfolio:
         price = order.limit_price if order.type == "limit" and order.limit_price else fill_price
         if price is None:
             price = self.latest_price(order.instrument_id)
-        assert price is not None and price > 0, (
-            f"no fill price available for {order.instrument_id}"
-        )
+        assert price is not None and price > 0, f"no fill price available for {order.instrument_id}"
 
         direction = 1 if order.side == "buy" else -1
         slippage = self.slippage_bps / 10000.0 * direction
@@ -81,9 +79,9 @@ class PaperPortfolio:
 
             notional = executed * order.qty
             if order.side == "buy":
-                cash.balance -= (notional + fee)
+                cash.balance -= notional + fee
             else:
-                cash.balance += (notional - fee)
+                cash.balance += notional - fee
 
             if order.side == "buy":
                 if pos is None:

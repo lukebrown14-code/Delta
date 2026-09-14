@@ -49,7 +49,10 @@ async def structured[T: BaseModel](
     On validation failure, re-prompts once with the error appended.
     """
     prompt = render_prompt(template, vars)
-    response_format = {"type": "json_schema", "json_schema": {"name": schema.__name__, "schema": schema_from_model(schema)}}
+    response_format = {
+        "type": "json_schema",
+        "json_schema": {"name": schema.__name__, "schema": schema_from_model(schema)},
+    }
 
     result = await client.complete(
         task=task,
@@ -66,10 +69,8 @@ async def structured[T: BaseModel](
         return obj, result.call_id
     except ValidationError as exc:
         retry_prompt = (
-            prompt
-            + "\n\nYour previous answer was invalid JSON. Fix the following errors and "
-            "return valid JSON only:\n"
-            + str(exc)
+            prompt + "\n\nYour previous answer was invalid JSON. Fix the following errors and "
+            "return valid JSON only:\n" + str(exc)
         )
         result2 = await client.complete(
             task=task,

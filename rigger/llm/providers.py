@@ -107,7 +107,11 @@ class OpenRouterProvider(Provider):
         return input_tokens * pricing["prompt"] + output_tokens * pricing["completion"]
 
     def _maybe_load_pricing(self, force: bool = False) -> None:
-        if not force and self._pricing_loaded_at and (time.time() - self._pricing_loaded_at) < 86400:
+        if (
+            not force
+            and self._pricing_loaded_at
+            and (time.time() - self._pricing_loaded_at) < 86400
+        ):
             return
         if not self.api_key:
             return

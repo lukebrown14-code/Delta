@@ -7,8 +7,9 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from pathlib import Path
+from typing import Any
 
-from sqlalchemy import UniqueConstraint
+from sqlalchemy import JSON, Column, UniqueConstraint
 from sqlalchemy.engine import Engine
 from sqlmodel import Field, Session, SQLModel, create_engine
 
@@ -92,6 +93,9 @@ class SignalTable(SQLModel, table=True):
     model: str | None = None
     prompt_version: str | None = None
     cost_usd: float | None = None
+    metadata_: dict[str, Any] | None = Field(
+        default_factory=dict, sa_column=Column("metadata", JSON, nullable=True)
+    )
 
 
 class OrderTable(SQLModel, table=True):
@@ -174,7 +178,23 @@ def init_engine(db_path: str | Path) -> Engine:
     path.parent.mkdir(parents=True, exist_ok=True)
     engine = create_engine(f"sqlite:///{path}", echo=False)
     SQLModel.metadata.create_all(engine)
+    _migrate(engine)
     return engine
+
+
+# Columns added after Phase 1. create_all() never alters existing tables, so
+# add them here for databases created before the column existed.
+_ADDED_COLUMNS: list[tuple[str, str, str]] = [
+    ("signal", "metadata", "JSON"),
+]
+
+
+def _migrate(engine: Engine) -> None:
+    with engine.begin() as conn:
+        for table, column, ddl_type in _ADDED_COLUMNS:
+            existing = {row[1] for row in conn.exec_driver_sql(f"PRAGMA table_info({table})")}
+            if column not in existing:
+                conn.exec_driver_sql(f"ALTER TABLE {table} ADD COLUMN {column} {ddl_type}")
 
 
 def ensure_cash(engine: Engine, base_currency: str, starting_cash: float) -> None:

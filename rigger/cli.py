@@ -122,6 +122,7 @@ def _store_signal(session: Session, s: Signal) -> None:
             model=s.model,
             prompt_version=s.prompt_version,
             cost_usd=s.cost_usd,
+            metadata_=s.metadata,
         )
     )
 
@@ -261,9 +262,7 @@ def analyse(
         console.print(f"[green]Stored {len(all_signals)} signals.[/green]")
     else:
         for s in all_signals:
-            console.print(
-                f"  {s.instrument_id}: {s.direction} (conviction {s.conviction:.2f})"
-            )
+            console.print(f"  {s.instrument_id}: {s.direction} (conviction {s.conviction:.2f})")
 
 
 # --------------------------------------------------------------------------- #
@@ -427,6 +426,7 @@ def report(
                 evidence_ids=from_json(s.evidence_ids),
                 model=s.model,
                 prompt_version=s.prompt_version,
+                metadata=s.metadata_ or {},
             )
             for s in signals
         ],
@@ -445,7 +445,14 @@ def report(
             for o in orders
         ],
         fills=[
-            Fill(order_id=f.order_id, ts=f.ts, qty=f.qty, price=f.price, fee=f.fee, slippage=f.slippage)
+            Fill(
+                order_id=f.order_id,
+                ts=f.ts,
+                qty=f.qty,
+                price=f.price,
+                fee=f.fee,
+                slippage=f.slippage,
+            )
             for f in fills
         ],
         positions=positions,
@@ -459,9 +466,16 @@ def report(
 # run
 # --------------------------------------------------------------------------- #
 @app.command()
+def extract() -> None:
+    """Turn unprocessed news into structured events (Phase 2)."""
+    console.print("[yellow]extract: no extractor configured[/yellow]")
+
+
+@app.command()
 def run() -> None:
-    """ingest → analyse → execute → report."""
+    """ingest → extract → analyse → execute → report."""
     ingest()
+    extract()
     analyse()
     execute()
     report()
@@ -500,7 +514,9 @@ def paper_reset() -> None:
         session.exec(delete(PositionTable))
         session.exec(delete(CashTable))
         session.add(
-            CashTable(id=1, balance=rig.cfg.paper_starting_cash, base_currency=rig.cfg.base_currency)
+            CashTable(
+                id=1, balance=rig.cfg.paper_starting_cash, base_currency=rig.cfg.base_currency
+            )
         )
         session.commit()
     console.print("[green]Paper portfolio reset.[/green]")

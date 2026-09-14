@@ -31,9 +31,7 @@ class EventBus:
             except Exception:  # pragma: no cover - subscribers must not break the pipeline
                 import logging
 
-                logging.getLogger("rigger.events").exception(
-                    "event handler failed for %s", event
-                )
+                logging.getLogger("rigger.events").exception("event handler failed for %s", event)
 
     def emit_sync_async(self, event: str, **payload: Any) -> Awaitable[None]:
         return self.emit(event, **payload)

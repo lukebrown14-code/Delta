@@ -7,7 +7,7 @@ SQLModel tables in :mod:`rigger.core.db` with the same field names.
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -94,6 +94,7 @@ class Signal(BaseModel):
     model: str | None = None
     prompt_version: str | None = None
     cost_usd: float | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class Order(BaseModel):
