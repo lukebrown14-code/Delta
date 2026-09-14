@@ -526,9 +526,23 @@ def report(
 # run
 # --------------------------------------------------------------------------- #
 @app.command()
-def extract() -> None:
+def extract(
+    since: Annotated[str | None, typer.Option("--since")] = None,
+) -> None:
     """Turn unprocessed news into structured events (Phase 2)."""
-    console.print("[yellow]extract: no extractor configured[/yellow]")
+    from rigger.extract import extract_events
+
+    if since is None:
+        since = (datetime.now(UTC) - timedelta(days=14)).strftime("%Y-%m-%d")
+    since_dt = datetime.strptime(since, "%Y-%m-%d").replace(tzinfo=UTC)
+    rig = Rigger()
+    ctx = rig.context(rig.universe())
+    events = asyncio.run(extract_events(ctx, since_dt))
+    instruments = len({e.instrument_id for e in events})
+    console.print(
+        f"[green]Extracted {len(events)} events across {instruments} instruments "
+        f"since {since}.[/green]"
+    )
 
 
 @app.command()
