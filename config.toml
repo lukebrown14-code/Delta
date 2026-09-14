@@ -63,7 +63,6 @@ backoff_seconds = 1.0
 enabled = true
 contact = "you@example.com"  # SEC requires a contact address in the User-Agent
 
-
 [plugins.rss]
 enabled = true
 # Business news feeds. Items are matched to universe instruments by ticker or
@@ -75,7 +74,7 @@ feeds = [
 ]
 
 [plugins.momentum]
-
+enabled = true
 
 [plugins.yfinance_calendar]
 enabled = true
