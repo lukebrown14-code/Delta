@@ -166,7 +166,9 @@ def _fundamentals(session: Session, inst: Instrument, as_of: datetime) -> Sectio
         if r.metric in seen:
             continue
         seen.add(r.metric)
-        section.lines.append(f"{r.metric}: {r.value:g} (as of {r.as_of:%Y-%m-%d}, {r.source})")
+        section.lines.append(
+            f"{r.metric}: {_fmt_value(r.value)} (as of {r.as_of:%Y-%m-%d}, {r.source})"
+        )
         section.evidence_ids.append(f"fundamental:{r.id}")
     return section
 
@@ -183,3 +185,12 @@ def _calendar(session: Session, inst: Instrument, as_of: datetime) -> Section:
         section.lines.append(f"{to_utc(r.ts):%Y-%m-%d} {r.kind}: {r.summary}")
         section.evidence_ids.append(r.id)
     return section
+
+
+def _fmt_value(value: float) -> str:
+    """Readable magnitudes for the model: 2.66e11 -> 265.60B, 7.46 -> 7.46."""
+    magnitude = abs(value)
+    for threshold, suffix in ((1e12, "T"), (1e9, "B"), (1e6, "M")):
+        if magnitude >= threshold:
+            return f"{value / threshold:,.2f}{suffix}"
+    return f"{value:,.2f}"

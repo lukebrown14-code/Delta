@@ -156,3 +156,20 @@ def test_skips_instrument_without_bars(tmp_engine):
     )
     assert asyncio.run(Ensemble().generate(ctx)) == []
     assert llm.calls == []
+
+
+def test_failing_model_is_dropped_not_fatal(tmp_engine):
+    class OneModelBroken(PerModelLLM):
+        async def complete(self, **kwargs):
+            if kwargs["model"] == "m/b":
+                raise RuntimeError("m/b is not a valid model ID")
+            return await super().complete(**kwargs)
+
+    llm = OneModelBroken(
+        {"m/a": _answer("long", 0.6), "m/b": _answer("long", 0.6), "m/c": _answer("long", 0.8)},
+        expected=2,
+    )
+    ctx, inst = _ctx(tmp_engine, llm)
+    signals = asyncio.run(Ensemble().generate(ctx))
+    assert len(signals) == 1
+    assert signals[0].metadata["ensemble"]["models"] == ["m/a", "m/c"]

@@ -1,49 +1,46 @@
 {
-  "data": [
-    {
-      "id": "02845001",
-      "document_date": "2026-09-10T08:30:00+1000",
-      "document_release_date": "2026-09-10T08:31:12+1000",
-      "url": "https://announcements.asx.com.au/asxpdf/20260910/pdf/02845001.pdf",
-      "relative_url": "/asxpdf/20260910/pdf/02845001.pdf",
-      "header": "Change of Director's Interest Notice",
-      "market_sensitive": false,
-      "number_of_pages": 3,
-      "size": "180.4KB",
-      "legacy_announcement": false,
-      "issuer_code": "BHP",
-      "issuer_short_name": "BHP GROUP LIMITED",
-      "issuer_full_name": "BHP GROUP LIMITED"
-    },
-    {
-      "id": "02844888",
-      "document_date": "2026-09-08T08:30:00+1000",
-      "document_release_date": "2026-09-08T08:30:00+1000",
-      "url": "https://announcements.asx.com.au/asxpdf/20260908/pdf/02844888.pdf",
-      "relative_url": "/asxpdf/20260908/pdf/02844888.pdf",
-      "header": "Operational Review for the quarter ended 31 August 2026",
-      "market_sensitive": true,
-      "number_of_pages": 24,
-      "size": "1.3MB",
-      "legacy_announcement": false,
-      "issuer_code": "BHP",
-      "issuer_short_name": "BHP GROUP LIMITED",
-      "issuer_full_name": "BHP GROUP LIMITED"
-    },
-    {
-      "id": "02844100",
-      "document_date": "2026-08-20T08:30:00+1000",
-      "document_release_date": "2026-08-20T08:30:00+1000",
-      "url": "https://announcements.asx.com.au/asxpdf/20260820/pdf/02844100.pdf",
-      "relative_url": "/asxpdf/20260820/pdf/02844100.pdf",
-      "header": "Notice of Annual General Meeting",
-      "market_sensitive": false,
-      "number_of_pages": 12,
-      "size": "620.1KB",
-      "legacy_announcement": false,
-      "issuer_code": "BHP",
-      "issuer_short_name": "BHP GROUP LIMITED",
-      "issuer_full_name": "BHP GROUP LIMITED"
-    }
-  ]
+  "data": {
+    "displayName": "BHP GROUP LIMITED",
+    "issueType": "CS",
+    "symbol": "BHP",
+    "xid": "60947",
+    "items": [
+      {
+        "announcementType": "CHANGE OF DIRECTOR'S INTEREST NOTICE",
+        "date": "2026-09-09T22:31:12.000Z",
+        "documentKey": "2924-03134001-3A700001",
+        "fileSize": "180KB",
+        "headline": "Change of Director's Interest Notice",
+        "isPriceSensitive": false,
+        "url": ""
+      },
+      {
+        "announcementType": "QUARTERLY ACTIVITIES REPORT",
+        "date": "2026-09-04T22:15:00.000Z",
+        "documentKey": "2924-03133002-3A700002",
+        "fileSize": "2100KB",
+        "headline": "Operational Review for the quarter ended 31 August 2026",
+        "isPriceSensitive": true,
+        "url": ""
+      },
+      {
+        "announcementType": "NOTICE OF MEETING",
+        "date": "2026-08-20T22:05:30.000Z",
+        "documentKey": "2924-03132003-3A700003",
+        "fileSize": "705KB",
+        "headline": "Notice of Annual General Meeting",
+        "isPriceSensitive": false,
+        "url": "https://example.com/asx/bhp-agm-notice.pdf"
+      },
+      {
+        "announcementType": "OTHER",
+        "date": "2026-07-15T23:00:00.000Z",
+        "documentKey": "2924-03131004-3A700004",
+        "fileSize": "90KB",
+        "headline": "Old item outside the window",
+        "isPriceSensitive": false,
+        "url": ""
+      }
+    ]
+  }
 }

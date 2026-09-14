@@ -41,6 +41,15 @@ FACT_TAGS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
 
 MAX_REQUESTS_PER_SECOND = 10
 
+# Used when EDGAR gives no primaryDocDescription (routinely the case for Form 4),
+# so the brief and the extract model see what the filing is rather than "4: FORM 4".
+FORM_LABELS = {
+    "4": "insider transaction report (Form 4)",
+    "8-K": "current report of a material event",
+    "10-Q": "quarterly report",
+    "10-K": "annual report",
+}
+
 
 class SECEdgar(DataPlugin):
     name = "sec_edgar"
@@ -146,7 +155,7 @@ class SECEdgar(DataPlugin):
                     id=stable_id(accession),
                     instrument_ids=[inst.id],
                     published=datetime(filed.year, filed.month, filed.day, tzinfo=UTC),
-                    title=f"{form}: {description or form}",
+                    title=f"{form}: {description or FORM_LABELS.get(form, form)}",
                     url=FILING_URL.format(
                         cik_int=int(cik),
                         accession=accession.replace("-", ""),
@@ -189,15 +198,19 @@ class SECEdgar(DataPlugin):
 def _find_series(
     facts: dict[str, Any], namespace: str, tags: tuple[str, ...]
 ) -> list[dict[str, Any]]:
-    """Return the fact list for the first tag present, searching ``namespace`` first."""
+    """Facts for every listed tag, searching ``namespace`` first.
+
+    Filers switch tags over time (Apple stopped reporting ``Revenues`` in 2018
+    in favour of ``RevenueFromContractWithCustomerExcludingAssessedTax``), so
+    the series are merged and the caller's "latest by end date" pick decides.
+    """
+    series: list[dict[str, Any]] = []
     for ns in (namespace, *(n for n in facts if n != namespace)):
         concepts = facts.get(ns, {})
         for tag in tags:
-            units = concepts.get(tag, {}).get("units", {})
-            for values in units.values():
-                if values:
-                    return list(values)
-    return []
+            for values in concepts.get(tag, {}).get("units", {}).values():
+                series.extend(values)
+    return series
 
 
 def _latest_fact(series: list[dict[str, Any]], form: str) -> dict[str, Any] | None:

@@ -142,7 +142,7 @@ def test_all_sections_render_with_evidence(tmp_engine):
     assert brief.calendar.lines == ["2026-04-01 dividend: Ex-dividend 2026-04-01"]
     assert brief.calendar.evidence_ids == ["event-future"]
 
-    assert brief.fundamentals.lines == ["eps: 6.1 (as of 2025-12-31, edgar)"]
+    assert brief.fundamentals.lines == ["eps: 6.10 (as of 2025-12-31, edgar)"]
     assert len(brief.fundamentals.evidence_ids) == 1
 
     ids = brief.evidence_ids

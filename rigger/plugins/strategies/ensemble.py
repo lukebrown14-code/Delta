@@ -42,12 +42,18 @@ class Ensemble(StrategyPlugin):
             brief = build_brief(ctx, inst)
             if brief is None:
                 continue
+            # One misconfigured or unavailable model must not take the ensemble down:
+            # log it and vote with whoever answered.
             results = await asyncio.gather(
-                *(analyse_one(ctx, inst, model, brief, strategy=self.name) for model in models)
+                *(analyse_one(ctx, inst, model, brief, strategy=self.name) for model in models),
+                return_exceptions=True,
             )
-            answers = [
-                (model, sig) for model, sig in zip(models, results, strict=True) if sig is not None
-            ]
+            answers: list[tuple[str, Signal]] = []
+            for model, res in zip(models, results, strict=True):
+                if isinstance(res, BaseException):
+                    log.error("ensemble: %s failed for %s: %s", model, inst.id, res)
+                elif res is not None:
+                    answers.append((model, res))
             if len(answers) < MIN_MODELS:
                 log.warning(
                     "ensemble: only %d valid answer(s) for %s; skipping", len(answers), inst.id

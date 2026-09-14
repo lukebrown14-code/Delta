@@ -66,7 +66,12 @@ def test_filings_filtered_by_form_and_date(edgar):
     titles = sorted(i.title for i in items)
 
     # SC 13G/A excluded by form; the 2024-11-01 10-K excluded by date.
-    assert titles == ["10-Q: 10-Q", "10-Q: 10-Q", "4: 4", "8-K: 8-K"]
+    assert titles == [
+        "10-Q: 10-Q",
+        "10-Q: 10-Q",
+        "4: insider transaction report (Form 4)",
+        "8-K: 8-K",
+    ]
     assert all(i.instrument_ids == ["US:AAPL"] for i in items)
     assert all(i.source == "sec_edgar" and i.body is None for i in items)
     assert all(i.published.tzinfo is UTC for i in items)

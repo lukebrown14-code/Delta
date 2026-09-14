@@ -1,16 +1,16 @@
 """ASX company announcements data plugin.
 
-Pulls the public announcements feed for each ASX instrument and turns each
-announcement into a :class:`NewsItem` pointing at the PDF. Price-sensitive
-announcements are marked with a ``[PS] `` title prefix until ``NewsItem`` grows
-a dedicated flag.
+Pulls the announcements feed ASX serves through Markit Digital (the old
+``asx.com.au/asx/1`` API was retired) and turns each announcement into a
+:class:`NewsItem`. Price-sensitive announcements are marked with a ``[PS] ``
+title prefix until ``NewsItem`` grows a dedicated flag.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx
@@ -23,19 +23,17 @@ from rigger.core.time import to_utc
 
 log = logging.getLogger(__name__)
 
-BASE_URL = "https://www.asx.com.au/asx/1/company/{code}/announcements"
+BASE_URL = "https://asx.api.markitdigital.com/asx-research/1.0/companies/{code}/announcements"
+# The API returns no per-document URL; this page lists the company's announcements
+# and the fragment keeps the link unique per document.
+PAGE_URL = "https://www.asx.com.au/markets/trade-our-cash-market/announcements.{code}#{key}"
 PS_PREFIX = "[PS] "
 RETRY_STATUSES = {429, 500, 502, 503, 504}
 
 
-def announcement_id(url: str, published: datetime) -> str:
-    """Stable id over the URL and the UTC publish time."""
-    return stable_id(url, to_utc(published).isoformat())
-
-
-def _parse_published(raw: str) -> datetime:
-    """ASX timestamps are ISO-8601 with a ``+1000``-style offset; 3.12 parses that natively."""
-    return to_utc(datetime.fromisoformat(raw.strip()))
+def announcement_id(document_key: str) -> str:
+    """Stable id from ASX's own document key."""
+    return stable_id("asx_announcement", document_key)
 
 
 class ASXAnnouncements(DataPlugin):
@@ -63,17 +61,26 @@ class ASXAnnouncements(DataPlugin):
         targets = [inst for inst in instruments if inst.market == self.market]
         headers = {"User-Agent": self.user_agent, "Accept": "application/json"}
         async with httpx.AsyncClient(timeout=self.timeout, headers=headers) as client:
-            payloads = await asyncio.gather(*(self._get(client, inst.symbol) for inst in targets))
+            payloads = await asyncio.gather(
+                *(self._get(client, inst.symbol, since_utc) for inst in targets)
+            )
         items: list[Bar | NewsItem | Fundamental | Event] = []
         for inst, rows in zip(targets, payloads, strict=True):
             if rows:
                 items.extend(self._to_news(inst, rows, since_utc))
         return items
 
-    async def _get(self, client: httpx.AsyncClient, code: str) -> list[dict[str, Any]] | None:
+    async def _get(
+        self, client: httpx.AsyncClient, code: str, since: datetime
+    ) -> list[dict[str, Any]] | None:
         """Announcement rows for one code, or None when the request ultimately failed."""
-        url = BASE_URL.format(code=code.upper())
-        params: dict[str, str | int] = {"count": self.count, "market_sensitive": "false"}
+        url = BASE_URL.format(code=code.lower())
+        params: dict[str, str | int] = {
+            "fromDate": since.date().isoformat(),
+            "toDate": datetime.now(UTC).date().isoformat(),
+            "itemsPerPage": self.count,
+            "page": 0,
+        }
         for attempt in range(self.max_retries + 1):
             try:
                 resp = await client.get(url, params=params)
@@ -101,7 +108,7 @@ class ASXAnnouncements(DataPlugin):
             except ValueError:
                 log.warning("asx_announcements: %s returned non-JSON body; skipping", code)
                 return None
-            rows = data.get("data") if isinstance(data, dict) else data
+            rows = data.get("data", {}).get("items") if isinstance(data, dict) else None
             return [row for row in rows or [] if isinstance(row, dict)]
         return None
 
@@ -122,12 +129,12 @@ class ASXAnnouncements(DataPlugin):
     ) -> list[NewsItem]:
         out: list[NewsItem] = []
         for row in rows:
-            url = row.get("url") or row.get("relative_url")
-            raw_published = row.get("document_release_date") or row.get("document_date")
-            if not url or not raw_published:
+            key = row.get("documentKey")
+            raw_published = row.get("date")
+            if not key or not raw_published:
                 continue
             try:
-                published = _parse_published(str(raw_published))
+                published = to_utc(datetime.fromisoformat(str(raw_published)))
             except ValueError:
                 log.warning(
                     "asx_announcements: %s bad timestamp %r; skipping", inst.symbol, raw_published
@@ -135,16 +142,17 @@ class ASXAnnouncements(DataPlugin):
                 continue
             if published < since:
                 continue
-            title = str(row.get("header") or "").strip() or "Untitled announcement"
-            if bool(row.get("market_sensitive")):
+            title = str(row.get("headline") or "").strip() or "Untitled announcement"
+            if bool(row.get("isPriceSensitive")):
                 title = f"{PS_PREFIX}{title}"
+            url = str(row.get("url") or "") or PAGE_URL.format(code=inst.symbol.lower(), key=key)
             out.append(
                 NewsItem(
-                    id=announcement_id(str(url), published),
+                    id=announcement_id(str(key)),
                     instrument_ids=[inst.id],
                     published=published,
                     title=title,
-                    url=str(url),
+                    url=url,
                     body=None,
                     source=self.name,
                 )

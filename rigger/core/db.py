@@ -200,6 +200,8 @@ _ADDED_COLUMNS: list[tuple[str, str, str]] = [
 # Unique indexes added after Phase 1; SQLite cannot ALTER a constraint in, but
 # a unique index is equivalent for ON CONFLICT purposes.
 _ADDED_UNIQUE_INDEXES: list[tuple[str, str, tuple[str, ...]]] = [
+    # Phase 1 databases were created before BarTable declared this constraint.
+    ("uq_bar_instrument_ts", "bar", ("instrument_id", "ts")),
     ("uq_fundamental_key", "fundamental", ("instrument_id", "as_of", "metric", "source")),
 ]
 

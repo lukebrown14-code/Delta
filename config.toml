@@ -11,13 +11,13 @@ provider = "openrouter"                # litellm | openrouter | litellm-proxy
 proxy_base_url = "http://localhost:4000"
 
 [llm.routing]
-extract = "google/gemini-flash-1.5"
+extract = "google/gemini-2.5-flash"
 analyse = "anthropic/claude-sonnet-4"
 critique = "openai/gpt-4o"
 pm = "anthropic/claude-opus-4"
 
 [llm.ensemble]
-models = ["anthropic/claude-sonnet-4", "openai/gpt-4o", "gemini/gemini-pro-1.5"]
+models = ["anthropic/claude-sonnet-4", "openai/gpt-4o", "google/gemini-2.5-pro"]
 
 [paper]
 starting_cash = 100000
@@ -61,7 +61,7 @@ backoff_seconds = 1.0
 
 [plugins.sec_edgar]
 enabled = true
-contact = "you@example.com"  # SEC requires a contact address in the User-Agent
+contact = "luke_brown14@icloud.com"  # SEC requires a contact address in the User-Agent
 
 [plugins.rss]
 enabled = true
