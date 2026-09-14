@@ -1,0 +1,121 @@
+"""Tests for the yfinance calendar data plugin (no network)."""
+
+from __future__ import annotations
+
+import asyncio
+from datetime import UTC, datetime, timedelta
+
+import yfinance
+
+from rigger.core.models import Instrument
+from rigger.plugins.data.yfinance_calendar import YFinanceCalendar, calendar_event_id
+
+AAPL = Instrument(id="US:AAPL", market="us", symbol="AAPL", currency="USD")
+BHP = Instrument(id="ASX:BHP", market="asx", symbol="BHP", currency="AUD")
+SINCE = datetime(2026, 1, 1, tzinfo=UTC)
+
+TODAY = datetime.now(UTC).date()
+EARNINGS = TODAY + timedelta(days=30)
+EX_DIV = TODAY + timedelta(days=10)
+
+
+class _FakeTicker:
+    calendars: dict[str, dict] = {}
+    requested: list[str] = []
+
+    def __init__(self, symbol: str) -> None:
+        self.symbol = symbol
+        _FakeTicker.requested.append(symbol)
+
+    @property
+    def calendar(self) -> dict:
+        return _FakeTicker.calendars.get(self.symbol, {})
+
+
+def _plugin(markets: dict | None = None) -> YFinanceCalendar:
+    plugin = YFinanceCalendar()
+    plugin.markets = markets or {}
+    return plugin
+
+
+def _patch(monkeypatch, calendars: dict[str, dict]) -> None:
+    _FakeTicker.calendars = calendars
+    _FakeTicker.requested = []
+    monkeypatch.setattr(yfinance, "Ticker", _FakeTicker)
+
+
+def test_emits_earnings_and_dividend_events(monkeypatch):
+    _patch(
+        monkeypatch,
+        {
+            "AAPL": {
+                "Earnings Date": [EARNINGS, EARNINGS + timedelta(days=4)],
+                "Ex-Dividend Date": EX_DIV,
+                "Dividend Date": EX_DIV + timedelta(days=14),
+                "Earnings Average": 1.5,
+            }
+        },
+    )
+
+    events = asyncio.run(_plugin().fetch([AAPL], SINCE))
+
+    assert [e.kind for e in events] == ["earnings", "dividend"]
+    now = datetime.now(UTC)
+    for e in events:
+        assert e.instrument_id == AAPL.id
+        assert e.ts > now
+        assert e.ts.tzinfo is UTC and (e.ts.hour, e.ts.minute) == (0, 0)
+        assert e.sentiment == 0.0
+        assert e.evidence_ids == []
+        assert e.extracted_by == "yfinance"
+        assert e.prompt_version == "n/a"
+
+    earnings, dividend = events
+    assert earnings.ts.date() == EARNINGS  # earliest of the candidate dates
+    assert earnings.summary == f"Earnings expected {EARNINGS.isoformat()}"
+    assert earnings.id == calendar_event_id(AAPL.id, "earnings", EARNINGS)
+    assert dividend.ts.date() == EX_DIV
+    assert dividend.summary == f"Ex-dividend {EX_DIV.isoformat()}"
+    assert dividend.id == calendar_event_id(AAPL.id, "dividend", EX_DIV)
+
+
+def test_no_calendar_yields_nothing(monkeypatch):
+    _patch(monkeypatch, {"AAPL": {}})
+
+    assert asyncio.run(_plugin().fetch([AAPL], SINCE)) == []
+
+
+def test_past_dates_are_dropped(monkeypatch):
+    _patch(monkeypatch, {"AAPL": {"Ex-Dividend Date": TODAY - timedelta(days=5)}})
+
+    assert asyncio.run(_plugin().fetch([AAPL], SINCE)) == []
+
+
+def test_uses_market_plugin_yf_symbol_when_present(monkeypatch):
+    _patch(monkeypatch, {"BHP.AX": {"Earnings Date": [EARNINGS]}, "AAPL": {}})
+
+    class _ASX:
+        def yf_symbol(self, inst: Instrument) -> str:
+            return f"{inst.symbol}.AX"
+
+    events = asyncio.run(_plugin({"asx": _ASX()}).fetch([BHP, AAPL], SINCE))
+
+    assert _FakeTicker.requested == ["BHP.AX", "AAPL"]
+    assert [e.instrument_id for e in events] == [BHP.id]
+
+
+def test_ticker_errors_do_not_abort_the_batch(monkeypatch):
+    class _Boom(_FakeTicker):
+        @property
+        def calendar(self) -> dict:
+            if self.symbol == "AAPL":
+                raise RuntimeError("yahoo down")
+            return super().calendar
+
+    _FakeTicker.calendars = {"BHP": {"Ex-Dividend Date": EX_DIV}}
+    _FakeTicker.requested = []
+    monkeypatch.setattr(yfinance, "Ticker", _Boom)
+
+    events = asyncio.run(_plugin().fetch([AAPL, BHP], SINCE))
+
+    assert [e.instrument_id for e in events] == [BHP.id]

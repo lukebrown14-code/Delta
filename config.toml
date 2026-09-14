@@ -75,4 +75,7 @@ feeds = [
 ]
 
 [plugins.momentum]
+
+
+[plugins.yfinance_calendar]
 enabled = true
