@@ -1,4 +1,4 @@
-# Finance Harness — Project Specification
+# Rigger — Project Specification
 
 > **Audience:** AI coding agents and developers implementing this project. This document is the single source of truth for scope, architecture, contracts and build order. Read it fully before writing code.
 >
@@ -59,7 +59,7 @@ The edge is expected to come from *information quality and evaluation discipline
 ### 4.1 Directory layout
 
 ```
-finance_harness/
+rigger/
 ├── core/
 │   ├── plugin.py          # Plugin base classes, registry, entry-point discovery
 │   ├── models.py          # Pydantic domain models (see §5)
@@ -235,8 +235,8 @@ class ReportPlugin(Plugin):
 **Discovery:** plugins register via `pyproject.toml` entry points:
 
 ```toml
-[project.entry-points."finance_harness.plugins"]
-yfinance = "finance_harness.plugins.data.yfinance:YFinanceData"
+[project.entry-points."rigger.plugins"]
+yfinance = "rigger.plugins.data.yfinance:YFinanceData"
 ```
 
 Third-party plugins are ordinary pip packages using the same entry-point group. `fh plugins list` prints all discovered plugins with type, version and enabled state.
