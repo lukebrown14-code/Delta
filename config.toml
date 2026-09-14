@@ -62,3 +62,14 @@ backoff_seconds = 1.0
 [plugins.sec_edgar]
 enabled = true
 contact = "you@example.com"  # SEC requires a contact address in the User-Agent
+
+
+[plugins.rss]
+enabled = true
+# Business news feeds. Items are matched to universe instruments by ticker or
+# company name; unmatched (macro) items are still stored with no instrument.
+feeds = [
+    "https://feeds.a.dj.com/rss/RSSMarketsMain.xml",
+    "https://www.cnbc.com/id/10001147/device/rss/rss.html",
+    "https://feeds.bbci.co.uk/news/business/rss.xml",
+]
