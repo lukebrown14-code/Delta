@@ -1,0 +1,40 @@
+base_currency = "AUD"
+db_path = "data/rigger.db"
+reports_dir = "reports"
+
+[universe]
+us = ["AAPL", "MSFT", "NVDA", "GOOGL", "AMZN"]
+
+[llm]
+provider = "openrouter"                # litellm | openrouter | litellm-proxy
+proxy_base_url = "http://localhost:4000"
+
+[llm.routing]
+extract = "google/gemini-flash-1.5"
+analyse = "anthropic/claude-sonnet-4"
+critique = "openai/gpt-4o"
+pm = "anthropic/claude-opus-4"
+
+[llm.ensemble]
+models = ["anthropic/claude-sonnet-4", "openai/gpt-4o", "gemini/gemini-pro-1.5"]
+
+[paper]
+starting_cash = 100000
+slippage_bps = 5
+
+[risk]
+max_position_pct = 5
+max_sector_pct = 25
+max_gross_exposure_pct = 100
+min_conviction = 0.6
+daily_loss_halt_pct = 3
+
+[schedule]
+ingest = "0 6 * * 1-5"
+analyse = "30 6 * * 1-5"
+execute = "0 10 * * 1-5"
+report = "15 10 * * 1-5"
+evaluate = "0 18 * * 5"
+
+[plugins.yfinance]
+enabled = true

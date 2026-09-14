@@ -36,8 +36,8 @@ The edge is expected to come from *information quality and evaluation discipline
 | Core scope | Market-agnostic. Markets, data sources, strategies, brokers and reports are **plugins**. |
 | Initial mode | Research + **paper trading**. |
 | Language | **Python 3.12+**. **Rust** (PyO3/maturin) only for proven hot paths (backtest kernel, indicators). |
-| Interface | **CLI** (`fh`) + **scheduled reports** (Markdown first, HTML/email later). |
-| AI access | **OpenRouter** via the OpenAI-compatible SDK. Models are config strings, never hard-coded. |
+| Interface | **CLI** (`rig`) + **scheduled reports** (Markdown first, HTML/email later). |
+| AI access | **LiteLLM** (default), with **OpenRouter** and **LiteLLM Proxy** as provider options behind a single client. Models are config strings, never hard-coded. |
 | Storage | **SQLite** via SQLModel. Single file DB, easy to back up and inspect. |
 | Package manager | `uv`. |
 
@@ -68,10 +68,11 @@ rigger/
 │   ├── events.py          # In-process async event bus
 │   └── scheduler.py       # APScheduler job definitions
 ├── llm/
-│   ├── openrouter.py      # Client wrapper: retries, timeouts, cost + latency logging, cache
-│   ├── router.py          # Task name → model id mapping from config
-│   ├── structured.py      # JSON-schema enforced calls returning validated Pydantic objects
-│   └── prompts/           # Jinja2 templates, versioned by filename (analyst_v1.j2, critic_v1.j2 ...)
+│   ├── client.py           # Provider-agnostic client: cache, cost + latency logging
+│   ├── providers.py        # OpenRouter, LiteLLM SDK, LiteLLM Proxy implementations
+│   ├── router.py           # Task name → model id mapping from config
+│   ├── structured.py       # JSON-schema enforced calls returning validated Pydantic objects
+│   └── prompts/            # Jinja2 templates, versioned by filename (analyst_v1.j2, critic_v1.j2 ...)
 ├── plugins/
 │   ├── markets/           # MarketPlugin implementations   (us, asx, crypto)
 │   ├── data/              # DataPlugin implementations     (yfinance, rss, asx_announcements, sec_edgar, ccxt)
@@ -85,7 +86,7 @@ rigger/
 │   ├── scorecard.py       # Performance metrics per strategy / model / source / prompt version
 │   ├── attribution.py     # Which evidence sources correlate with good outcomes
 │   └── backtest.py        # Replay strategies over stored history using the LLM cache
-├── cli.py                 # Typer app exposing the `fh` command
+├── cli.py                 # Typer app exposing the `rig` command
 ├── rust/                  # Optional maturin crate (Phase 5)
 ├── tests/
 ├── config.toml            # User config (universe, routing, risk, schedule)
@@ -239,18 +240,26 @@ class ReportPlugin(Plugin):
 yfinance = "rigger.plugins.data.yfinance:YFinanceData"
 ```
 
-Third-party plugins are ordinary pip packages using the same entry-point group. `fh plugins list` prints all discovered plugins with type, version and enabled state.
+Third-party plugins are ordinary pip packages using the same entry-point group. `rig plugins list` prints all discovered plugins with type, version and enabled state.
 
 ---
 
-## 7. LLM layer (OpenRouter)
+## 7. LLM layer (LiteLLM / OpenRouter / Proxy)
 
-### 7.1 Client (`llm/openrouter.py`)
+Rigger talks to models through a single provider-agnostic `LLMClient` in
+`llm/client.py`. The actual call is delegated to one of three providers in
+`llm/providers.py`, selected by `[llm] provider`:
 
-- Uses the `openai` Python SDK with `base_url="https://openrouter.ai/api/v1"` and `api_key=OPENROUTER_API_KEY`.
-- Sends `HTTP-Referer` and `X-Title` headers (OpenRouter attribution).
-- Exponential backoff on 429/5xx, max 5 attempts, 60 s timeout.
-- Reads `usage` from the response and pricing from OpenRouter's `/models` endpoint (cached daily) to compute `cost_usd`.
+| Provider | Description |
+|---|---|
+| `litellm` (default) | Uses the `litellm` Python SDK directly. Model ids are provider-prefixed (`openai/gpt-4o`, `anthropic/claude-sonnet-4`, `gemini/...`). API keys are read from the environment by LiteLLM. Built-in cost tracking. |
+| `openrouter` | Uses the `openai` SDK against `https://openrouter.ai/api/v1` with `OPENROUTER_API_KEY`, sending `HTTP-Referer` / `X-Title`. Pricing from OpenRouter's `/models` endpoint (cached daily). |
+| `litellm-proxy` | Uses the `openai` SDK against your self-hosted proxy (`proxy_base_url`, default `http://localhost:4000`). Backends + model aliases are configured in the proxy's own `config.yaml`. |
+
+### 7.1 Client (`llm/client.py`)
+
+- Caching, cost + latency logging, and LLMCall persistence live here and are shared across providers.
+- Exponential backoff on 429/5xx, max 5 attempts, 60 s timeout (provider-dependent).
 - Every call writes an `LLMCall` row.
 - **Cache:** key = sha256(model + prompt_version + rendered prompt). Cache hits are marked `cached=True` and cost 0. Essential for backtests.
 
@@ -259,14 +268,18 @@ Third-party plugins are ordinary pip packages using the same entry-point group. 
 `config.toml`:
 
 ```toml
+[llm]
+provider = "litellm"                      # litellm | openrouter | litellm-proxy
+proxy_base_url = "http://localhost:4000"  # only used by litellm-proxy
+
 [llm.routing]
-extract  = "google/gemini-flash-1.5"          # cheap, fast: news → Event
-analyse  = "anthropic/claude-sonnet-4"        # strong reasoning: brief → Signal
-critique = "openai/gpt-4o"                    # different vendor: attack the thesis
-pm       = "anthropic/claude-opus-4"          # weekly portfolio review
+extract  = "gemini/gemini-flash-1.5"      # cheap, fast: news → Event
+analyse  = "anthropic/claude-sonnet-4"    # strong reasoning: brief → Signal
+critique = "openai/gpt-4o"                # different vendor: attack the thesis
+pm       = "anthropic/claude-opus-4"      # weekly portfolio review
 ```
 
-Model ids are opaque strings passed straight to OpenRouter. Change them freely; the scorecard tracks performance per model.
+Model ids are opaque strings. Change them freely; the scorecard tracks performance per model. Note that LiteLLM uses vendor prefixes (`anthropic/`, `openai/`, `gemini/`, `groq/`, …) while OpenRouter uses its own ids, so routing changes when switching provider.
 
 ### 7.3 Structured outputs (`llm/structured.py`)
 
@@ -311,7 +324,7 @@ Rules (all configurable):
 - `max_gross_exposure_pct` (default 100 %; no leverage).
 - `min_conviction` to trade (default 0.6).
 - Sizing: `fixed_fraction` = conviction-scaled fraction capped at `max_position_pct`; optional `kelly_capped`.
-- `daily_loss_halt_pct`: if equity falls more than this in a day, no new orders until manually reset (`fh paper resume`).
+- `daily_loss_halt_pct`: if equity falls more than this in a day, no new orders until manually reset (`rig paper resume`).
 
 ---
 
@@ -320,7 +333,7 @@ Rules (all configurable):
 ### `eval/scorecard.py`
 For each Signal older than its horizon: compute `horizon_return`, `hit` (return sign matches direction), `benchmark_return` (market index), `excess_return`. Aggregate by **strategy, model, prompt_version, market, sector, evidence source**:
 - Hit rate, mean excess return, Sharpe, max drawdown, calibration curve (conviction bucket vs actual hit rate).
-- `fh scorecard` prints a Rich table; `fh scorecard --json` for machines.
+- `rig scorecard` prints a Rich table; `rig scorecard --json` for machines.
 
 ### `eval/attribution.py`
 For each evidence source (plugin name + event kind), regress excess return on presence of that evidence. Report sources with positive, significant contribution and those with none, so useless sources can be disabled.
@@ -330,28 +343,28 @@ Replays the daily pipeline over `[from, to]` using only data with `ts <= day`. L
 
 ---
 
-## 11. CLI (`fh`)
+## 11. CLI (`rig`)
 
 ```
-fh plugins list [--type data|strategy|...]
-fh plugins enable <name> / disable <name>
+rig plugins list [--type data|strategy|...]
+rig plugins enable <name> / disable <name>
 
-fh ingest [--market us] [--tickers AAPL,MSFT] [--since 2024-01-01]
-fh analyse [--strategy llm_analyst] [--dry-run]
-fh execute                      # route pending signals through risk + broker
-fh report [--format markdown|html] [--date YYYY-MM-DD]
-fh run                          # ingest → analyse → execute → report in one go
+rig ingest [--market us] [--tickers AAPL,MSFT] [--since 2024-01-01]
+rig analyse [--strategy llm_analyst] [--dry-run]
+rig execute                      # route pending signals through risk + broker
+rig report [--format markdown|html] [--date YYYY-MM-DD]
+rig run                          # ingest → analyse → execute → report in one go
 
-fh paper status | positions | trades | reset | resume
-fh evaluate                     # score aged signals
-fh scorecard [--by strategy|model|source|prompt] [--json]
-fh backtest --from DATE [--to DATE] [--strategy ...] [--no-llm]
+rig paper status | positions | trades | reset | resume
+rig evaluate                     # score aged signals
+rig scorecard [--by strategy|model|source|prompt] [--json]
+rig backtest --from DATE [--to DATE] [--strategy ...] [--no-llm]
 
-fh llm costs [--since DATE]     # spend by task/model
-fh llm models                   # list OpenRouter models + prices
+rig llm costs [--since DATE]     # spend by task/model
+rig llm models                   # list OpenRouter models + prices
 
-fh daemon                       # run the scheduler in the foreground
-fh config show | validate
+rig daemon                       # run the scheduler in the foreground
+rig config show | validate
 ```
 
 ---
@@ -360,28 +373,35 @@ fh config show | validate
 
 `.env` (secrets, never committed):
 ```
-OPENROUTER_API_KEY=
+# litellm (default) reads provider keys from your environment
+# (OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY, ...)
+OPENROUTER_API_KEY=      # only for provider = "openrouter"
+LITELLM_PROXY_KEY=       # only for provider = "litellm-proxy"
 LIVE_TRADING=false
 ```
 
 `config.toml`:
 ```toml
 base_currency = "AUD"
-db_path = "data/harness.db"
+db_path = "data/rigger.db"
 reports_dir = "reports"
 
 [universe]
 us  = ["AAPL","MSFT","NVDA","GOOGL","AMZN"]
 asx = ["BHP","CBA","CSL","WES","FMG"]
 
+[llm]
+provider = "litellm"
+proxy_base_url = "http://localhost:4000"
+
 [llm.routing]
-extract = "google/gemini-flash-1.5"
+extract = "gemini/gemini-flash-1.5"
 analyse = "anthropic/claude-sonnet-4"
 critique = "openai/gpt-4o"
 pm = "anthropic/claude-opus-4"
 
 [llm.ensemble]
-models = ["anthropic/claude-sonnet-4","openai/gpt-4o","google/gemini-pro-1.5"]
+models = ["anthropic/claude-sonnet-4","openai/gpt-4o","gemini/gemini-pro-1.5"]
 
 [paper]
 starting_cash = 100000
@@ -418,7 +438,7 @@ feeds = ["https://feeds.reuters.com/reuters/businessNews"]
 - [ ] `llm/openrouter.py`, `llm/router.py`, `llm/structured.py`, `llm/prompts/analyst_v1.j2`
 - [ ] Plugins: `markets/us`, `data/yfinance`, `strategies/llm_analyst`, `brokers/paper`, `reports/markdown`
 - [ ] `cli.py`: `plugins list`, `ingest`, `analyse`, `execute`, `report`, `run`, `paper status`, `llm costs`
-- [ ] **Exit criterion:** `fh run` on 5 US tickers yields a markdown report with reasoned, evidence-linked signals and a paper portfolio with fills.
+- [ ] **Exit criterion:** `rig run` on 5 US tickers yields a markdown report with reasoned, evidence-linked signals and a paper portfolio with fills.
 
 ### Phase 2 — Information edge
 - [ ] `data/rss`, `data/asx_announcements`, `data/sec_edgar`, `markets/asx`
@@ -428,11 +448,11 @@ feeds = ["https://feeds.reuters.com/reuters/businessNews"]
 
 ### Phase 3 — Evaluation loop
 - [ ] `eval/scorecard.py`, `eval/attribution.py`, `eval/backtest.py`
-- [ ] `fh evaluate`, `fh scorecard`, `fh backtest`
+- [ ] `rig evaluate`, `rig scorecard`, `rig backtest`
 - [ ] Calibration report in the weekly briefing
 
 ### Phase 4 — Automation and hardening
-- [ ] `core/scheduler.py`, `fh daemon`, macOS `launchd` plist in `deploy/`
+- [ ] `core/scheduler.py`, `rig daemon`, macOS `launchd` plist in `deploy/`
 - [ ] `reports/html`, `reports/email`
 - [ ] Full risk rule set incl. daily loss halt and kill switch
 - [ ] Tests: pytest, `respx` for HTTP fixtures, `FakeLLM` returning canned JSON; CI via GitHub Actions
@@ -474,13 +494,13 @@ feeds = ["https://feeds.reuters.com/reuters/businessNews"]
 
 ## 16. Verification checklist
 
-- `fh plugins list` shows every built-in plugin.
-- `fh ingest --market us --tickers AAPL,MSFT,NVDA` populates `bar` and `newsitem` tables.
-- `fh analyse` creates `signal` rows with non-empty `evidence_ids`, `thesis`, `invalidation`.
-- `fh llm costs` shows non-zero spend and correct model ids.
-- `fh execute` then `fh paper status` shows positions, cash and P&L.
-- `fh report` writes `reports/YYYY-MM-DD.md`.
-- `fh backtest --from 2025-01-01 --no-llm` completes offline.
+- `rig plugins list` shows every built-in plugin.
+- `rig ingest --market us --tickers AAPL,MSFT,NVDA` populates `bar` and `newsitem` tables.
+- `rig analyse` creates `signal` rows with non-empty `evidence_ids`, `thesis`, `invalidation`.
+- `rig llm costs` shows non-zero spend and correct model ids.
+- `rig execute` then `rig paper status` shows positions, cash and P&L.
+- `rig report` writes `reports/YYYY-MM-DD.md`.
+- `rig backtest --from 2025-01-01 --no-llm` completes offline.
 - `pytest` passes with no network.
 
 ---
