@@ -81,7 +81,7 @@ class Targets(Screen):
             if row < 0:
                 self.notify("Select a target first", severity="error")
                 return
-            name = self.query_one("#target-table", DataTable).get_row(row)[0]
+            name = self.query_one("#target-table", DataTable).get_row_at(row)[0]
             services.remove_target(str(name))
             self.refresh_view()
             self.notify(f"Removed target {name}")

@@ -21,9 +21,13 @@ class HelpScreen(Screen):
                 "  1  Home\n"
                 "  2  Data & Costs\n"
                 "  3  Config\n"
+                "  4  Reports\n"
+                "  5  Theses\n"
+                "  6  Chat\n"
                 "  c  Command console\n"
                 "  w  Targets\n\n"
                 "Actions\n"
+                "  m  Change the model used here\n"
                 "  ?  Show this help\n"
                 "  q  Quit"
             )

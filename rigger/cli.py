@@ -18,11 +18,13 @@ app = typer.Typer(
 )
 console = Console()
 plugins_app = typer.Typer(help="Plugin management")
-target_app = typer.Typer(help="Watch target management")
+target_app = typer.Typer(help="Target management")
+thesis_app = typer.Typer(help="Thesis management")
 llm_app = typer.Typer(help="LLM cost/model inspection")
 config_app = typer.Typer(help="Configuration")
 app.add_typer(plugins_app, name="plugins")
 app.add_typer(target_app, name="target")
+app.add_typer(thesis_app, name="thesis")
 app.add_typer(llm_app, name="llm")
 app.add_typer(config_app, name="config")
 
@@ -175,6 +177,88 @@ def target_show(name: str) -> None:
         console.print(f"notes = {target.notes}")
     if target.name != target.id:
         console.print(f"label = {target.name}")
+
+
+@app.command()
+def report(
+    target: str,
+    since: Annotated[str | None, typer.Option("--since")] = None,
+) -> None:
+    """Generate an AI research report for a target."""
+    from rigger import reports as reports_mod
+
+    rig = Rigger()
+    rep = asyncio.run(reports_mod.build_report(rig, target, since=since))
+    path = reports_mod.write_report(rep, rig.cfg.reports_dir)
+    console.print(f"[green]Report written to {path}[/green]")
+
+
+@thesis_app.command("create")
+def thesis_create(
+    claim: str,
+    targets: Annotated[str | None, typer.Option("--targets")] = None,
+    time_horizon: Annotated[str, typer.Option("--time-horizon")] = "long",
+    scope: Annotated[str | None, typer.Option("--scope")] = None,
+) -> None:
+    """Create a thesis to research for and against."""
+    from rigger import theses as theses_mod
+
+    rig = Rigger()
+    thesis = theses_mod.create_thesis(
+        rig.engine,
+        claim,
+        scope=scope or "",
+        targets=tuple(t.strip() for t in (targets or "").split(",") if t.strip()),
+        time_horizon=time_horizon,
+    )
+    console.print(f"[green]Created thesis [bold]{thesis.id[:12]}[/bold].[/green]")
+
+
+@thesis_app.command("list")
+def thesis_list() -> None:
+    """List theses."""
+    from rigger import theses as theses_mod
+
+    rig = Rigger()
+    table = Table(title="Theses")
+    table.add_column("Id")
+    table.add_column("Claim")
+    table.add_column("Status")
+    table.add_column("Horizon")
+    for thesis in theses_mod.list_theses(rig.engine):
+        table.add_row(thesis.id[:12], thesis.claim[:60], thesis.status, thesis.time_horizon)
+    console.print(table)
+
+
+@thesis_app.command("show")
+def thesis_show(thesis_id: str) -> None:
+    """Show one thesis and its evidence balance."""
+    from rigger import theses as theses_mod
+
+    rig = Rigger()
+    thesis = theses_mod.get_thesis(rig.engine, thesis_id)
+    if thesis is None:
+        console.print(f"[red]Unknown thesis: {thesis_id}[/red]")
+        raise typer.Exit(1)
+    console.print(f"[bold]{thesis.claim}[/bold]")
+    console.print(f"status={thesis.status}  horizon={thesis.time_horizon}")
+    rows = theses_mod.evidence_for(rig.engine, thesis.id)
+    for side in ("support", "against", "neutral"):
+        n = sum(1 for r in rows if r.side == side)
+        console.print(f"{side}: {n}")
+
+
+@thesis_app.command("propose")
+def thesis_propose(
+    thesis_id: str,
+    since: Annotated[str | None, typer.Option("--since")] = None,
+) -> None:
+    """Ask the model to propose candidate evidence for a thesis."""
+    from rigger import theses as theses_mod
+
+    rig = Rigger()
+    candidates = asyncio.run(theses_mod.propose_evidence(rig, thesis_id, since=since))
+    console.print(f"[green]Proposed {len(candidates)} candidate evidence items.[/green]")
 
 
 @llm_app.command("costs")

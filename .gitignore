@@ -1,5 +1,6 @@
 .env
 /data/*.db
+/data/model_catalog.json
 /reports/
 __pycache__/
 .venv/
