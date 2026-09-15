@@ -1,8 +1,8 @@
 # Watchlists Plan — follow what you're interested in
 
-> Replaces `docs/AREAS_PLAN.md`, which was written for someone who already
-> thinks in venues and asset classes. Same working rules as Phase 2
-> (`docs/PHASE2_PLAN.md`). Composes with `docs/MODEL_SELECTION_PLAN.md`.
+> Deciding what to follow, aimed at a hobby investor rather than a desk. Same
+> working rules as Phase 2: no behaviour change without a test, `pytest` stays
+> offline. Composes with `docs/MODEL_SELECTION_PLAN.md`.
 
 ## Context
 
