@@ -27,12 +27,12 @@ class Home(RiggerScreen):
             yield StatTile("evidence rows", "0", id="tile-evidence")
             yield StatTile("latest bar (ymd)", "0", id="tile-bar")
             yield StatTile("spend (usd)", "0", id="tile-spend")
-        with Card("Setup"):
+        with Card(title="Setup"):
             yield Vertical(id="checks")
-        with Card("What you watch"):
+        with Card(title="What you watch"):
             yield RiggerTable(id="home-targets")
             yield Vertical(id="home-sparks")
-        with Card("Latest report", highlight=True):
+        with Card(title="Latest report", highlight=True):
             with Horizontal(classes="report-row"):
                 yield Static("none yet", id="home-report", markup=False)
                 yield Button("Open", id="home-report-open", variant="primary")

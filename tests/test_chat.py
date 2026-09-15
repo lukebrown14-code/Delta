@@ -15,7 +15,7 @@ from typing import Any
 import pytest
 from sqlmodel import Session, select
 from textual.app import App
-from textual.widgets import Checkbox, Input, SelectionList, Static
+from textual.widgets import Input, SelectionList, Switch
 
 from rigger.chat import ChatMessage, OfflineSearchTool, WebHit, chat
 from rigger.core.db import BarTable, EventTable, FundamentalTable, LLMCallTable, NewsItemTable
@@ -261,9 +261,12 @@ def test_chat_screen_round_trip(tmp_engine, monkeypatch, tmp_path):
             assert reply.source == "stored"
             assert reply.citations == ("bar:1",)
             assert screen.query_one("#chat-input", Input).value == ""
-            assert screen.query_one("#chat-web", Checkbox).value is False
-            transcript = str(screen.query_one("#chat-transcript", Static).content)
-            assert "[bold]You[/bold]: How did AAPL do?" in transcript
-            assert "[bold]Assistant (stored)[/bold]: AAPL closed at 100.00." in transcript
+            assert screen.query_one("#chat-web", Switch).value is False
+            await pilot.pause()
+            transcript = "\n".join(
+                str(widget.render()) for widget in screen.query("#chat-scroll Static")
+            )
+            assert "How did AAPL do?" in transcript
+            assert "AAPL closed at 100.00." in transcript
 
     asyncio.run(run())

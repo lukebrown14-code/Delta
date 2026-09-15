@@ -5,36 +5,55 @@ from __future__ import annotations
 from typing import Any
 
 from textual.app import ComposeResult
-from textual.containers import VerticalScroll
-from textual.widgets import Checkbox, Input, SelectionList, Static
+from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.widgets import Input, SelectionList, Static, Switch
 
 from rigger import services
 from rigger.chat import ChatMessage, chat
 from rigger.core.ids import make_instrument_id
 from rigger.targets import WatchTarget
 from rigger.tui.shell import RiggerScreen
+from rigger.tui.widgets import Card, Pill
 
 
 class Chat(RiggerScreen):
     """Standalone chat surface: pick targets, ask, watch the cited answer arrive."""
 
     name = "chat"
+    AUTO_FOCUS = "#chat-input"
 
     CSS = """
-    #chat-targets {
-        height: auto;
-        max-height: 8;
-        margin: 0 2;
+    #chat-split {
+        height: 1fr;
     }
-    #chat-web {
-        margin: 0 2;
+    #chat-side {
+        width: 36;
+        height: 1fr;
+    }
+    #chat-targets {
+        height: 1fr;
+    }
+    #chat-web-row {
+        height: auto;
+        margin-top: 1;
+    }
+    #chat-main {
+        width: 1fr;
+        height: 1fr;
     }
     #chat-scroll {
         height: 1fr;
-        margin: 0 2;
     }
     #chat-input {
-        margin: 1 2;
+        margin: 1 0 0 0;
+    }
+    Card.msg-user {
+        border: round $panel;
+        color: $text-muted;
+    }
+    Card.msg-assistant {
+        border: round $panel;
+        border-left: thick $primary;
     }
     """
 
@@ -43,10 +62,19 @@ class Chat(RiggerScreen):
         self.history: list[ChatMessage] = []
 
     def compose_content(self) -> ComposeResult:
-        yield SelectionList(id="chat-targets")
-        yield Checkbox("Allow web search (labelled Web, never stored)", id="chat-web")
-        yield VerticalScroll(Static(id="chat-transcript"), id="chat-scroll")
-        yield Input(placeholder="Ask about the selected targets...", id="chat-input")
+        with Horizontal(id="chat-split"):
+            with Card(title="Targets", id="chat-side"):
+                yield SelectionList(id="chat-targets")
+                with Horizontal(id="chat-web-row"):
+                    yield Static("allow web search", markup=False, classes="muted")
+                    yield Switch(id="chat-web")
+            with Vertical(id="chat-main"):
+                yield Card(
+                    VerticalScroll(id="chat-scroll"),
+                    title="Chat",
+                    id="chat-body",
+                )
+                yield Input(placeholder="Ask about the selected targets...", id="chat-input")
 
     def on_mount(self) -> None:
         selections = self.query_one("#chat-targets", SelectionList)
@@ -54,7 +82,7 @@ class Chat(RiggerScreen):
             selections.add_option((f"{target.id} ({target.kind})", target.id, False))
         self._render_transcript()
 
-    def on_input_submitted(self, event: Input.Submitted) -> None:
+    async def on_input_submitted(self, event: Input.Submitted) -> None:
         if event.input.id != "chat-input":
             return
         text = event.value.strip()
@@ -62,7 +90,7 @@ class Chat(RiggerScreen):
             return
         event.input.value = ""
         self.history.append(ChatMessage(role="user", text=text, source="user"))
-        self._render_transcript()
+        await self._render_transcript()
         self.run_worker(self._answer(), exclusive=True)
 
     async def _answer(self) -> None:
@@ -71,13 +99,13 @@ class Chat(RiggerScreen):
                 self.rig,
                 self.history,
                 targets=self._selected_targets(),
-                allow_web=self.query_one("#chat-web", Checkbox).value,
+                allow_web=self.query_one("#chat-web", Switch).value,
             )
         except Exception as exc:
             self.notify(f"chat failed: {exc}", severity="error")
             return
         self.history.append(reply)
-        self._render_transcript()
+        await self._render_transcript()
 
     def _selected_targets(self) -> list[str]:
         """Expand the selected watch targets into evidence target ids (market:symbol)."""
@@ -90,13 +118,22 @@ class Chat(RiggerScreen):
                     ids.extend(make_instrument_id(market.upper(), t) for t in target.tickers)
         return list(dict.fromkeys(ids))
 
-    def _render_transcript(self) -> None:
-        lines = []
+    async def _render_transcript(self) -> None:
+        scroll = self.query_one("#chat-scroll", VerticalScroll)
+        await scroll.remove_children()
+        if not self.history:
+            await scroll.mount(
+                Static("No messages yet: pick targets and ask below.", classes="diagram")
+            )
+            return
         for message in self.history:
-            who = "You" if message.role == "user" else f"Assistant ({message.source})"
-            line = f"[bold]{who}[/bold]: {message.text}"
+            user = message.role == "user"
+            title = "You" if user else f"Assistant ({message.source})"
+            body: list[Any] = [Static(message.text, markup=False)]
             if message.citations:
-                line += f"\n  citations: {', '.join(message.citations)}"
-            lines.append(line)
-        text = "\n\n".join(lines) if lines else "No messages yet: pick targets and ask below."
-        self.query_one("#chat-transcript", Static).update(text)
+                pills = [Pill(f"[{n + 1}]", variant="dim") for n in range(len(message.citations))]
+                body.append(Horizontal(*pills, classes="check-row"))
+            await scroll.mount(
+                Card(*body, title=title, classes="msg-user" if user else "msg-assistant")
+            )
+        scroll.scroll_end(animate=False)

@@ -19,16 +19,16 @@ class Config(RiggerScreen):
         super().__init__(rig)
 
     def compose_content(self) -> ComposeResult:
-        with Card("Provider"):
+        with Card(title="Provider"):
             with Horizontal(classes="check-row"):
                 yield Static("llm provider:", markup=False, classes="muted")
                 yield Pill("none", id="cfg-provider")
-        with Card("Model routing"):
+        with Card(title="Model routing"):
             yield RiggerTable(id="cfg-routing")
             yield Static("no routes set — press m to pick models", id="cfg-routing-empty", markup=False, classes="empty-hint")
-        with Card("Plugins"):
+        with Card(title="Plugins"):
             yield Vertical(id="cfg-plugins")
-        with Card("Targets"):
+        with Card(title="Targets"):
             yield RiggerTable(id="cfg-targets")
             yield Static(
                 "no targets configured — press w to add one",

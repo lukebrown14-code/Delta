@@ -1,4 +1,4 @@
-"""Optional theses panel: create a claim, review candidates, accept or reject them.
+"""Theses panel: create a claim, review candidates, accept or reject them.
 
 Standalone by design: layout comes from ``DEFAULT_CSS`` (RiggerScreen ships
 its own shell styles, no ``app.py`` stylesheet needed) and only
@@ -9,79 +9,101 @@ Rigger-like object.
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Any
 
 from textual.app import ComposeResult
-from textual.containers import Horizontal, VerticalScroll
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.widget import Widget
-from textual.widgets import Button, DataTable, Input, Static
+from textual.widgets import Button, Collapsible, Input, Static
 
 from rigger import theses, thesis_summary
 from rigger.evidence import EvidenceItem, cite, evidence_by_ids
-from rigger.thesis_health import badge_text, compute_health, state_style
+from rigger.thesis_health import badge_text, compute_health
 from rigger.tui.shell import RiggerScreen
+from rigger.tui.widgets import Pill, RiggerTable, health_variant
 
 
 class Theses(RiggerScreen):
     name = "theses"
 
     DEFAULT_CSS = """
+    #thesis-split {
+        height: 1fr;
+    }
+    #thesis-left {
+        width: 34;
+        height: 1fr;
+    }
     #thesis-table {
         height: 1fr;
-        margin: 1 2;
     }
-    #th-claim, #th-targets, #th-horizon {
+    #thesis-form {
+        height: auto;
+    }
+    #thesis-form Input {
         width: 1fr;
-        margin: 1;
-    }
-    #thesis-detail-title {
-        padding: 1 2 0 2;
+        margin: 0 1 1 0;
     }
     #thesis-detail {
-        height: auto;
-        margin: 0 2 1 2;
+        width: 1fr;
+        height: 1fr;
+        margin: 0 0 0 1;
     }
-    #thesis-detail Horizontal {
-        height: auto;
+    .thesis-claim {
+        text-style: bold;
+        margin: 0 0 1 0;
     }
-    #thesis-detail Static {
+    .thesis-meta {
+        height: auto;
+        margin: 0 0 1 0;
+    }
+    .thesis-line {
+        height: auto;
+        margin: 0 0 1 0;
+    }
+    .thesis-line Static {
         width: 1fr;
     }
+    .thesis-line Button {
+        margin: 0 0 0 1;
+    }
+    .side-support { color: $success; }
+    .side-against { color: $error; }
+    .side-neutral { color: $warning; }
     """
 
-    def __init__(self, rig) -> None:
+    def __init__(self, rig: Any) -> None:
         super().__init__(rig)
         self.selected: str | None = None
         self.candidates: list[theses.ThesisEvidence] = []
         self._summary: thesis_summary.ThesisSummary | None = None
 
     def compose_content(self) -> ComposeResult:
-        yield VerticalScroll(
-            DataTable(id="thesis-table"),
-            Horizontal(
-                Input(placeholder="claim", id="th-claim"),
-                Input(placeholder="targets (US:AAPL,US:MSFT)", id="th-targets"),
-                Input(placeholder="time horizon (e.g. 10y)", id="th-horizon"),
-                Button("Add", id="th-add"),
-                Button("Summarise", id="th-summarise"),
-            ),
-            Static(id="thesis-detail-title"),
-            VerticalScroll(id="thesis-detail"),
-        )
+        with Horizontal(id="thesis-split"):
+            with Vertical(id="thesis-left"):
+                yield RiggerTable(id="thesis-table")
+                with Horizontal(id="thesis-form"):
+                    yield Input(placeholder="claim", id="th-claim")
+                    yield Input(placeholder="targets (US:AAPL,US:MSFT)", id="th-targets")
+                    yield Input(placeholder="time horizon (e.g. 10y)", id="th-horizon")
+                    yield Button("Add", id="th-add", variant="primary")
+                    yield Button("Summarise", id="th-summarise")
+            with VerticalScroll(id="thesis-detail"):
+                yield Static("Select a thesis to see its evidence.", classes="diagram")
 
     async def on_mount(self) -> None:
-        table = self.query_one("#thesis-table", DataTable)
-        table.cursor_type = "row"
+        table = self.query_one("#thesis-table", RiggerTable)
         table.add_columns("Claim", "Status")
         self.refresh_list()
         await self.render_detail()
 
     def refresh_list(self) -> None:
-        table = self.query_one("#thesis-table", DataTable)
+        table = self.query_one("#thesis-table", RiggerTable)
         table.clear()
         for thesis in theses.list_theses(self.rig.engine):
             table.add_row(thesis.claim, thesis.status, key=thesis.id)
 
-    async def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+    async def on_data_table_row_selected(self, event: RiggerTable.RowSelected) -> None:
         if event.row_key.value is not None:
             self.selected = event.row_key.value
             self._summary = None
@@ -145,26 +167,17 @@ class Theses(RiggerScreen):
 
     async def render_detail(self) -> None:
         """Rebuild the detail pane for the selected thesis, or the empty prompt."""
-        title = self.query_one("#thesis-detail-title", Static)
         detail = self.query_one("#thesis-detail", VerticalScroll)
         await detail.remove_children()
         self.candidates = []
         if self.selected is None:
-            title.update("")
             await detail.mount(Static("Select a thesis to see its evidence.", classes="diagram"))
             return
         try:
             thesis = theses.get_thesis(self.rig.engine, self.selected)
         except KeyError:
             self.selected = None
-            title.update("")
             return
-        headline = f"[bold]{thesis.claim}[/bold] — {thesis.status}"
-        if thesis.time_horizon:
-            headline += f" ({thesis.time_horizon})"
-        if thesis.scope:
-            headline += f"\nscope: {thesis.scope}"
-        title.update(headline)
 
         groups: dict[str, list[theses.ThesisEvidence]] = {
             "support": [],
@@ -184,54 +197,76 @@ class Theses(RiggerScreen):
         cites = {item.id: cite(item) for item in items}
         by_id = {item.id: item for item in items}
 
-        widgets: list[Widget] = [self._health_badge(thesis, groups, by_id)]
-        widgets.append(Static("[bold]Summary[/bold]"))
-        if self._summary is None:
-            widgets.append(Static("press Summarise to generate", classes="diagram"))
-        else:
-            widgets.append(Static(self._summary.summary, markup=False))
-            if self._summary.strongest_support:
-                widgets.append(Static(f"support: {self._summary.strongest_support}", markup=False))
-            if self._summary.strongest_counter:
-                widgets.append(Static(f"counter: {self._summary.strongest_counter}", markup=False))
-            for unknown in self._summary.unknowns:
-                widgets.append(Static(f"unknown: {unknown}", markup=False))
+        widgets: list[Widget] = [Static(thesis.claim, classes="thesis-claim", markup=False)]
+        meta: list[Widget] = [Pill(thesis.status)]
+        if thesis.time_horizon:
+            meta.append(Pill(thesis.time_horizon, variant="dim"))
+        meta.append(self._health_pill(thesis, groups, by_id))
+        widgets.append(Horizontal(*meta, classes="thesis-meta"))
+        if thesis.scope:
+            widgets.append(Static(f"scope: {thesis.scope}", markup=False, classes="muted"))
+
+        widgets.extend(self._summary_widgets())
+        if self.candidates:
+            widgets.append(Static("Candidates", classes="thesis-claim"))
+            for index, row in enumerate(self.candidates):
+                widgets.append(
+                    Horizontal(
+                        self._line_widget(row, cites, "neutral"),
+                        Button("Accept", id=f"th-accept-{index}", variant="success"),
+                        Button("Reject", id=f"th-reject-{index}", variant="error"),
+                        classes="thesis-line",
+                    )
+                )
         for heading, side in (
             ("Supporting", "support"),
             ("Against", "against"),
             ("Unknown", "neutral"),
         ):
-            widgets.append(Static(f"[bold]{heading}[/bold]"))
             accepted_rows = groups[side]
-            if accepted_rows:
-                widgets.extend(Static(f"  {self._line(row, cites)}") for row in accepted_rows)
-            else:
-                widgets.append(Static("  none", classes="diagram"))
-        widgets.append(Static("[bold]Candidates[/bold]"))
-        if self.candidates:
-            for index, row in enumerate(self.candidates):
-                widgets.append(
-                    Horizontal(
-                        Static(f"  {self._line(row, cites)}"),
-                        Button("Accept", id=f"th-accept-{index}"),
-                        Button("Reject", id=f"th-reject-{index}"),
-                    )
+            widgets.append(
+                Collapsible(
+                    *(self._line_widget(row, cites, side) for row in accepted_rows)
+                    or (Static("none yet", markup=False, classes="muted"),),
+                    title=f"{heading} ({len(accepted_rows)})",
+                    collapsed=False,
+                    classes=f"side-{side}",
                 )
-        else:
-            widgets.append(Static("  none", classes="diagram"))
+            )
         await detail.mount(*widgets)
 
-    @staticmethod
-    def _line(row: theses.ThesisEvidence, cites: dict[str, str]) -> str:
-        citation = cites.get(row.evidence_id, row.evidence_id)
-        return f"[{row.side}] {row.note} — {citation}"
+    def _summary_widgets(self) -> list[Widget]:
+        if self._summary is None:
+            return [Static("press Summarise to generate", classes="diagram")]
+        widgets = [
+            Static("Summary", classes="thesis-claim"),
+            Static(self._summary.summary, markup=False),
+        ]
+        if self._summary.strongest_support:
+            widgets.append(
+                Static(f"support: {self._summary.strongest_support}", markup=False, classes="muted")
+            )
+        if self._summary.strongest_counter:
+            widgets.append(
+                Static(f"counter: {self._summary.strongest_counter}", markup=False, classes="muted")
+            )
+        for unknown in self._summary.unknowns:
+            widgets.append(Static(f"unknown: {unknown}", markup=False, classes="muted"))
+        return widgets
 
-    def _health_badge(
+    @staticmethod
+    def _line_widget(
+        row: theses.ThesisEvidence, cites: dict[str, str], side: str
+    ) -> Static:
+        citation = cites.get(row.evidence_id, row.evidence_id)
+        return Static(f"{row.note} — {citation}", markup=False, classes=f"side-{side}")
+
+    def _health_pill(
         self,
         thesis: theses.Thesis,
         groups: dict[str, list[theses.ThesisEvidence]],
         by_id: dict[str, EvidenceItem],
-    ) -> Static:
+    ) -> Pill:
         linked = [
             (by_id[row.evidence_id], row.side)
             for rows in groups.values()
@@ -239,9 +274,8 @@ class Theses(RiggerScreen):
             if row.evidence_id in by_id
         ]
         if not linked:
-            return Static("[cyan]emerging · no accepted evidence[/cyan]", id="thesis-health")
+            return Pill("emerging · no accepted evidence", variant="dim", id="thesis-health")
         result = compute_health(thesis, linked, now=datetime.now(UTC))
-        return Static(
-            f"[{state_style(result.state)}]{badge_text(result)}[/]",
-            id="thesis-health",
+        return Pill(
+            badge_text(result), variant=health_variant(result.state), id="thesis-health"
         )

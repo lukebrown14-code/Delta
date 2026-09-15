@@ -38,8 +38,8 @@ class Card(Vertical):
 
     def __init__(
         self,
-        title: str,
         *children,
+        title: str = "",
         id: str | None = None,
         classes: str = "",
         highlight: bool = False,
@@ -95,7 +95,7 @@ class Pill(Static):
         classes: str = "",
     ) -> None:
         variant_class = f"-{variant}" if variant else ""
-        super().__init__(text, id=id, classes=f"{classes} {variant_class}".strip())
+        super().__init__(text, id=id, classes=f"{classes} {variant_class}".strip(), markup=False)
         self._variant = variant
 
     def set_variant(self, variant: str | None) -> None:

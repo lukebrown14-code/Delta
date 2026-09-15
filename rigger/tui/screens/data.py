@@ -20,10 +20,10 @@ class Data(RiggerScreen):
         super().__init__(rig)
 
     def compose_content(self) -> ComposeResult:
-        with Card("Stored evidence"):
+        with Card(title="Stored evidence"):
             yield RiggerTable(id="health-table")
             yield Static(id="health-latest", markup=False, classes="muted")
-        with Card("Model spend"):
+        with Card(title="Model spend"):
             yield RiggerTable(id="costs-table")
 
     def on_mount(self) -> None:
