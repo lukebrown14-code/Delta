@@ -11,7 +11,7 @@ Screen {
     color: $text-muted;
 }
 
-#checks, #watchlists, #health, #costs, #config {
+#checks, #targets, #health, #costs, #config {
     padding: 1 2;
 }
 
@@ -24,12 +24,12 @@ Screen {
     margin: 0 2;
 }
 
-#watchlist-table {
+#target-table {
     height: 1fr;
     margin: 1 2;
 }
 
-#wl-name, #wl-market, #wl-tickers {
+#tg-name, #tg-kind, #tg-market, #tg-tickers, #tg-tags {
     width: 1fr;
     margin: 1;
 }

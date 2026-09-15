@@ -22,7 +22,7 @@ class HelpScreen(Screen):
                 "  2  Data & Costs\n"
                 "  3  Config\n"
                 "  c  Command console\n"
-                "  w  Watchlists\n\n"
+                "  w  Targets\n\n"
                 "Actions\n"
                 "  ?  Show this help\n"
                 "  q  Quit"

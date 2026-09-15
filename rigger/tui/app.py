@@ -14,7 +14,7 @@ from rigger.tui.screens.console import Console
 from rigger.tui.screens.data import Data
 from rigger.tui.screens.help import HelpScreen
 from rigger.tui.screens.home import Home
-from rigger.tui.screens.watchlists import Watchlists
+from rigger.tui.screens.targets import Targets
 
 
 class RiggerApp(App):
@@ -25,7 +25,7 @@ class RiggerApp(App):
         Binding("2", "switch_screen('data')", "Data"),
         Binding("3", "switch_screen('config')", "Config"),
         Binding("c", "switch_screen('console')", "Console"),
-        Binding("w", "switch_screen('watchlists')", "Watchlists"),
+        Binding("w", "switch_screen('targets')", "Targets"),
         Binding("question_mark", "show_help", "Help"),
         Binding("q", "quit", "Quit"),
     ]
@@ -43,7 +43,7 @@ class RiggerApp(App):
             "data": Data(self.rig),
             "config": Config(self.rig),
             "console": Console(self.rig),
-            "watchlists": Watchlists(self.rig),
+            "targets": Targets(self.rig),
         }
         for screen in self._screens.values():
             self.install_screen(screen, screen.name)

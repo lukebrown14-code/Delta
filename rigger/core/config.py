@@ -9,6 +9,8 @@ from typing import Any
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from rigger.targets import DEFAULT_KIND, LEGACY_KIND
+
 CONFIG_PATH = Path("config.toml")
 ENV_PATH = Path(".env")
 
@@ -30,7 +32,7 @@ class AppConfig(BaseModel):
     reports_dir: str = "reports"
 
     universe: dict[str, list[str]] = Field(default_factory=dict)
-    watchlists: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    targets: dict[str, dict[str, Any]] = Field(default_factory=dict)
     llm_provider: str = "litellm"
     llm_proxy_base_url: str = "http://localhost:4000"
     llm_routing: dict[str, str] = Field(default_factory=dict)
@@ -44,6 +46,26 @@ def load_toml(path: Path = CONFIG_PATH) -> dict[str, Any]:
         return tomllib.load(f)
 
 
+def _target_tables(raw: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Merge [targets] and legacy [watchlists] tables, then the [universe] shim.
+
+    Each spec carries an explicit kind: ``company`` for bare [targets] tables,
+    the legacy ``tickers`` kind for [watchlists] tables and universe shim
+    entries. [targets] wins on name collisions; user entries beat shim names.
+    """
+    targets: dict[str, dict[str, Any]] = {}
+    for name, spec in raw.get("targets", {}).items():
+        targets[str(name)] = {"kind": DEFAULT_KIND, **dict(spec)}
+    for name, spec in raw.get("watchlists", {}).items():
+        targets.setdefault(str(name), {"kind": LEGACY_KIND, **dict(spec)})
+    for market, tickers in raw.get("universe", {}).items():
+        targets.setdefault(
+            f"universe_{market}",
+            {"kind": LEGACY_KIND, "market": market, "tickers": list(tickers), "legacy": True},
+        )
+    return targets
+
+
 def build_config(raw: dict[str, Any] | None = None) -> AppConfig:
     raw = raw if raw is not None else load_toml()
     cfg = AppConfig()
@@ -53,12 +75,7 @@ def build_config(raw: dict[str, Any] | None = None) -> AppConfig:
     cfg.reports_dir = raw.get("reports_dir", cfg.reports_dir)
 
     cfg.universe = raw.get("universe", {})
-    cfg.watchlists = {name: dict(values) for name, values in raw.get("watchlists", {}).items()}
-    for market, tickers in cfg.universe.items():
-        cfg.watchlists.setdefault(
-            f"universe_{market}",
-            {"kind": "tickers", "market": market, "tickers": list(tickers), "legacy": True},
-        )
+    cfg.targets = _target_tables(raw)
 
     llm = raw.get("llm", {})
     cfg.llm_provider = llm.get("provider", cfg.llm_provider)

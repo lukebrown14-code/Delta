@@ -18,11 +18,11 @@ app = typer.Typer(
 )
 console = Console()
 plugins_app = typer.Typer(help="Plugin management")
-watchlist_app = typer.Typer(help="Watchlist management")
+target_app = typer.Typer(help="Watch target management")
 llm_app = typer.Typer(help="LLM cost/model inspection")
 config_app = typer.Typer(help="Configuration")
 app.add_typer(plugins_app, name="plugins")
-app.add_typer(watchlist_app, name="watchlist")
+app.add_typer(target_app, name="target")
 app.add_typer(llm_app, name="llm")
 app.add_typer(config_app, name="config")
 
@@ -99,67 +99,82 @@ def extract(since: Annotated[str | None, typer.Option("--since")] = None) -> Non
     asyncio.run(services.extract(rig, since=since, log=console.print))
 
 
-@watchlist_app.command("add")
-def watchlist_add(
+@target_app.command("add")
+def target_add(
     name: str,
     market: Annotated[str, typer.Option("--market")],
-    tickers: Annotated[str, typer.Option("--tickers")],
-    max_pct: Annotated[float | None, typer.Option("--max-pct")] = None,
+    kind: Annotated[str, typer.Option("--kind")] = "company",
+    tickers: Annotated[str | None, typer.Option("--tickers")] = None,
+    tags: Annotated[str | None, typer.Option("--tags")] = None,
+    notes: Annotated[str | None, typer.Option("--notes")] = None,
+    label: Annotated[str | None, typer.Option("--label")] = None,
 ) -> None:
-    """Create a watchlist of tickers."""
+    """Add a watch target (company, sector, industry, market, or theme)."""
     try:
-        services.add_watchlist(name, market=market, tickers=tickers.split(","), max_pct=max_pct)
+        services.add_target(
+            name,
+            kind=kind,
+            market=market,
+            tickers=[t.strip() for t in (tickers or "").split(",") if t.strip()],
+            tags=[t.strip() for t in (tags or "").split(",") if t.strip()],
+            notes=notes or "",
+            label=label,
+        )
     except (ValueError, KeyError) as exc:
         console.print(f"[red]{exc.args[0]}[/red]")
         raise typer.Exit(1) from exc
-    console.print(f"[green]Added watchlist [bold]{name}[/bold].[/green]")
+    console.print(f"[green]Added target [bold]{name}[/bold] ({kind}).[/green]")
 
 
-@watchlist_app.command("remove")
-def watchlist_remove(name: str) -> None:
-    """Delete a watchlist."""
+@target_app.command("remove")
+def target_remove(name: str) -> None:
+    """Delete a watch target."""
     try:
-        services.remove_watchlist(name)
+        services.remove_target(name)
     except KeyError as exc:
         console.print(f"[red]{exc.args[0]}[/red]")
         raise typer.Exit(1) from exc
-    console.print(f"[green]Removed watchlist [bold]{name}[/bold].[/green]")
+    console.print(f"[green]Removed target [bold]{name}[/bold].[/green]")
 
 
-@watchlist_app.command("list")
-def watchlist_list() -> None:
-    """List watchlists."""
-    table = Table(title="Watchlists")
+@target_app.command("list")
+def target_list() -> None:
+    """List watch targets."""
+    table = Table(title="Targets")
     table.add_column("Name")
+    table.add_column("Kind")
     table.add_column("Market")
-    table.add_column("Holdings")
-    table.add_column("Max")
-    for name, spec in sorted(services.watchlist_specs().items()):
-        if spec.get("kind", "tickers") != "tickers":
-            continue
-        max_pct = spec.get("max_pct")
+    table.add_column("Tickers")
+    table.add_column("Tags")
+    for target in sorted(services.target_specs().values(), key=lambda t: t.id):
         table.add_row(
-            name,
-            spec.get("market", ""),
-            str(len(spec.get("tickers", []))),
-            f"{max_pct:.0f}%" if max_pct is not None else "",
+            target.id,
+            target.kind,
+            ",".join(target.markets),
+            ",".join(target.tickers),
+            ",".join(sorted(target.tags)),
         )
     console.print(table)
 
 
-@watchlist_app.command("show")
-def watchlist_show(name: str) -> None:
-    """Show one watchlist's holdings."""
-    specs = services.watchlist_specs()
-    if name not in specs or specs[name].get("kind", "tickers") != "tickers":
-        console.print(f"[red]Unknown watchlist: {name}[/red]")
+@target_app.command("show")
+def target_show(name: str) -> None:
+    """Show one watch target."""
+    target = services.target_specs().get(name)
+    if target is None:
+        console.print(f"[red]Unknown target: {name}[/red]")
         raise typer.Exit(1)
-    spec = specs[name]
     console.print(
-        f"[bold]{name}[/bold]  market={spec['market']}  tickers={', '.join(spec['tickers'])}"
+        f"[bold]{target.id}[/bold]  kind={target.kind}  market={','.join(target.markets)}"
     )
-    if spec.get("max_pct") is not None:
-        console.print(f"max_pct = {spec['max_pct']}")
+    if target.tickers:
+        console.print(f"tickers = {', '.join(target.tickers)}")
+    if target.tags:
+        console.print(f"tags = {', '.join(sorted(target.tags))}")
+    if target.notes:
+        console.print(f"notes = {target.notes}")
+    if target.name != target.id:
+        console.print(f"label = {target.name}")
 
 
 @llm_app.command("costs")

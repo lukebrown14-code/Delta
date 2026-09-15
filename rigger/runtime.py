@@ -8,13 +8,30 @@ from rigger.core.models import Instrument
 from rigger.core.plugin import (
     Context,
     MarketPlugin,
-    WatchlistPlugin,
+    TargetPlugin,
     apply_config,
     discover_plugins,
-    discover_watchlists,
+    discover_targets,
 )
 from rigger.llm.client import build_client
-from rigger.plugins.watchlists.tickers import TickerWatchlist
+from rigger.plugins.targets.tickers import (
+    CompanyTarget,
+    IndustryTarget,
+    LegacyTickersTarget,
+    MarketTarget,
+    SectorTarget,
+    ThemeTarget,
+)
+from rigger.targets import LEGACY_KIND
+
+_BUILTIN_KINDS: tuple[type[TargetPlugin], ...] = (
+    CompanyTarget,
+    SectorTarget,
+    IndustryTarget,
+    ThemeTarget,
+    MarketTarget,
+    LegacyTickersTarget,
+)
 
 
 class Rigger:
@@ -32,7 +49,7 @@ class Rigger:
                 table["tickers"] = list(tickers)
                 market_plugin.configure(table)
 
-        self.watchlists = self._build_watchlists()
+        self.targets = self._build_targets()
 
         self.llm = build_client(
             provider=self.cfg.llm_provider,
@@ -50,8 +67,8 @@ class Rigger:
             if plugin.enabled and isinstance(plugin, MarketPlugin)
             for inst in plugin.universe()
         }
-        for watchlist in self.watchlists.values():
-            for instrument in watchlist.instruments():
+        for target in self.targets.values():
+            for instrument in target.instruments():
                 default = market_defaults.get(instrument.id)
                 if default is not None:
                     instrument = instrument.model_copy(
@@ -81,32 +98,31 @@ class Rigger:
                 )
         return list(merged.values())
 
-    def _build_watchlists(self) -> dict[str, WatchlistPlugin]:
-        kinds = discover_watchlists()
-        if "tickers" not in kinds:
-            kinds["tickers"] = TickerWatchlist
+    def _build_targets(self) -> dict[str, TargetPlugin]:
+        kinds = discover_targets()
+        for cls in _BUILTIN_KINDS:
+            kinds.setdefault(cls.kind, cls)
 
-        watchlists: dict[str, WatchlistPlugin] = {}
-        for name, spec in self.cfg.watchlists.items():
-            kind_name = spec.get("kind", "tickers")
-            cls = kinds.get(kind_name)
-            if cls is None:
+        targets: dict[str, TargetPlugin] = {}
+        for name, spec in self.cfg.targets.items():
+            kind_name = spec.get("kind", LEGACY_KIND)
+            kind_cls = kinds.get(kind_name)
+            if kind_cls is None:
                 available = ", ".join(sorted(kinds))
                 raise KeyError(
-                    f"watchlist {name!r} names unknown kind {kind_name!r}; "
-                    f"known kinds are {available}"
+                    f"target {name!r} names unknown kind {kind_name!r}; known kinds are {available}"
                 )
-            instance = cls()
+            instance = kind_cls()
             instance.configure({"name": name, "label": spec.get("label", name), **spec})
-            market = getattr(instance, "market", "")
-            if kind_name == "tickers" and market not in self.known_markets():
+            market = getattr(instance, "market", None)
+            if market is not None and market not in self.known_markets():
                 known = ", ".join(self.known_markets()) or "none"
                 raise KeyError(
-                    f"watchlist {name!r} names market {market!r}; known markets are {known}"
+                    f"target {name!r} names market {market!r}; known markets are {known}"
                 )
-            watchlists[name] = instance
+            targets[name] = instance
 
-        return watchlists
+        return targets
 
     def known_markets(self) -> list[str]:
         return sorted(

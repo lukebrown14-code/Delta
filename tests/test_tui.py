@@ -27,7 +27,7 @@ class FakeRig:
             llm_routing={},
             plugins={"sec_edgar": {}},
             universe={},
-            watchlists={},
+            targets={},
         )
         self.plugins = {"sec_edgar": SimpleNamespace(enabled=True)}
 
@@ -66,7 +66,7 @@ def test_app_mounts_and_navigates(rig):
     asyncio.run(run())
 
 
-def test_watchlist_panel_adds_watchlist(rig, monkeypatch, tmp_path):
+def test_targets_panel_adds_target(rig, monkeypatch, tmp_path):
     import tomli_w
 
     monkeypatch.chdir(tmp_path)
@@ -78,21 +78,22 @@ def test_watchlist_panel_adds_watchlist(rig, monkeypatch, tmp_path):
         app = RiggerApp(rig)
         async with app.run_test() as pilot:
             await pilot.press("w")
-            assert app.screen.name == "watchlists"
-            app.screen.query_one("#wl-name").value = "mining"
-            app.screen.query_one("#wl-market").value = "asx"
-            app.screen.query_one("#wl-tickers").value = "BHP,RIO"
-            await pilot.click("#wl-add")
-            assert "mining" in services.watchlist_specs()
-            assert app.screen.query_one("#watchlist-table").row_count == 1
+            assert app.screen.name == "targets"
+            app.screen.query_one("#tg-name").value = "mining"
+            app.screen.query_one("#tg-kind").value = "industry"
+            app.screen.query_one("#tg-market").value = "asx"
+            app.screen.query_one("#tg-tickers").value = "BHP,RIO"
+            await pilot.click("#tg-add")
+            assert "mining" in services.target_specs()
+            assert app.screen.query_one("#target-table").row_count == 1
 
     asyncio.run(run())
 
 
-def test_console_watchlist_list(rig, monkeypatch, tmp_path):
+def test_console_target_list(rig, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     (tmp_path / "config.toml").write_text(
-        '[watchlists.mining]\nkind = "tickers"\nmarket = "asx"\ntickers = ["BHP"]\n',
+        '[targets.mining]\nkind = "industry"\nmarket = "asx"\ntickers = ["BHP"]\n',
         encoding="utf-8",
     )
 
@@ -101,9 +102,33 @@ def test_console_watchlist_list(rig, monkeypatch, tmp_path):
         async with app.run_test() as pilot:
             await pilot.press("c")
             assert app.screen.name == "console"
-            app.screen.query_one("#console-input").value = "watchlist list"
+            app.screen.query_one("#console-input").value = "target list"
             await pilot.press("enter")
             assert any("mining" in line.text for line in app.screen.query_one("#console-log").lines)
+
+    asyncio.run(run())
+
+
+def test_console_target_add(rig, monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "config.toml").write_text("", encoding="utf-8")
+
+    async def run():
+        app = RiggerApp(rig)
+        async with app.run_test() as pilot:
+            await pilot.press("c")
+            app.screen.query_one(
+                "#console-input"
+            ).value = "target add gold --kind sector --market asx --tickers BHP,RIO --tags miners"
+            await pilot.press("enter")
+            target = services.target_specs()["gold"]
+            assert target.kind == "sector"
+            assert target.tickers == ("BHP", "RIO")
+            assert target.tags == frozenset({"miners"})
+            assert any(
+                "Added target gold" in line.text
+                for line in app.screen.query_one("#console-log").lines
+            )
 
     asyncio.run(run())
 

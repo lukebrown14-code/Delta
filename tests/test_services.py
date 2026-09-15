@@ -100,18 +100,65 @@ def test_llm_costs_groups_by_task_and_model(tmp_engine):
     assert rows == [services.CostRow("analyse", "m", 3, 1.5)]
 
 
-def test_watchlist_add_and_remove(tmp_path, monkeypatch):
+def test_target_add_and_remove(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     (tmp_path / "config.toml").write_text('[universe]\nus = ["AAPL"]\n', encoding="utf-8")
 
-    services.add_watchlist("mining", market="asx", tickers=["BHP", "RIO"])
-    assert "mining" in services.watchlist_specs()
-    services.remove_watchlist("mining")
-    assert "mining" not in services.watchlist_specs()
+    services.add_target(
+        "mining",
+        kind="industry",
+        market="asx",
+        tickers=["BHP", "RIO"],
+        tags=["diggers"],
+        notes="big miners",
+    )
+    specs = services.target_specs()
+    assert specs["mining"].kind == "industry"
+    assert specs["mining"].tickers == ("BHP", "RIO")
+    assert specs["mining"].tags == frozenset({"diggers"})
+    assert specs["mining"].notes == "big miners"
+    assert "universe_us" not in specs
+
+    services.remove_target("mining")
+    assert "mining" not in services.target_specs()
 
 
-def test_add_watchlist_unknown_market(tmp_path, monkeypatch):
+def test_add_target_unknown_market(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     (tmp_path / "config.toml").write_text("", encoding="utf-8")
     with pytest.raises(ValueError, match="known markets"):
-        services.add_watchlist("bogus", market="asz", tickers=["X"])
+        services.add_target("bogus", market="asz", tickers=["X"])
+
+
+def test_add_target_unknown_kind(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "config.toml").write_text("", encoding="utf-8")
+    with pytest.raises(ValueError, match="known kinds"):
+        services.add_target("bogus", kind="planet", market="asx", tickers=["X"])
+
+
+def test_add_target_market_kind_takes_no_tickers(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "config.toml").write_text("", encoding="utf-8")
+    services.add_target("aussie", kind="market", market="asx")
+    assert services.target_specs()["aussie"].tickers == ()
+    with pytest.raises(ValueError, match="takes no tickers"):
+        services.add_target("aus2", kind="market", market="asx", tickers=["BHP"])
+
+
+def test_add_target_non_market_kind_requires_tickers(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "config.toml").write_text("", encoding="utf-8")
+    with pytest.raises(ValueError, match="requires tickers"):
+        services.add_target("bhp", kind="company", market="asx", tickers=[])
+
+
+def test_remove_target_also_removes_legacy_watchlist(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "config.toml").write_text(
+        '[watchlists.mining]\nmarket = "asx"\ntickers = ["BHP"]\n', encoding="utf-8"
+    )
+    services.remove_target("mining")
+    assert services.target_specs() == {}
+    with pytest.raises(KeyError, match="unknown target"):
+        services.remove_target("mining")

@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 from importlib.metadata import entry_points
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from rigger.core.models import Bar, Event, Fundamental, Instrument, NewsItem
@@ -18,18 +17,18 @@ if TYPE_CHECKING:
 class Scope:
     """Declarative filter over watch targets.
 
-    Four axes — ``watchlists``, ``asset_classes``, ``markets``, ``tags`` — are
+    Four axes — ``targets``, ``asset_classes``, ``markets``, ``tags`` — are
     ANDed together; within a single axis the values are ORed. A ``None`` axis
     means "no restriction", so the default ``Scope()`` matches everything.
     """
 
-    watchlists: frozenset[str] | None = None
+    targets: frozenset[str] | None = None
     asset_classes: frozenset[str] | None = None
     markets: frozenset[str] | None = None
     tags: frozenset[str] | None = None
 
     def matches(self, inst: Instrument) -> bool:
-        if self.watchlists is not None and not (self.watchlists & set(inst.watchlists)):
+        if self.targets is not None and not (self.targets & set(inst.watchlists)):
             return False
         if self.asset_classes is not None and inst.asset_class not in self.asset_classes:
             return False
@@ -52,7 +51,10 @@ def _freeze(values: Any) -> frozenset[str] | None:
 
 
 def parse_scope(raw: Any, *, market: str | None = None) -> Scope:
-    """Build a Scope from a ``scope`` table, folding ``DataPlugin.market`` in."""
+    """Build a Scope from a ``scope`` table, folding ``DataPlugin.market`` in.
+
+    The ``targets`` axis also answers to its legacy ``watchlists`` key.
+    """
     if isinstance(raw, str):
         raw = {"markets": raw}
     table = {} if not isinstance(raw, dict) else raw
@@ -63,8 +65,11 @@ def parse_scope(raw: Any, *, market: str | None = None) -> Scope:
         markets = frozenset(
             str(v).lower() for v in (markets if isinstance(markets, (list, tuple)) else [markets])
         )
+    raw_targets = table.get("targets")
+    if raw_targets is None:
+        raw_targets = table.get("watchlists")
     return Scope(
-        watchlists=_freeze(table.get("watchlists")),
+        targets=_freeze(raw_targets),
         asset_classes=_freeze(table.get("asset_classes")),
         markets=markets or None,
         tags=_freeze(table.get("tags")),
@@ -81,23 +86,15 @@ class Plugin:
         """Receives its [plugins.<name>] TOML table."""
 
 
-class WatchlistPlugin(Plugin):
+class TargetPlugin(Plugin):
+    """A watch target: anything the user follows, not just a share."""
+
     kind: str = ""
     name: str = ""
     label: str = ""
-    max_pct: float | None = None
 
     def instruments(self) -> list[Instrument]:
         raise NotImplementedError
-
-    def brief_sections(self, default: Any) -> Any:
-        return default
-
-    analyst_template: str | None = None
-    prompt_dir: Path | None = None
-
-    def prompt_vars(self, inst: Instrument, brief: Any) -> dict[str, Any]:
-        return {}
 
 
 class MarketPlugin(Plugin):
@@ -153,7 +150,8 @@ class Context:
 
 
 PLUGIN_GROUP = "rigger.plugins"
-WATCHLIST_GROUP = "rigger.watchlists"
+TARGET_GROUP = "rigger.targets"
+LEGACY_WATCHLIST_GROUP = "rigger.watchlists"
 
 
 def discover_plugins() -> dict[str, Plugin]:
@@ -168,18 +166,19 @@ def discover_plugins() -> dict[str, Plugin]:
     return discovered
 
 
-def discover_watchlists() -> dict[str, type[WatchlistPlugin]]:
-    """Load watchlist kinds from the ``rigger.watchlists`` group, keyed by kind.
+def discover_targets() -> dict[str, type[TargetPlugin]]:
+    """Load target kinds from the ``rigger.targets`` group, keyed by kind.
 
-    Returns the class (a factory), not an instance, because one kind backs many
-    differently-named watchlists.
+    The legacy ``rigger.watchlists`` group is still honoured so third-party
+    watchlist plugins keep working. Returns the class (a factory), not an
+    instance, because one kind backs many differently-named targets.
     """
-    kinds: dict[str, type[WatchlistPlugin]] = {}
+    kinds: dict[str, type[TargetPlugin]] = {}
     eps = entry_points()
-    group = eps.select(group=WATCHLIST_GROUP)
-    for ep in group:
-        cls = ep.load()
-        kinds[cls.kind] = cls
+    for group_name in (LEGACY_WATCHLIST_GROUP, TARGET_GROUP):
+        for ep in eps.select(group=group_name):
+            cls = ep.load()
+            kinds[cls.kind] = cls
     return kinds
 
 

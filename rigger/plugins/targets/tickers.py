@@ -1,4 +1,4 @@
-"""Config-only ticker watchlists."""
+"""Config-only watch targets: ticker baskets per kind, and bare markets."""
 
 from __future__ import annotations
 
@@ -6,11 +6,16 @@ from typing import Any
 
 from rigger.core.ids import make_instrument_id
 from rigger.core.models import AssetClass, Instrument
-from rigger.core.plugin import WatchlistPlugin
+from rigger.core.plugin import TargetPlugin
 
 
-class TickerWatchlist(WatchlistPlugin):
-    kind = "tickers"
+class TickerTarget(TargetPlugin):
+    """A target followed via tickers in one market.
+
+    Backs the company, sector, industry, and theme kinds (and the legacy
+    ``tickers`` kind); instrument construction is shared by all of them.
+    """
+
     version = "0.1.0"
 
     def __init__(self) -> None:
@@ -21,7 +26,7 @@ class TickerWatchlist(WatchlistPlugin):
         self.asset_class: AssetClass = "equity"
         self.sector: str | None = None
         self.tags: frozenset[str] = frozenset()
-        self.max_pct: float | None = None
+        self.notes = ""
         self.overrides: dict[str, dict[str, Any]] = {}
 
     def configure(self, cfg: dict[str, Any]) -> None:
@@ -32,14 +37,14 @@ class TickerWatchlist(WatchlistPlugin):
         self.asset_class = cfg.get("asset_class", "equity")
         self.sector = cfg.get("sector")
         self.tags = frozenset(str(tag) for tag in cfg.get("tags", []))
-        self.max_pct = float(cfg["max_pct"]) if cfg.get("max_pct") is not None else None
+        self.notes = str(cfg.get("notes", ""))
         self.overrides = {
             str(symbol).upper(): dict(values) for symbol, values in cfg.get("overrides", {}).items()
         }
 
     def instruments(self) -> list[Instrument]:
         if not self.market:
-            raise ValueError(f"watchlist {self.name!r} must set market")
+            raise ValueError(f"target {self.name!r} must set market")
         currency = {"us": "USD", "asx": "AUD"}.get(self.market, "AUD")
         result = []
         for symbol in self.tickers:
@@ -60,3 +65,49 @@ class TickerWatchlist(WatchlistPlugin):
                 )
             )
         return result
+
+
+class CompanyTarget(TickerTarget):
+    kind = "company"
+
+
+class SectorTarget(TickerTarget):
+    kind = "sector"
+
+
+class IndustryTarget(TickerTarget):
+    kind = "industry"
+
+
+class ThemeTarget(TickerTarget):
+    kind = "theme"
+
+
+class LegacyTickersTarget(TickerTarget):
+    """The ``tickers`` kind: legacy ``[watchlists.<name>]`` tables."""
+
+    kind = "tickers"
+
+
+class MarketTarget(TargetPlugin):
+    """A market followed directly: no tickers, no instruments (yet)."""
+
+    kind = "market"
+    version = "0.1.0"
+
+    def __init__(self) -> None:
+        self.name = ""
+        self.label = ""
+        self.market = ""
+        self.tags: frozenset[str] = frozenset()
+        self.notes = ""
+
+    def configure(self, cfg: dict[str, Any]) -> None:
+        self.name = str(cfg.get("name", self.name))
+        self.label = str(cfg.get("label", self.name))
+        self.market = str(cfg.get("market", "")).lower()
+        self.tags = frozenset(str(tag) for tag in cfg.get("tags", []))
+        self.notes = str(cfg.get("notes", ""))
+
+    def instruments(self) -> list[Instrument]:
+        return []

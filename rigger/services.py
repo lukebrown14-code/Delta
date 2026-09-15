@@ -19,6 +19,7 @@ from rigger.core.db import (
     store_items,
 )
 from rigger.core.time import parse_date
+from rigger.targets import DEFAULT_KIND, KNOWN_KINDS, LEGACY_KIND, WatchTarget, target_from_spec
 
 Log = Callable[[str], None]
 
@@ -92,22 +93,42 @@ def set_plugin_enabled(rig: Any, name: str, value: bool) -> None:
     Path("config.toml").write_text(tomli_w.dumps(raw), encoding="utf-8")
 
 
-def watchlist_specs() -> dict[str, dict[str, Any]]:
+def target_specs() -> dict[str, WatchTarget]:
+    """User-facing watch targets from [targets] and legacy [watchlists] tables.
+
+    The [universe] shim entries stay hidden: only real tables are listed.
+    """
     from rigger.core import config as config_mod
 
-    return {
-        name: dict(values) for name, values in config_mod.load_toml().get("watchlists", {}).items()
-    }
+    raw = config_mod.load_toml()
+    specs: dict[str, dict[str, Any]] = {}
+    for name, values in raw.get("targets", {}).items():
+        specs[str(name)] = {"kind": DEFAULT_KIND, **dict(values)}
+    for name, values in raw.get("watchlists", {}).items():
+        specs.setdefault(str(name), {"kind": LEGACY_KIND, **dict(values)})
+    return {name: target_from_spec(name, spec) for name, spec in specs.items()}
 
 
-def add_watchlist(
-    name: str, *, market: str, tickers: list[str], max_pct: float | None = None
+def add_target(
+    name: str,
+    *,
+    kind: str = DEFAULT_KIND,
+    market: str,
+    tickers: list[str] | None = None,
+    tags: list[str] | None = None,
+    notes: str = "",
+    label: str | None = None,
 ) -> None:
     import tomli_w
 
     from rigger.core import config as config_mod
     from rigger.core.plugin import MarketPlugin, discover_plugins
 
+    kind = kind.lower()
+    if kind not in KNOWN_KINDS:
+        raise ValueError(
+            f"target {name!r} names unknown kind {kind!r}; known kinds are {', '.join(KNOWN_KINDS)}"
+        )
     known = sorted(
         plugin_name
         for plugin_name, plugin in discover_plugins().items()
@@ -116,34 +137,42 @@ def add_watchlist(
     market = market.lower()
     if market not in known:
         raise ValueError(
-            f"watchlist {name!r} names market {market!r}; known markets are {', '.join(known)}"
+            f"target {name!r} names market {market!r}; known markets are {', '.join(known)}"
         )
+    tickers = [t.upper() for t in (tickers or [])]
+    if kind == "market":
+        if tickers:
+            raise ValueError(f"market target {name!r} takes no tickers")
+    elif not tickers:
+        raise ValueError(f"{kind} target {name!r} requires tickers")
     raw = config_mod.load_toml()
-    watchlists = raw.setdefault("watchlists", {})
-    if name in watchlists:
-        raise ValueError(f"watchlist {name!r} already exists")
-    spec: dict[str, Any] = {
-        "kind": "tickers",
-        "market": market,
-        "tickers": [t.upper() for t in tickers],
-    }
-    if max_pct is not None:
-        spec["max_pct"] = max_pct
-    watchlists[name] = spec
+    if name in raw.get("targets", {}) or name in raw.get("watchlists", {}):
+        raise ValueError(f"target {name!r} already exists")
+    spec: dict[str, Any] = {"kind": kind, "market": market}
+    if kind != "market":
+        spec["tickers"] = tickers
+    if tags:
+        spec["tags"] = list(tags)
+    if notes:
+        spec["notes"] = notes
+    if label:
+        spec["label"] = label
+    raw.setdefault("targets", {})[name] = spec
     Path("config.toml").write_text(tomli_w.dumps(raw), encoding="utf-8")
 
 
-def remove_watchlist(name: str) -> None:
+def remove_target(name: str) -> None:
     import tomli_w
 
     from rigger.core import config as config_mod
 
     raw = config_mod.load_toml()
-    watchlists = raw.setdefault("watchlists", {})
-    if name not in watchlists:
-        raise KeyError(f"unknown watchlist: {name}")
-    del watchlists[name]
-    Path("config.toml").write_text(tomli_w.dumps(raw), encoding="utf-8")
+    for section in ("targets", "watchlists"):
+        if name in raw.get(section, {}):
+            del raw[section][name]
+            Path("config.toml").write_text(tomli_w.dumps(raw), encoding="utf-8")
+            return
+    raise KeyError(f"unknown target: {name}")
 
 
 def brief_for(rig: Any, instrument_id: str) -> str | None:

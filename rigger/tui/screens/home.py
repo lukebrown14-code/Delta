@@ -25,7 +25,7 @@ class Home(Screen):
                 classes="diagram",
             ),
             Static(id="checks"),
-            Static(id="watchlists"),
+            Static(id="targets"),
         )
 
     def on_mount(self) -> None:
@@ -39,14 +39,15 @@ class Home(Screen):
             for check in checks
         )
         self.query_one("#checks", Static).update("[bold]Setup checks[/bold]\n" + markup)
-        specs = services.watchlist_specs()
+        specs = services.target_specs()
         if specs:
             lines = "\n".join(
-                f"{name}: {spec.get('market', '')} ({len(spec.get('tickers', []))} holdings)"
-                for name, spec in sorted(specs.items())
+                f"{target.id}: {target.kind} {','.join(target.markets)} "
+                f"({len(target.tickers)} tickers)"
+                for target in sorted(specs.values(), key=lambda t: t.id)
             )
-            self.query_one("#watchlists", Static).update("[bold]Watchlists[/bold]\n" + lines)
+            self.query_one("#targets", Static).update("[bold]Targets[/bold]\n" + lines)
         else:
-            self.query_one("#watchlists", Static).update(
-                "[bold]Watchlists[/bold]\nNone configured — press w to add one."
+            self.query_one("#targets", Static).update(
+                "[bold]Targets[/bold]\nNone configured — press w to add one."
             )

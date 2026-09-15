@@ -35,8 +35,13 @@ sec_edgar = "rigger.plugins.data.sec_edgar:SECEdgar"
 yfinance_calendar = "rigger.plugins.data.yfinance_calendar:YFinanceCalendar"
 rss = "rigger.plugins.data.rss:RSSData"
 
-[project.entry-points."rigger.watchlists"]
-tickers = "rigger.plugins.watchlists.tickers:TickerWatchlist"
+[project.entry-points."rigger.targets"]
+company = "rigger.plugins.targets.tickers:CompanyTarget"
+sector = "rigger.plugins.targets.tickers:SectorTarget"
+industry = "rigger.plugins.targets.tickers:IndustryTarget"
+theme = "rigger.plugins.targets.tickers:ThemeTarget"
+market = "rigger.plugins.targets.tickers:MarketTarget"
+tickers = "rigger.plugins.targets.tickers:LegacyTickersTarget"
 
 [build-system]
 requires = ["uv_build>=0.12.13,<0.13.0"]

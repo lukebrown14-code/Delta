@@ -42,7 +42,7 @@ def test_and_across_axes_or_within_one():
         _inst("US:AAPL", market="us", asset_class="equity", watchlists=("tech",)),
     ]
     scope = Scope(
-        watchlists=frozenset({"mining", "bonds"}),
+        targets=frozenset({"mining", "bonds"}),
         asset_classes=frozenset({"equity"}),
         markets=frozenset({"asx", "us"}),
     )
@@ -56,7 +56,7 @@ def test_single_axis_is_or():
         _inst("US:TLT", market="us", watchlists=("bonds",)),
         _inst("US:AAPL", market="us", watchlists=("tech",)),
     ]
-    scope = Scope(watchlists=frozenset({"mining", "tech"}))
+    scope = Scope(targets=frozenset({"mining", "tech"}))
     assert {i.id for i in scope.filter(universe)} == {"ASX:BHP", "US:AAPL"}
 
 
@@ -72,13 +72,18 @@ def test_tags_intersect():
 
 def test_parse_scope_folds_market_and_reads_axes():
     scope = parse_scope(
-        {"watchlists": ["mining"], "asset_classes": "equity", "tags": ["x", "y"]},
+        {"targets": ["mining"], "asset_classes": "equity", "tags": ["x", "y"]},
         market="asx",
     )
-    assert scope.watchlists == frozenset({"mining"})
+    assert scope.targets == frozenset({"mining"})
     assert scope.asset_classes == frozenset({"equity"})
     assert scope.markets == frozenset({"asx"})
     assert scope.tags == frozenset({"x", "y"})
+
+
+def test_parse_scope_accepts_legacy_watchlists_key():
+    scope = parse_scope({"watchlists": ["mining", "bonds"]})
+    assert scope.targets == frozenset({"mining", "bonds"})
 
 
 def test_parse_scope_markets_beat_market_fallback():
