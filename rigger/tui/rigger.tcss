@@ -74,6 +74,7 @@ Pill {
 Pill.-ok { color: $success; }
 Pill.-warn { color: $warning; }
 Pill.-error { color: $error; }
+Pill.-dim { color: $text-muted; }
 
 StatusDot {
     width: auto;
