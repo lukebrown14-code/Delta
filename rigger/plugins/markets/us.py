@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
+from rigger.core.ids import make_instrument_id
 from rigger.core.models import Instrument
 from rigger.core.plugin import MarketPlugin
 
@@ -37,7 +38,7 @@ class USMarket(MarketPlugin):
         symbols = self._tickers
         return [
             Instrument(
-                id=f"US:{s}",
+                id=make_instrument_id("US", s),
                 market="us",
                 symbol=s,
                 name=s,

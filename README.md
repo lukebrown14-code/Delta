@@ -36,7 +36,7 @@ Principles the code enforces:
 ## Install
 
 ```bash
-git clone https://codeberg.org/LukeBro14/Rigger.git
+git clone https://github.com/lukebrown14-code/Rigger.git
 cd Rigger
 uv sync
 cp .env.example .env      # then fill in your key(s)

@@ -3,50 +3,33 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
-from sqlmodel import Session
 
-from rigger.core.models import Instrument, Signal
-from rigger.paper.portfolio import PaperPortfolio
-from rigger.plugins.brokers.paper import PaperBroker
-from rigger.plugins.markets.us import USMarket
-from rigger.plugins.strategies.llm_analyst import LLMAnalyst
+from rigger import services
+from rigger.core.models import Instrument
 from rigger.tui.app import RiggerApp
-from tests.conftest import FakeConfig, seed_bars
+from tests.conftest import seed_bars
 
 AAPL = Instrument(id="US:AAPL", market="us", symbol="AAPL", currency="USD", sector="Tech")
 
 
 class FakeRig:
-    def __init__(self, engine, llm, universe):
+    def __init__(self, engine, universe):
         self.engine = engine
-        self.llm = llm
+        self.llm = None
         self._universe = universe
         self.settings = SimpleNamespace(openrouter_api_key="", litellm_proxy_key="")
         self.cfg = SimpleNamespace(
             base_currency="AUD",
             llm_provider="openrouter",
-            llm_routing={"analyse": "test/model"},
-            llm_ensemble_models=[],
-            risk={"min_conviction": 0.6},
-            paper_starting_cash=100_000.0,
+            llm_routing={},
             plugins={"sec_edgar": {}},
-            universe={"us": [i.symbol for i in universe]},
+            universe={},
+            targets={},
         )
-        self.portfolio = PaperPortfolio(engine, "AUD", 0.0, currencies={"us": "USD"})
-        broker = PaperBroker()
-        broker.bind(self.portfolio)
-        market = USMarket()
-        market.configure({"tickers": [i.symbol for i in universe]})
-        self.plugins = {
-            "llm_analyst": LLMAnalyst(),
-            "paper": broker,
-            "us": market,
-            "sec_edgar": SimpleNamespace(enabled=True),
-        }
+        self.plugins = {"sec_edgar": SimpleNamespace(enabled=True)}
 
     def universe(self):
         return self._universe
@@ -57,7 +40,7 @@ class FakeRig:
         return Context(
             engine=self.engine,
             settings=self.settings,
-            config=FakeConfig(self.cfg.llm_routing),
+            config=self.cfg,
             llm=self.llm,
             universe=universe,
             plugins=self.plugins,
@@ -65,53 +48,87 @@ class FakeRig:
 
 
 @pytest.fixture
-def rig(tmp_engine, fake_llm):
+def rig(tmp_engine):
     seed_bars(tmp_engine, AAPL.id, price_fn=lambda i: 100.0)
-    seed_bars(tmp_engine, "FX:USDAUD", n=1, price_fn=lambda i: 1.5)
-    return FakeRig(tmp_engine, fake_llm, [AAPL])
+    return FakeRig(tmp_engine, [AAPL])
 
 
-def _seed_signal(engine):
-    from rigger.runtime import store_signal
-
-    signal = Signal(
-        id="sig-1",
-        ts=datetime.now(UTC),
-        instrument_id=AAPL.id,
-        strategy="llm_analyst",
-        direction="long",
-        conviction=0.8,
-        horizon_days=20,
-        thesis="Positive momentum thesis.",
-        invalidation="Break of 50-day SMA.",
-        evidence_ids=["1", "2", "3"],
-    )
-    with Session(engine) as session:
-        store_signal(session, signal)
-        session.commit()
-
-
-def test_app_mounts_and_signals_screen_lists_signals(rig):
+def test_app_mounts_and_navigates(rig):
     async def run():
-        _seed_signal(rig.engine)
         app = RiggerApp(rig)
         async with app.run_test() as pilot:
             assert app.screen.name == "home"
             await pilot.press("2")
-            assert app.screen.name == "signals"
-            table = app.screen.query_one("#signals-table")
-            assert table.row_count >= 1
+            assert app.screen.name == "data"
+            await pilot.press("3")
+            assert app.screen.name == "config"
 
     asyncio.run(run())
 
 
-def test_app_mounts_offline_home(rig):
+def test_targets_panel_adds_target(rig, monkeypatch, tmp_path):
+    import tomli_w
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "config.toml").write_text(
+        tomli_w.dumps({"universe": {"us": ["AAPL"]}}), encoding="utf-8"
+    )
+
     async def run():
         app = RiggerApp(rig)
         async with app.run_test() as pilot:
-            assert app.screen.name == "home"
-            await pilot.press("3")
-            assert app.screen.name == "portfolio"
+            await pilot.press("w")
+            assert app.screen.name == "targets"
+            app.screen.query_one("#tg-name").value = "mining"
+            app.screen.query_one("#tg-kind").value = "industry"
+            app.screen.query_one("#tg-market").value = "asx"
+            app.screen.query_one("#tg-tickers").value = "BHP,RIO"
+            await pilot.click("#tg-add")
+            assert "mining" in services.target_specs()
+            assert app.screen.query_one("#target-table").row_count == 1
+
+    asyncio.run(run())
+
+
+def test_console_target_list(rig, monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "config.toml").write_text(
+        '[targets.mining]\nkind = "industry"\nmarket = "asx"\ntickers = ["BHP"]\n',
+        encoding="utf-8",
+    )
+
+    async def run():
+        app = RiggerApp(rig)
+        async with app.run_test() as pilot:
+            await pilot.press("c")
+            assert app.screen.name == "console"
+            app.screen.query_one("#console-input").value = "target list"
+            await pilot.press("enter")
+            assert any("mining" in line.text for line in app.screen.query_one("#console-log").lines)
+
+    asyncio.run(run())
+
+
+def test_console_target_add(rig, monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "config.toml").write_text("", encoding="utf-8")
+
+    async def run():
+        app = RiggerApp(rig)
+        async with app.run_test() as pilot:
+            await pilot.press("c")
+            app.screen.query_one(
+                "#console-input"
+            ).value = "target add gold --kind sector --market asx --tickers BHP,RIO --tags miners"
+            await pilot.press("enter")
+            target = services.target_specs()["gold"]
+            assert target.kind == "sector"
+            assert target.tickers == ("BHP", "RIO")
+            assert target.tags == frozenset({"miners"})
+            assert any(
+                "Added target gold" in line.text
+                for line in app.screen.query_one("#console-log").lines
+            )
 
     asyncio.run(run())
 

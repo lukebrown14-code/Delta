@@ -25,14 +25,23 @@ class Config(Screen):
             f"{name}: {'enabled' if plugin.enabled else 'disabled'}"
             for name, plugin in sorted(self.rig.plugins.items())
         )
-        universe = "\n".join(
-            f"{market}: {', '.join(symbols)}" for market, symbols in cfg.universe.items()
+        configured_targets = {
+            name: spec
+            for name, spec in getattr(cfg, "targets", {}).items()
+            if not spec.get("legacy", False)
+        }
+        targets = (
+            "\n".join(
+                f"{name}: {spec.get('kind', '')} {spec.get('market', '')} "
+                f"({len(spec.get('tickers', []))} tickers)"
+                for name, spec in sorted(configured_targets.items())
+            )
+            or "none (legacy universe entries are active)"
         )
         routing = "\n".join(f"{task}: {model}" for task, model in cfg.llm_routing.items())
         self.query_one("#config", Static).update(
             f"[bold]Provider[/bold] {cfg.llm_provider}\n\n"
-            f"[bold]Universe[/bold]\n{universe}\n\n"
+            f"[bold]Targets[/bold]\n{targets}\n\n"
             f"[bold]Model routing[/bold]\n{routing}\n\n"
-            f"[bold]Risk limits[/bold]\n{cfg.risk}\n\n"
             f"[bold]Plugins[/bold]\n{plugins}"
         )

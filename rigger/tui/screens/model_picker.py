@@ -1,0 +1,156 @@
+"""Model picker modal: searchable catalog with a free-text fallback."""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+
+from textual.app import ComposeResult
+from textual.binding import Binding
+from textual.containers import Horizontal, Vertical
+from textual.screen import ModalScreen
+from textual.widgets import Button, DataTable, Input, Static
+
+from rigger.llm.catalog import ModelInfo, cached_catalog, catalog
+from rigger.llm.providers import Provider
+
+
+def _per_million(price: float) -> str:
+    return f"{price * 1_000_000:.2f}"
+
+
+class ModelPicker(ModalScreen[ModelInfo | None]):
+    """Browse and pick a model; enter selects, escape cancels, refresh refetches.
+
+    Loads from the on-disk catalog cache so it opens instantly. An empty
+    catalog degrades to free-text model entry.
+    """
+
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel"),
+        Binding("ctrl+r", "refresh", "Refresh catalog"),
+    ]
+
+    DEFAULT_CSS = """
+    ModelPicker { align: center middle; }
+    ModelPicker > Vertical {
+        border: round $primary;
+        padding: 0 1;
+        width: 80;
+        max-height: 90%;
+    }
+    ModelPicker #mp-table { max-height: 20; }
+    ModelPicker #mp-status { color: $text-muted; }
+    """
+
+    def __init__(
+        self,
+        on_select: Callable[[ModelInfo], None],
+        *,
+        provider: Provider | None = None,
+        provider_name: str = "",
+    ) -> None:
+        super().__init__()
+        self.on_select = on_select
+        self.provider = provider
+        self.provider_name = provider_name or (provider.name if provider else "")
+        self._models: list[ModelInfo] = []
+        self._visible: list[ModelInfo] = []
+
+    def compose(self) -> ComposeResult:
+        yield Vertical(
+            Static(f"[bold]Select a model ({self.provider_name or 'any'})[/bold]", id="mp-title"),
+            Input(placeholder="filter by id or name", id="mp-filter"),
+            DataTable(id="mp-table"),
+            Horizontal(
+                Button("Refresh", id="mp-refresh"),
+                Static("", id="mp-status"),
+            ),
+        )
+
+    def on_mount(self) -> None:
+        table = self.query_one("#mp-table", DataTable)
+        table.add_columns("Model", "Context", "$/1M in", "$/1M out")
+        self._load(cached_catalog(self.provider_name))
+
+    def _load(self, models: list[ModelInfo]) -> None:
+        self._models = models
+        self._update_rows()
+
+    def _update_rows(self) -> None:
+        table = self.query_one("#mp-table", DataTable)
+        filter_input = self.query_one("#mp-filter", Input)
+        status = self.query_one("#mp-status", Static)
+        table.clear()
+        if not self._models:
+            filter_input.placeholder = "no catalog: type a model id and press enter"
+            status.update("catalog empty — enter a model id as free text")
+            self._visible = []
+            return
+        filter_input.placeholder = "filter by id or name"
+        needle = filter_input.value.strip().lower()
+        self._visible = [
+            m
+            for m in self._models
+            if not needle or needle in m.id.lower() or needle in m.name.lower()
+        ]
+        for m in self._visible:
+            context = "" if m.context_length is None else str(m.context_length)
+            table.add_row(
+                m.id,
+                context,
+                _per_million(m.prompt_price),
+                _per_million(m.completion_price),
+                key=m.id,
+            )
+        status.update(f"{table.row_count} models")
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id == "mp-filter":
+            self._update_rows()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        if event.input.id != "mp-filter":
+            return
+        value = event.value.strip()
+        if not self._models:
+            if value:
+                self._select(
+                    ModelInfo(
+                        id=value,
+                        name=value,
+                        context_length=None,
+                        prompt_price=0.0,
+                        completion_price=0.0,
+                    )
+                )
+            return
+        if self._visible:
+            self._select(self._visible[0])
+        else:
+            self.notify("no models match the filter", severity="warning")
+
+    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        for m in self._visible:
+            if m.id == event.row_key.value:
+                self._select(m)
+                return
+
+    async def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "mp-refresh":
+            await self._refresh()
+
+    async def action_refresh(self) -> None:
+        await self._refresh()
+
+    async def _refresh(self) -> None:
+        if self.provider is None:
+            self._load(cached_catalog(self.provider_name))
+            return
+        self._load(await catalog(self.provider, force=True))
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+    def _select(self, model: ModelInfo) -> None:
+        self.dismiss(None)
+        self.on_select(model)

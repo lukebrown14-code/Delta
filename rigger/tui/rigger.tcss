@@ -11,21 +11,27 @@ Screen {
     color: $text-muted;
 }
 
-#checks, #summary, #portfolio-summary, #health, #costs, #config {
+#checks, #targets, #health, #costs, #config {
     padding: 1 2;
 }
 
-#signals-table {
-    width: 55%;
+#console-input {
+    margin: 1 2;
 }
 
-#signal-detail {
-    width: 45%;
-    padding: 1 2;
+#console-log {
+    height: 1fr;
+    margin: 0 2;
 }
 
-#pipeline-log {
-    width: 75%;
+#target-table {
+    height: 1fr;
+    margin: 1 2;
+}
+
+#tg-name, #tg-kind, #tg-market, #tg-tickers, #tg-tags {
+    width: 1fr;
+    margin: 1;
 }
 
 .modal {

@@ -98,6 +98,60 @@ class LLMClient:
             cached=False,
         )
 
+    async def chat(
+        self,
+        *,
+        task: str,
+        model: str,
+        prompt_version: str,
+        messages: list[dict[str, str]],
+        response_format: dict[str, Any] | None = None,
+    ) -> LLMResult:
+        """Full-history chat completion: the caller owns the whole message list.
+
+        Mirrors :meth:`complete` (cache keyed on the serialized transcript, one
+        ``llmcall`` row per live call) but passes ``messages`` straight through
+        to the provider instead of building a ``[system, user]`` pair.
+        """
+        prompt = "\n\n".join(f"{m['role']}: {m['content']}" for m in messages)
+        phash = self.prompt_hash(model, prompt_version, prompt)
+
+        cached = self._lookup_cache(phash)
+        if cached is not None:
+            return LLMResult(text=cached, call_id="", cost_usd=0.0, cached=True)
+
+        started = time.perf_counter()
+        result = await self.provider.complete(
+            model=model,
+            messages=messages,
+            response_format=response_format,
+        )
+        latency_ms = int((time.perf_counter() - started) * 1000)
+
+        call_id = uuid.uuid4().hex
+        self._store(
+            LLMCallTable(
+                id=call_id,
+                ts=datetime.now(UTC),
+                task=task,
+                model=model,
+                prompt_version=prompt_version,
+                prompt_hash=phash,
+                input_tokens=result.input_tokens,
+                output_tokens=result.output_tokens,
+                cost_usd=result.cost_usd,
+                latency_ms=latency_ms,
+                cached=False,
+                response=result.text,
+            )
+        )
+        return LLMResult(
+            text=result.text,
+            call_id=call_id,
+            cost_usd=result.cost_usd,
+            cached=False,
+        )
+
     def _lookup_cache(self, phash: str) -> str | None:
         with Session(self.engine) as session:
             row = session.exec(

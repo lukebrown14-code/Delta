@@ -12,6 +12,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any
 
+from rigger.llm.catalog import ModelInfo
+
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
 
@@ -36,6 +38,14 @@ class Provider(ABC):
     ) -> ProviderResult:
         """Perform a chat completion and return normalized text/tokens/cost."""
 
+    async def models(self, *, force: bool = False) -> list[ModelInfo]:
+        """Models this provider offers: id, name, context length, USD-per-token prices.
+
+        Implementations never raise: an empty catalog degrades to free-text
+        model entry. ``force`` bypasses any 24h cache.
+        """
+        return []
+
 
 class OpenRouterProvider(Provider):
     name = "openrouter"
@@ -45,7 +55,7 @@ class OpenRouterProvider(Provider):
         api_key: str,
         *,
         app_name: str = "rigger",
-        app_url: str = "https://github.com/luke/rigger",
+        app_url: str = "https://github.com/lukebrown14-code/Rigger",
         timeout: float = 60.0,
         max_retries: int = 5,
     ) -> None:
@@ -55,6 +65,7 @@ class OpenRouterProvider(Provider):
         self._timeout = timeout
         self._max_retries = max_retries
         self._pricing: dict[str, dict[str, float]] = {}
+        self._models: list[ModelInfo] = []
         self._pricing_loaded_at: float = 0.0
         self._client: Any = None
 
@@ -106,6 +117,10 @@ class OpenRouterProvider(Provider):
             return 0.0
         return input_tokens * pricing["prompt"] + output_tokens * pricing["completion"]
 
+    async def models(self, *, force: bool = False) -> list[ModelInfo]:
+        self._maybe_load_pricing(force=force)
+        return list(self._models)
+
     def _maybe_load_pricing(self, force: bool = False) -> None:
         if (
             not force
@@ -125,13 +140,23 @@ class OpenRouterProvider(Provider):
             )
             r.raise_for_status()
             pricing: dict[str, dict[str, float]] = {}
+            models: list[ModelInfo] = []
             for m in r.json().get("data", []):
                 p = m.get("pricing", {})
-                pricing[m["id"]] = {
-                    "prompt": _parse_price(p.get("prompt")),
-                    "completion": _parse_price(p.get("completion")),
-                }
+                prompt_price = _parse_price(p.get("prompt"))
+                completion_price = _parse_price(p.get("completion"))
+                pricing[m["id"]] = {"prompt": prompt_price, "completion": completion_price}
+                models.append(
+                    ModelInfo(
+                        id=m["id"],
+                        name=m.get("name") or m["id"],
+                        context_length=_parse_context_length(m.get("context_length")),
+                        prompt_price=prompt_price,
+                        completion_price=completion_price,
+                    )
+                )
             self._pricing = pricing
+            self._models = models
             self._pricing_loaded_at = time.time()
         except Exception:
             self._pricing_loaded_at = time.time()
@@ -143,6 +168,27 @@ class LiteLLMSDKProvider(Provider):
     def __init__(self, *, timeout: float = 60.0, num_retries: int = 5) -> None:
         self._timeout = timeout
         self._num_retries = num_retries
+
+    async def models(self, *, force: bool = False) -> list[ModelInfo]:
+        """Map litellm's bundled model_cost table locally; no network involved."""
+        try:
+            from litellm import model_cost
+
+            return [
+                ModelInfo(
+                    id=str(model_id),
+                    name=str(model_id),
+                    context_length=_parse_context_length(
+                        info.get("max_input_tokens") or info.get("max_tokens")
+                    ),
+                    prompt_price=_parse_price(info.get("input_cost_per_token")),
+                    completion_price=_parse_price(info.get("output_cost_per_token")),
+                )
+                for model_id, info in model_cost.items()
+                if isinstance(info, dict) and info.get("mode") == "chat"
+            ]
+        except Exception:
+            return []
 
     async def complete(
         self,
@@ -241,6 +287,38 @@ class LiteLLMProxyProvider(Provider):
             return float(prompt_cost + completion_cost)
         except Exception:
             return 0.0
+
+    async def models(self, *, force: bool = False) -> list[ModelInfo]:
+        """GET {base_url}/v1/models; ids only, prices unknown (0.0), never raises."""
+        try:
+            import httpx
+
+            headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                r = await client.get(f"{self.base_url}/v1/models", headers=headers)
+            r.raise_for_status()
+            return [
+                ModelInfo(
+                    id=str(m["id"]),
+                    name=str(m.get("name") or m["id"]),
+                    context_length=_parse_context_length(m.get("context_length")),
+                    prompt_price=0.0,
+                    completion_price=0.0,
+                )
+                for m in r.json().get("data", [])
+                if m.get("id")
+            ]
+        except Exception:
+            return []
+
+
+def _parse_context_length(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _parse_price(value: Any) -> float:

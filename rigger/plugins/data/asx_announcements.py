@@ -45,7 +45,7 @@ class ASXAnnouncements(DataPlugin):
         self.timeout = 20.0
         self.max_retries = 3
         self.backoff_seconds = 1.0
-        self.user_agent = user_agent("+https://codeberg.org/LukeBro14/Rigger")
+        self.user_agent = user_agent("+https://github.com/lukebrown14-code/Rigger")
 
     def configure(self, cfg: dict[str, Any]) -> None:
         self.count = int(cfg.get("count", self.count))

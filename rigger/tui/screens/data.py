@@ -29,7 +29,7 @@ class Data(Screen):
             or "none"
         )
         self.query_one("#health", Static).update(
-            f"[bold]Data health[/bold]\n{counts}\n\nLatest bars\n{latest}\n\nFX: {health.fx_rates}"
+            f"[bold]Data health[/bold]\n{counts}\n\nLatest bars\n{latest}"
         )
         costs = services.llm_costs(self.rig.engine)
         lines = [

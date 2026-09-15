@@ -1,9 +1,9 @@
 """Home screen."""
 
 from textual.app import ComposeResult
-from textual.containers import Container, VerticalScroll
+from textual.containers import VerticalScroll
 from textual.screen import Screen
-from textual.widgets import Button, Static
+from textual.widgets import Static
 
 from rigger import services
 
@@ -17,11 +17,15 @@ class Home(Screen):
 
     def compose(self) -> ComposeResult:
         yield VerticalScroll(
-            Static("[bold cyan]RIGGER[/bold cyan] — research and paper trading", classes="title"),
-            Static("Ingest → Extract → Analyse → Execute → Report", classes="diagram"),
-            Container(Button("Run the daily pipeline", id="run-pipeline")),
+            Static(
+                "[bold cyan]RIGGER[/bold cyan] — investment research assistant", classes="title"
+            ),
+            Static(
+                "Watch what you care about → gather evidence → read sourced reports",
+                classes="diagram",
+            ),
             Static(id="checks"),
-            Static(id="summary"),
+            Static(id="targets"),
         )
 
     def on_mount(self) -> None:
@@ -35,14 +39,15 @@ class Home(Screen):
             for check in checks
         )
         self.query_one("#checks", Static).update("[bold]Setup checks[/bold]\n" + markup)
-        health = services.data_health(self.rig)
-        summary = "First run: add a key to .env, then use Pipeline → Ingest → Analyse."
-        if health.latest_bar:
-            summary = (
-                f"Stored signals: {health.counts['signal']} | latest bars: {len(health.latest_bar)}"
+        specs = services.target_specs()
+        if specs:
+            lines = "\n".join(
+                f"{target.id}: {target.kind} {','.join(target.markets)} "
+                f"({len(target.tickers)} tickers)"
+                for target in sorted(specs.values(), key=lambda t: t.id)
             )
-        self.query_one("#summary", Static).update(summary)
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "run-pipeline":
-            self.app.action_switch_screen("pipeline")
+            self.query_one("#targets", Static).update("[bold]Targets[/bold]\n" + lines)
+        else:
+            self.query_one("#targets", Static).update(
+                "[bold]Targets[/bold]\nNone configured — press w to add one."
+            )
