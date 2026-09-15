@@ -1,22 +1,21 @@
 """Data and LLM cost screen."""
 
 from textual.app import ComposeResult
-from textual.containers import VerticalScroll
-from textual.screen import Screen
 from textual.widgets import Static
 
 from rigger import services
+from rigger.tui.shell import RiggerScreen
 
 
-class Data(Screen):
+class Data(RiggerScreen):
     name = "data"
 
     def __init__(self, rig) -> None:
-        super().__init__()
-        self.rig = rig
+        super().__init__(rig)
 
-    def compose(self) -> ComposeResult:
-        yield VerticalScroll(Static(id="health"), Static(id="costs"))
+    def compose_content(self) -> ComposeResult:
+        yield Static(id="health")
+        yield Static(id="costs")
 
     def on_mount(self) -> None:
         self.refresh_view()

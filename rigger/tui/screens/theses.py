@@ -1,8 +1,9 @@
 """Optional theses panel: create a claim, review candidates, accept or reject them.
 
-Standalone by design: layout comes from ``DEFAULT_CSS`` (no ``app.py`` styles
-needed) and only ``rig.engine`` is touched, so the screen works under any App
-with a Rigger-like object.
+Standalone by design: layout comes from ``DEFAULT_CSS`` (RiggerScreen ships
+its own shell styles, no ``app.py`` stylesheet needed) and only
+``rig.engine`` is touched, so the screen works under any App with a
+Rigger-like object.
 """
 
 from __future__ import annotations
@@ -11,22 +12,19 @@ from datetime import UTC, datetime
 
 from textual.app import ComposeResult
 from textual.containers import Horizontal, VerticalScroll
-from textual.screen import Screen
 from textual.widget import Widget
 from textual.widgets import Button, DataTable, Input, Static
 
 from rigger import theses, thesis_summary
 from rigger.evidence import EvidenceItem, cite, evidence_by_ids
 from rigger.thesis_health import badge_text, compute_health, state_style
+from rigger.tui.shell import RiggerScreen
 
 
-class Theses(Screen):
+class Theses(RiggerScreen):
     name = "theses"
 
     DEFAULT_CSS = """
-    Theses {
-        layout: vertical;
-    }
     #thesis-table {
         height: 1fr;
         margin: 1 2;
@@ -51,15 +49,13 @@ class Theses(Screen):
     """
 
     def __init__(self, rig) -> None:
-        super().__init__()
-        self.rig = rig
+        super().__init__(rig)
         self.selected: str | None = None
         self.candidates: list[theses.ThesisEvidence] = []
         self._summary: thesis_summary.ThesisSummary | None = None
 
-    def compose(self) -> ComposeResult:
+    def compose_content(self) -> ComposeResult:
         yield VerticalScroll(
-            Static("[bold]Theses[/bold]", classes="title"),
             DataTable(id="thesis-table"),
             Horizontal(
                 Input(placeholder="claim", id="th-claim"),

@@ -7,14 +7,14 @@ from pathlib import Path
 from textual import work
 from textual.app import ComposeResult
 from textual.containers import Horizontal
-from textual.screen import Screen
-from textual.widgets import Button, DataTable, RichLog, Static
+from textual.widgets import Button, DataTable, RichLog
 
 from rigger import services
 from rigger.reports import build_report, write_report
+from rigger.tui.shell import RiggerScreen
 
 
-class Reports(Screen):
+class Reports(RiggerScreen):
     """List watch targets, generate reports, and read the latest markdown.
 
     The orchestrator registers this screen in the app; it also mounts
@@ -23,12 +23,6 @@ class Reports(Screen):
 
     name = "reports"
     CSS = """
-    Reports {
-        layout: vertical;
-    }
-    .title {
-        padding: 1 2;
-    }
     #report-targets {
         height: 10;
         margin: 1 2;
@@ -43,11 +37,9 @@ class Reports(Screen):
     """
 
     def __init__(self, rig) -> None:
-        super().__init__()
-        self.rig = rig
+        super().__init__(rig)
 
-    def compose(self) -> ComposeResult:
-        yield Static("[bold]Reports[/bold]", classes="title")
+    def compose_content(self) -> ComposeResult:
         yield DataTable(id="report-targets")
         yield Horizontal(Button("Generate", id="report-generate"), id="report-actions")
         yield RichLog(id="report-view", markup=False, highlight=False)

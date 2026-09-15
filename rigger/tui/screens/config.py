@@ -1,20 +1,19 @@
 """Configuration screen."""
 
 from textual.app import ComposeResult
-from textual.containers import VerticalScroll
-from textual.screen import Screen
 from textual.widgets import Static
 
+from rigger.tui.shell import RiggerScreen
 
-class Config(Screen):
+
+class Config(RiggerScreen):
     name = "config"
 
     def __init__(self, rig) -> None:
-        super().__init__()
-        self.rig = rig
+        super().__init__(rig)
 
-    def compose(self) -> ComposeResult:
-        yield VerticalScroll(Static(id="config"))
+    def compose_content(self) -> ComposeResult:
+        yield Static(id="config")
 
     def on_mount(self) -> None:
         self.refresh_view()

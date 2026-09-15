@@ -6,16 +6,16 @@ from typing import Any
 
 from textual.app import ComposeResult
 from textual.containers import VerticalScroll
-from textual.screen import Screen
 from textual.widgets import Checkbox, Input, SelectionList, Static
 
 from rigger import services
 from rigger.chat import ChatMessage, chat
 from rigger.core.ids import make_instrument_id
 from rigger.targets import WatchTarget
+from rigger.tui.shell import RiggerScreen
 
 
-class Chat(Screen):
+class Chat(RiggerScreen):
     """Standalone chat surface: pick targets, ask, watch the cited answer arrive."""
 
     name = "chat"
@@ -39,12 +39,10 @@ class Chat(Screen):
     """
 
     def __init__(self, rig: Any) -> None:
-        super().__init__()
-        self.rig = rig
+        super().__init__(rig)
         self.history: list[ChatMessage] = []
 
-    def compose(self) -> ComposeResult:
-        yield Static("[bold]Chat[/bold] — grounded in your stored evidence", classes="title")
+    def compose_content(self) -> ComposeResult:
         yield SelectionList(id="chat-targets")
         yield Checkbox("Allow web search (labelled Web, never stored)", id="chat-web")
         yield VerticalScroll(Static(id="chat-transcript"), id="chat-scroll")

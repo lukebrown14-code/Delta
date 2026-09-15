@@ -5,21 +5,20 @@ from __future__ import annotations
 import shlex
 
 from textual.app import ComposeResult
-from textual.screen import Screen
-from textual.widgets import Input, RichLog, Static
+from textual.widgets import Input, RichLog
 
 from rigger import services
+from rigger.tui.shell import RiggerScreen
 
 
-class Console(Screen):
+class Console(RiggerScreen):
     name = "console"
+    AUTO_FOCUS = "#console-input"
 
     def __init__(self, rig) -> None:
-        super().__init__()
-        self.rig = rig
+        super().__init__(rig)
 
-    def compose(self) -> ComposeResult:
-        yield Static("[bold]Command console[/bold] — type [bold]help[/bold] for commands")
+    def compose_content(self) -> ComposeResult:
         yield Input(
             placeholder="target add mining --kind industry --market asx --tickers BHP,RIO",
             id="console-input",

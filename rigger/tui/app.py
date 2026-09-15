@@ -6,6 +6,7 @@ from typing import Any
 
 from textual.app import App
 from textual.binding import Binding
+from textual.command import Hit, Hits, Provider
 
 from rigger import services
 from rigger.core import config as config_mod
@@ -21,24 +22,76 @@ from rigger.tui.screens.model_picker import ModelPicker
 from rigger.tui.screens.reports import Reports
 from rigger.tui.screens.targets import Targets
 from rigger.tui.screens.theses import Theses
+from rigger.tui.shell import NAV_ITEMS
+from rigger.tui.theme import THEMES
+
+
+async def _gather(rig: Any, app: App) -> None:
+    """Command-palette action: ingest then extract, with a toast result."""
+    ingested = await services.ingest(rig)
+    extracted = await services.extract(rig)
+    rows = sum(ingested.counts.values())
+    app.notify(f"Gathered {rows} rows, {extracted.events} events")
+
+
+class RiggerCommands(Provider):
+    """Command palette: jump to any screen, gather evidence, flip theme."""
+
+    def __init__(self, screen: Any, match_style: Any = None) -> None:
+        super().__init__(screen, match_style)
+
+    async def search(self, query: str) -> Hits:
+        matcher = self.matcher(query)
+        app = self.app
+        rig = getattr(self.screen, "rig", None)
+        for key, name, label in NAV_ITEMS:
+            text = f"Go to {label}"
+            score = matcher.match(text)
+            if score > 0:
+                yield Hit(
+                    score,
+                    matcher.highlight(text),
+                    lambda n=name: app.action_switch_screen(n),
+                    text,
+                    f"shortcut: {key}",
+                )
+        text = "Gather evidence"
+        score = matcher.match(text)
+        if score > 0 and rig is not None:
+
+            async def gather() -> None:
+                await _gather(rig, app)
+
+            yield Hit(score, matcher.highlight(text), gather, text, "ingest + extract")
+        text = "Toggle light/dark theme"
+        score = matcher.match(text)
+        if score > 0:
+            yield Hit(
+                score,
+                matcher.highlight(text),
+                lambda: app.action_toggle_theme(),
+                text,
+            )
 
 
 class RiggerApp(App):
     TITLE = "Rigger"
     CSS_PATH = "rigger.tcss"
     BINDINGS = [
-        Binding("1", "switch_screen('home')", "Home"),
-        Binding("2", "switch_screen('data')", "Data"),
-        Binding("3", "switch_screen('config')", "Config"),
-        Binding("4", "switch_screen('reports')", "Reports"),
-        Binding("5", "switch_screen('theses')", "Theses"),
-        Binding("6", "switch_screen('chat')", "Chat"),
-        Binding("c", "switch_screen('console')", "Console"),
-        Binding("w", "switch_screen('targets')", "Targets"),
-        Binding("m", "show_model_picker", "Model"),
-        Binding("question_mark", "show_help", "Help"),
-        Binding("q", "quit", "Quit"),
+        Binding("1", "switch_screen('home')", "Home", tooltip="Watch list dashboard"),
+        Binding("2", "switch_screen('data')", "Data", tooltip="Stored evidence and spend"),
+        Binding("3", "switch_screen('config')", "Config", tooltip="Providers, routing, plugins"),
+        Binding("4", "switch_screen('reports')", "Reports", tooltip="Generate and read reports"),
+        Binding("5", "switch_screen('theses')", "Theses", tooltip="Track claims and evidence"),
+        Binding("6", "switch_screen('chat')", "Ask", tooltip="Grounded Q&A over evidence"),
+        Binding("c", "switch_screen('console')", "Console", tooltip="Type target/config commands"),
+        Binding("w", "switch_screen('targets')", "Targets", tooltip="Manage watch targets"),
+        Binding("m", "show_model_picker", "Model", tooltip="Pick the model for this screen"),
+        Binding("question_mark", "show_help", "Help", tooltip="Show the keymap"),
+        Binding("q", "quit", "Quit", tooltip="Leave Rigger"),
+        Binding("f2", "toggle_theme", "Theme", tooltip="Switch light/dark palette"),
     ]
+    COMMANDS = App.COMMANDS | {RiggerCommands}
 
     def __init__(self, rig: Rigger | None = None) -> None:
         super().__init__()
@@ -46,8 +99,12 @@ class RiggerApp(App):
         self._screens: dict[str, Any] = {}
         self.services = services
         self.log_lines: list[str] = []
+        self.narrow = False
 
     def on_mount(self) -> None:
+        for theme in THEMES:
+            self.register_theme(theme)
+        self.theme = "rigger-dark"
         self._screens = {
             "home": Home(self.rig),
             "data": Data(self.rig),
@@ -62,8 +119,20 @@ class RiggerApp(App):
             self.install_screen(screen, screen.name)
         self.push_screen("home")
 
+    def on_resize(self, event: Any) -> None:
+        """Collapse the nav rail in narrow terminals so nothing clips."""
+        narrow = event.size.width < 100
+        if narrow != self.narrow:
+            self.narrow = narrow
+            for rail in self.query("RiggerScreen NavRail"):
+                rail.set_class(narrow, "-collapsed")
+
     def action_switch_screen(self, name: str) -> None:
         self.switch_screen(name)
+
+    def action_toggle_theme(self) -> None:
+        self.theme = "rigger-light" if self.theme == "rigger-dark" else "rigger-dark"
+        self.notify(f"Theme: {self.theme}")
 
     def action_show_help(self) -> None:
         if self.screen.name == "help":

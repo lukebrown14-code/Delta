@@ -1,32 +1,25 @@
 """Home screen."""
 
 from textual.app import ComposeResult
-from textual.containers import VerticalScroll
-from textual.screen import Screen
 from textual.widgets import Static
 
 from rigger import services
+from rigger.tui.shell import RiggerScreen
 
 
-class Home(Screen):
+class Home(RiggerScreen):
     name = "home"
 
     def __init__(self, rig) -> None:
-        super().__init__()
-        self.rig = rig
+        super().__init__(rig)
 
-    def compose(self) -> ComposeResult:
-        yield VerticalScroll(
-            Static(
-                "[bold cyan]RIGGER[/bold cyan] — investment research assistant", classes="title"
-            ),
-            Static(
-                "Watch what you care about → gather evidence → read sourced reports",
-                classes="diagram",
-            ),
-            Static(id="checks"),
-            Static(id="targets"),
+    def compose_content(self) -> ComposeResult:
+        yield Static(
+            "Watch what you care about → gather evidence → read sourced reports",
+            classes="diagram",
         )
+        yield Static(id="checks")
+        yield Static(id="targets")
 
     def on_mount(self) -> None:
         self.refresh_view()

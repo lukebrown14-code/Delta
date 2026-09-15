@@ -3,33 +3,29 @@
 from __future__ import annotations
 
 from textual.app import ComposeResult
-from textual.containers import Horizontal, VerticalScroll
-from textual.screen import Screen
-from textual.widgets import Button, DataTable, Input, Static
+from textual.containers import Horizontal
+from textual.widgets import Button, DataTable, Input
 
 from rigger import services
+from rigger.tui.shell import RiggerScreen
 
 
-class Targets(Screen):
+class Targets(RiggerScreen):
     name = "targets"
 
     def __init__(self, rig) -> None:
-        super().__init__()
-        self.rig = rig
+        super().__init__(rig)
 
-    def compose(self) -> ComposeResult:
-        yield VerticalScroll(
-            Static("[bold]Targets[/bold]", classes="title"),
-            DataTable(id="target-table"),
-            Horizontal(
-                Input(placeholder="name", id="tg-name"),
-                Input(placeholder="kind (company|sector|industry|market|theme)", id="tg-kind"),
-                Input(placeholder="market (us|asx)", id="tg-market"),
-                Input(placeholder="tickers (BHP,RIO)", id="tg-tickers"),
-                Input(placeholder="tags (a,b)", id="tg-tags"),
-                Button("Add", id="tg-add"),
-                Button("Remove", id="tg-remove"),
-            ),
+    def compose_content(self) -> ComposeResult:
+        yield DataTable(id="target-table")
+        yield Horizontal(
+            Input(placeholder="name", id="tg-name"),
+            Input(placeholder="kind (company|sector|industry|market|theme)", id="tg-kind"),
+            Input(placeholder="market (us|asx)", id="tg-market"),
+            Input(placeholder="tickers (BHP,RIO)", id="tg-tickers"),
+            Input(placeholder="tags (a,b)", id="tg-tags"),
+            Button("Add", id="tg-add"),
+            Button("Remove", id="tg-remove"),
         )
 
     def on_mount(self) -> None:
