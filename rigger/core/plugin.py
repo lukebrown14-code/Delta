@@ -8,33 +8,96 @@ from importlib.metadata import entry_points
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from rigger.core.models import (
-    Bar,
-    Event,
-    Fill,
-    Fundamental,
-    Instrument,
-    NewsItem,
-    Order,
-    Position,
-    Signal,
-)
+from rigger.core.models import Bar, Event, Fundamental, Instrument, NewsItem
 
 if TYPE_CHECKING:
     from sqlalchemy.engine import Engine
+
+
+@dataclass(frozen=True)
+class Scope:
+    """Declarative filter over watch targets.
+
+    Four axes — ``watchlists``, ``asset_classes``, ``markets``, ``tags`` — are
+    ANDed together; within a single axis the values are ORed. A ``None`` axis
+    means "no restriction", so the default ``Scope()`` matches everything.
+    """
+
+    watchlists: frozenset[str] | None = None
+    asset_classes: frozenset[str] | None = None
+    markets: frozenset[str] | None = None
+    tags: frozenset[str] | None = None
+
+    def matches(self, inst: Instrument) -> bool:
+        if self.watchlists is not None and not (self.watchlists & set(inst.watchlists)):
+            return False
+        if self.asset_classes is not None and inst.asset_class not in self.asset_classes:
+            return False
+        if self.markets is not None and inst.market not in self.markets:
+            return False
+        if self.tags is not None and not (self.tags & inst.tags):
+            return False
+        return True
+
+    def filter(self, instruments: list[Instrument]) -> list[Instrument]:
+        return [inst for inst in instruments if self.matches(inst)]
+
+
+def _freeze(values: Any) -> frozenset[str] | None:
+    if values is None:
+        return None
+    if isinstance(values, str):
+        values = [values]
+    return frozenset(str(v) for v in values) or None
+
+
+def parse_scope(raw: Any, *, market: str | None = None) -> Scope:
+    """Build a Scope from a ``scope`` table, folding ``DataPlugin.market`` in."""
+    if isinstance(raw, str):
+        raw = {"markets": raw}
+    table = {} if not isinstance(raw, dict) else raw
+    markets: Any = table.get("markets")
+    if markets is None and market:
+        markets = [market]
+    if markets is not None:
+        markets = frozenset(
+            str(v).lower() for v in (markets if isinstance(markets, (list, tuple)) else [markets])
+        )
+    return Scope(
+        watchlists=_freeze(table.get("watchlists")),
+        asset_classes=_freeze(table.get("asset_classes")),
+        markets=markets or None,
+        tags=_freeze(table.get("tags")),
+    )
 
 
 class Plugin:
     name: str  # unique, snake_case
     version: str = "0.1.0"
     enabled: bool = True
-    # Name of another plugin whose [plugins.<shared>] table supplies defaults
-    # for this one, so sibling plugins (e.g. the yfinance bars and calendar
-    # plugins) read one mapping instead of two that drift.
     shared_config: str | None = None
 
     def configure(self, cfg: dict[str, Any]) -> None:
         """Receives its [plugins.<name>] TOML table."""
+
+
+class WatchlistPlugin(Plugin):
+    kind: str = ""
+    name: str = ""
+    label: str = ""
+    max_pct: float | None = None
+
+    def instruments(self) -> list[Instrument]:
+        raise NotImplementedError
+
+    def brief_sections(self, default: Any) -> Any:
+        return default
+
+    analyst_template: str | None = None
+    prompt_dir: Path | None = None
+
+    def prompt_vars(self, inst: Instrument, brief: Any) -> dict[str, Any]:
+        return {}
 
 
 class MarketPlugin(Plugin):
@@ -52,6 +115,24 @@ class MarketPlugin(Plugin):
 
 class DataPlugin(Plugin):
     market: str | None = None  # None = works for any market
+    scope: Scope = Scope()
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        configure = cls.__dict__.get("configure")
+        if configure is not None:
+
+            def configured(self: DataPlugin, cfg: dict[str, Any]) -> None:
+                DataPlugin.configure(self, cfg)
+                configure(self, cfg)
+
+            cls.configure = configured  # type: ignore[method-assign]
+
+    def configure(self, cfg: dict[str, Any]) -> None:
+        self.scope = parse_scope(cfg.get("scope"), market=self.market)
+
+    def universe(self, ctx: Context) -> list[Instrument]:
+        return self.scope.filter(ctx.universe)
 
     async def fetch(
         self, instruments: list[Instrument], since: datetime
@@ -71,40 +152,8 @@ class Context:
     plugins: dict[str, Plugin] = field(default_factory=dict)
 
 
-class StrategyPlugin(Plugin):
-    async def generate(self, ctx: Context) -> list[Signal]:
-        raise NotImplementedError
-
-
-class BrokerPlugin(Plugin):
-    async def submit(self, order: Order) -> Fill:
-        raise NotImplementedError
-
-    async def positions(self) -> list[Position]:
-        raise NotImplementedError
-
-    async def cash(self) -> float:
-        raise NotImplementedError
-
-
-class ReportPlugin(Plugin):
-    def render(self, report: Report) -> Path:
-        raise NotImplementedError
-
-
-@dataclass
-class Report:
-    date: str  # YYYY-MM-DD
-    signals: list[Signal]
-    orders: list[Order]
-    fills: list[Fill]
-    positions: list[Position]
-    cash: float
-    equity: float | None = None  # base currency; None when the renderer should omit it
-    base_currency: str = "AUD"
-
-
 PLUGIN_GROUP = "rigger.plugins"
+WATCHLIST_GROUP = "rigger.watchlists"
 
 
 def discover_plugins() -> dict[str, Plugin]:
@@ -117,6 +166,21 @@ def discover_plugins() -> dict[str, Plugin]:
         instance = cls()
         discovered[instance.name] = instance
     return discovered
+
+
+def discover_watchlists() -> dict[str, type[WatchlistPlugin]]:
+    """Load watchlist kinds from the ``rigger.watchlists`` group, keyed by kind.
+
+    Returns the class (a factory), not an instance, because one kind backs many
+    differently-named watchlists.
+    """
+    kinds: dict[str, type[WatchlistPlugin]] = {}
+    eps = entry_points()
+    group = eps.select(group=WATCHLIST_GROUP)
+    for ep in group:
+        cls = ep.load()
+        kinds[cls.kind] = cls
+    return kinds
 
 
 def apply_config(plugins: dict[str, Plugin], plugin_cfg: dict[str, dict[str, Any]]) -> None:

@@ -10,19 +10,19 @@ from rich.console import Console
 from rich.table import Table
 
 from rigger import services
-from rigger.runtime import Rigger, _store_signal  # noqa: F401  # re-exported for tests
+from rigger.runtime import Rigger
 
 app = typer.Typer(
-    help="Rigger — AI investment research and paper trading",
+    help="Rigger — AI investment research assistant",
     invoke_without_command=True,
 )
 console = Console()
 plugins_app = typer.Typer(help="Plugin management")
-paper_app = typer.Typer(help="Paper portfolio management")
+watchlist_app = typer.Typer(help="Watchlist management")
 llm_app = typer.Typer(help="LLM cost/model inspection")
 config_app = typer.Typer(help="Configuration")
 app.add_typer(plugins_app, name="plugins")
-app.add_typer(paper_app, name="paper")
+app.add_typer(watchlist_app, name="watchlist")
 app.add_typer(llm_app, name="llm")
 app.add_typer(config_app, name="config")
 
@@ -99,98 +99,82 @@ def extract(since: Annotated[str | None, typer.Option("--since")] = None) -> Non
     asyncio.run(services.extract(rig, since=since, log=console.print))
 
 
-@app.command()
-def analyse(
-    strategy: Annotated[str | None, typer.Option("--strategy")] = None,
-    dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
+@watchlist_app.command("add")
+def watchlist_add(
+    name: str,
+    market: Annotated[str, typer.Option("--market")],
+    tickers: Annotated[str, typer.Option("--tickers")],
+    max_pct: Annotated[float | None, typer.Option("--max-pct")] = None,
 ) -> None:
-    """Generate signals via strategy plugins."""
-    rig = Rigger()
-    asyncio.run(services.analyse(rig, strategies=strategy, dry_run=dry_run, log=console.print))
-
-
-@app.command()
-def execute(
-    since: Annotated[str | None, typer.Option("--since")] = None,
-    all_: Annotated[bool, typer.Option("--all")] = False,
-) -> None:
-    """Route pending signals through risk and broker."""
-    rig = Rigger()
-    asyncio.run(services.execute(rig, since=since, all_=all_, log=console.print))
-
-
-@app.command()
-def report(
-    format: Annotated[str, typer.Option("--format")] = "markdown",
-    date: Annotated[str | None, typer.Option("--date")] = None,
-) -> None:
-    """Render a report for a date."""
-    rig = Rigger()
+    """Create a watchlist of tickers."""
     try:
-        path = services.report(rig, date=date, fmt=format)
+        services.add_watchlist(name, market=market, tickers=tickers.split(","), max_pct=max_pct)
+    except (ValueError, KeyError) as exc:
+        console.print(f"[red]{exc.args[0]}[/red]")
+        raise typer.Exit(1) from exc
+    console.print(f"[green]Added watchlist [bold]{name}[/bold].[/green]")
+
+
+@watchlist_app.command("remove")
+def watchlist_remove(name: str) -> None:
+    """Delete a watchlist."""
+    try:
+        services.remove_watchlist(name)
     except KeyError as exc:
         console.print(f"[red]{exc.args[0]}[/red]")
         raise typer.Exit(1) from exc
-    console.print(f"[green]Report written to {path}[/green]")
+    console.print(f"[green]Removed watchlist [bold]{name}[/bold].[/green]")
 
 
-@app.command()
-def run() -> None:
-    """ingest → extract → analyse → execute → report."""
-    rig = Rigger()
-    asyncio.run(services.ingest(rig, log=console.print))
-    asyncio.run(services.extract(rig, log=console.print))
-    asyncio.run(services.analyse(rig, log=console.print))
-    asyncio.run(services.execute(rig, log=console.print))
-    path = services.report(rig)
-    console.print(f"[green]Report written to {path}[/green]")
-
-
-@paper_app.command("status")
-def paper_status() -> None:
-    rig = Rigger()
-    summary = services.portfolio_summary(rig)
-    table = Table(title="Paper Portfolio")
-    table.add_column("Instrument")
-    table.add_column("Qty")
-    table.add_column("Avg Price")
-    table.add_column(f"Value ({summary['base_currency']})")
-    for row in summary["positions"]:
+@watchlist_app.command("list")
+def watchlist_list() -> None:
+    """List watchlists."""
+    table = Table(title="Watchlists")
+    table.add_column("Name")
+    table.add_column("Market")
+    table.add_column("Holdings")
+    table.add_column("Max")
+    for name, spec in sorted(services.watchlist_specs().items()):
+        if spec.get("kind", "tickers") != "tickers":
+            continue
+        max_pct = spec.get("max_pct")
         table.add_row(
-            row["instrument_id"],
-            f"{row['qty']:.4f}",
-            f"{row['avg_price']:.2f} {row['currency']}",
-            f"{row['value']:,.2f}",
+            name,
+            spec.get("market", ""),
+            str(len(spec.get("tickers", []))),
+            f"{max_pct:.0f}%" if max_pct is not None else "",
         )
     console.print(table)
-    console.print(f"Cash: [bold]{summary['cash']:,.2f} {summary['base_currency']}[/bold]")
-    console.print(f"Equity: [bold]{summary['equity']:,.2f} {summary['base_currency']}[/bold]")
 
 
-@paper_app.command("reset")
-def paper_reset(
-    signals: Annotated[bool, typer.Option("--signals", help="Also delete stored signals")] = False,
-) -> None:
-    """Wipe orders, fills, positions and cash."""
-    rig = Rigger()
-    services.reset_paper(rig, signals=signals)
-    kept = "" if signals else " Signals kept."
-    console.print(f"[green]Paper portfolio reset.{kept}[/green]")
+@watchlist_app.command("show")
+def watchlist_show(name: str) -> None:
+    """Show one watchlist's holdings."""
+    specs = services.watchlist_specs()
+    if name not in specs or specs[name].get("kind", "tickers") != "tickers":
+        console.print(f"[red]Unknown watchlist: {name}[/red]")
+        raise typer.Exit(1)
+    spec = specs[name]
+    console.print(
+        f"[bold]{name}[/bold]  market={spec['market']}  tickers={', '.join(spec['tickers'])}"
+    )
+    if spec.get("max_pct") is not None:
+        console.print(f"max_pct = {spec['max_pct']}")
 
 
 @llm_app.command("costs")
 def llm_costs(since: Annotated[str | None, typer.Option("--since")] = None) -> None:
     rig = Rigger()
-    agg = services.llm_costs(rig.engine, since)
+    rows = services.llm_costs(rig.engine, since)
     table = Table(title="LLM Costs")
     table.add_column("Task")
     table.add_column("Model")
     table.add_column("Calls")
     table.add_column("Cost (USD)")
-    for (task, model), costs in sorted(agg.items()):
-        table.add_row(task, model, str(len(costs)), f"{sum(costs):.6f}")
+    for row in rows:
+        table.add_row(row.task, row.model, str(row.calls), f"{row.cost_usd:.6f}")
     console.print(table)
-    console.print(f"Total: [bold]{sum(sum(v) for v in agg.values()):.6f} USD[/bold]")
+    console.print(f"Total: [bold]{sum(row.cost_usd for row in rows):.6f} USD[/bold]")
 
 
 @llm_app.command("models")

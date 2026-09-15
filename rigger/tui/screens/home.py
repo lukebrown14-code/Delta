@@ -1,9 +1,9 @@
 """Home screen."""
 
 from textual.app import ComposeResult
-from textual.containers import Container, VerticalScroll
+from textual.containers import VerticalScroll
 from textual.screen import Screen
-from textual.widgets import Button, Static
+from textual.widgets import Static
 
 from rigger import services
 
@@ -17,11 +17,15 @@ class Home(Screen):
 
     def compose(self) -> ComposeResult:
         yield VerticalScroll(
-            Static("[bold cyan]RIGGER[/bold cyan] — research and paper trading", classes="title"),
-            Static("Ingest → Extract → Analyse → Execute → Report", classes="diagram"),
-            Container(Button("Run the daily pipeline", id="run-pipeline")),
+            Static(
+                "[bold cyan]RIGGER[/bold cyan] — investment research assistant", classes="title"
+            ),
+            Static(
+                "Watch what you care about → gather evidence → read sourced reports",
+                classes="diagram",
+            ),
             Static(id="checks"),
-            Static(id="summary"),
+            Static(id="watchlists"),
         )
 
     def on_mount(self) -> None:
@@ -35,14 +39,14 @@ class Home(Screen):
             for check in checks
         )
         self.query_one("#checks", Static).update("[bold]Setup checks[/bold]\n" + markup)
-        health = services.data_health(self.rig)
-        summary = "First run: add a key to .env, then use Pipeline → Ingest → Analyse."
-        if health.latest_bar:
-            summary = (
-                f"Stored signals: {health.counts['signal']} | latest bars: {len(health.latest_bar)}"
+        specs = services.watchlist_specs()
+        if specs:
+            lines = "\n".join(
+                f"{name}: {spec.get('market', '')} ({len(spec.get('tickers', []))} holdings)"
+                for name, spec in sorted(specs.items())
             )
-        self.query_one("#summary", Static).update(summary)
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "run-pipeline":
-            self.app.action_switch_screen("pipeline")
+            self.query_one("#watchlists", Static).update("[bold]Watchlists[/bold]\n" + lines)
+        else:
+            self.query_one("#watchlists", Static).update(
+                "[bold]Watchlists[/bold]\nNone configured — press w to add one."
+            )

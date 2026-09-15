@@ -20,7 +20,6 @@ class Settings(BaseSettings):
 
     openrouter_api_key: str = ""
     litellm_proxy_key: str = ""
-    live_trading: bool = False
 
 
 class AppConfig(BaseModel):
@@ -31,22 +30,10 @@ class AppConfig(BaseModel):
     reports_dir: str = "reports"
 
     universe: dict[str, list[str]] = Field(default_factory=dict)
+    watchlists: dict[str, dict[str, Any]] = Field(default_factory=dict)
     llm_provider: str = "litellm"
     llm_proxy_base_url: str = "http://localhost:4000"
     llm_routing: dict[str, str] = Field(default_factory=dict)
-    llm_ensemble_models: list[str] = Field(default_factory=list)
-    paper_starting_cash: float = 100_000.0
-    paper_slippage_bps: float = 5.0
-    risk: dict[str, float] = Field(
-        default_factory=lambda: {
-            "max_position_pct": 5.0,
-            "max_sector_pct": 25.0,
-            "max_gross_exposure_pct": 100.0,
-            "min_conviction": 0.6,
-            "daily_loss_halt_pct": 3.0,
-        }
-    )
-    schedule: dict[str, str] = Field(default_factory=dict)
     plugins: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
 
@@ -66,22 +53,18 @@ def build_config(raw: dict[str, Any] | None = None) -> AppConfig:
     cfg.reports_dir = raw.get("reports_dir", cfg.reports_dir)
 
     cfg.universe = raw.get("universe", {})
+    cfg.watchlists = {name: dict(values) for name, values in raw.get("watchlists", {}).items()}
+    for market, tickers in cfg.universe.items():
+        cfg.watchlists.setdefault(
+            f"universe_{market}",
+            {"kind": "tickers", "market": market, "tickers": list(tickers), "legacy": True},
+        )
 
     llm = raw.get("llm", {})
     cfg.llm_provider = llm.get("provider", cfg.llm_provider)
     cfg.llm_proxy_base_url = llm.get("proxy_base_url", cfg.llm_proxy_base_url)
     cfg.llm_routing = llm.get("routing", {})
-    cfg.llm_ensemble_models = llm.get("ensemble", {}).get("models", [])
 
-    paper = raw.get("paper", {})
-    cfg.paper_starting_cash = float(paper.get("starting_cash", cfg.paper_starting_cash))
-    cfg.paper_slippage_bps = float(paper.get("slippage_bps", cfg.paper_slippage_bps))
-
-    risk = raw.get("risk", {})
-    if risk:
-        cfg.risk.update({k: float(v) for k, v in risk.items() if isinstance(v, (int, float))})
-
-    cfg.schedule = raw.get("schedule", {})
     cfg.plugins = raw.get("plugins", {})
     return cfg
 

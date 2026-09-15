@@ -11,21 +11,27 @@ Screen {
     color: $text-muted;
 }
 
-#checks, #summary, #portfolio-summary, #health, #costs, #config {
+#checks, #watchlists, #health, #costs, #config {
     padding: 1 2;
 }
 
-#signals-table {
-    width: 55%;
+#console-input {
+    margin: 1 2;
 }
 
-#signal-detail {
-    width: 45%;
-    padding: 1 2;
+#console-log {
+    height: 1fr;
+    margin: 0 2;
 }
 
-#pipeline-log {
-    width: 75%;
+#watchlist-table {
+    height: 1fr;
+    margin: 1 2;
+}
+
+#wl-name, #wl-market, #wl-tickers {
+    width: 1fr;
+    margin: 1;
 }
 
 .modal {

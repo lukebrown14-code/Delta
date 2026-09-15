@@ -10,12 +10,11 @@ from textual.binding import Binding
 from rigger import services
 from rigger.runtime import Rigger
 from rigger.tui.screens.config import Config
+from rigger.tui.screens.console import Console
 from rigger.tui.screens.data import Data
 from rigger.tui.screens.help import HelpScreen
 from rigger.tui.screens.home import Home
-from rigger.tui.screens.pipeline import Pipeline
-from rigger.tui.screens.portfolio import Portfolio
-from rigger.tui.screens.signals import Signals
+from rigger.tui.screens.watchlists import Watchlists
 
 
 class RiggerApp(App):
@@ -23,11 +22,10 @@ class RiggerApp(App):
     CSS_PATH = "rigger.tcss"
     BINDINGS = [
         Binding("1", "switch_screen('home')", "Home"),
-        Binding("2", "switch_screen('signals')", "Signals"),
-        Binding("3", "switch_screen('portfolio')", "Portfolio"),
-        Binding("4", "switch_screen('pipeline')", "Pipeline"),
-        Binding("5", "switch_screen('data')", "Data"),
-        Binding("6", "switch_screen('config')", "Config"),
+        Binding("2", "switch_screen('data')", "Data"),
+        Binding("3", "switch_screen('config')", "Config"),
+        Binding("c", "switch_screen('console')", "Console"),
+        Binding("w", "switch_screen('watchlists')", "Watchlists"),
         Binding("question_mark", "show_help", "Help"),
         Binding("q", "quit", "Quit"),
     ]
@@ -42,11 +40,10 @@ class RiggerApp(App):
     def on_mount(self) -> None:
         self._screens = {
             "home": Home(self.rig),
-            "signals": Signals(self.rig),
-            "portfolio": Portfolio(self.rig),
-            "pipeline": Pipeline(self.rig),
             "data": Data(self.rig),
             "config": Config(self.rig),
+            "console": Console(self.rig),
+            "watchlists": Watchlists(self.rig),
         }
         for screen in self._screens.values():
             self.install_screen(screen, screen.name)

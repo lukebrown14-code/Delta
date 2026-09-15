@@ -17,13 +17,8 @@ from rigger.llm.client import LLMResult
 class FakeConfig:
     """Minimal stand-in for AppConfig: only the fields strategies read."""
 
-    def __init__(
-        self,
-        llm_routing: dict[str, str] | None = None,
-        llm_ensemble_models: list[str] | None = None,
-    ) -> None:
+    def __init__(self, llm_routing: dict[str, str] | None = None) -> None:
         self.llm_routing = llm_routing or {}
-        self.llm_ensemble_models = llm_ensemble_models or []
 
 
 def seed_bars(
@@ -91,8 +86,6 @@ def fake_llm() -> FakeLLM:
 
 @pytest.fixture
 def tmp_engine(tmp_path: Path):
-    from rigger.core.db import ensure_cash, init_engine
+    from rigger.core.db import init_engine
 
-    engine = init_engine(tmp_path / "test.db")
-    ensure_cash(engine, "AUD", 100_000.0)
-    return engine
+    return init_engine(tmp_path / "test.db")

@@ -25,14 +25,22 @@ class Config(Screen):
             f"{name}: {'enabled' if plugin.enabled else 'disabled'}"
             for name, plugin in sorted(self.rig.plugins.items())
         )
-        universe = "\n".join(
-            f"{market}: {', '.join(symbols)}" for market, symbols in cfg.universe.items()
+        configured_watchlists = {
+            name: spec
+            for name, spec in getattr(cfg, "watchlists", {}).items()
+            if not spec.get("legacy", False)
+        }
+        watchlists = (
+            "\n".join(
+                f"{name}: {spec.get('market', '')} ({len(spec.get('tickers', []))} holdings)"
+                for name, spec in sorted(configured_watchlists.items())
+            )
+            or "none (legacy universe entries are active)"
         )
         routing = "\n".join(f"{task}: {model}" for task, model in cfg.llm_routing.items())
         self.query_one("#config", Static).update(
             f"[bold]Provider[/bold] {cfg.llm_provider}\n\n"
-            f"[bold]Universe[/bold]\n{universe}\n\n"
+            f"[bold]Watchlists[/bold]\n{watchlists}\n\n"
             f"[bold]Model routing[/bold]\n{routing}\n\n"
-            f"[bold]Risk limits[/bold]\n{cfg.risk}\n\n"
             f"[bold]Plugins[/bold]\n{plugins}"
         )

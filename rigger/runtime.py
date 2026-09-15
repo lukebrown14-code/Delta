@@ -2,35 +2,37 @@
 
 from __future__ import annotations
 
-from sqlmodel import Session
-
 from rigger.core import config as config_mod
-from rigger.core.db import SignalTable, ensure_cash, init_engine
-from rigger.core.json import to_json
-from rigger.core.models import Signal
-from rigger.core.plugin import Context, MarketPlugin, ReportPlugin, apply_config, discover_plugins
+from rigger.core.db import init_engine
+from rigger.core.models import Instrument
+from rigger.core.plugin import (
+    Context,
+    MarketPlugin,
+    WatchlistPlugin,
+    apply_config,
+    discover_plugins,
+    discover_watchlists,
+)
 from rigger.llm.client import build_client
-from rigger.paper.portfolio import PaperPortfolio
+from rigger.plugins.watchlists.tickers import TickerWatchlist
 
 
 class Rigger:
     def __init__(self) -> None:
         self.settings, self.cfg = config_mod.load_config()
         self.engine = init_engine(self.cfg.db_path)
-        ensure_cash(self.engine, self.cfg.base_currency, self.cfg.paper_starting_cash)
 
         self.plugins = discover_plugins()
         apply_config(self.plugins, self.cfg.plugins)
-        for plugin in self.plugins.values():
-            if isinstance(plugin, ReportPlugin):
-                table = dict(self.cfg.plugins.get(plugin.name, {}))
-                table.setdefault("reports_dir", self.cfg.reports_dir)
-                plugin.configure(table)
 
         for market_name, tickers in self.cfg.universe.items():
-            mp = self.plugins.get(market_name)
-            if mp is not None:
-                mp.configure({"tickers": tickers})
+            market_plugin = self.plugins.get(market_name)
+            if isinstance(market_plugin, MarketPlugin):
+                table = dict(self.cfg.plugins.get(market_name, {}))
+                table["tickers"] = list(tickers)
+                market_plugin.configure(table)
+
+        self.watchlists = self._build_watchlists()
 
         self.llm = build_client(
             provider=self.cfg.llm_provider,
@@ -39,29 +41,79 @@ class Rigger:
             litellm_proxy_key=self.settings.litellm_proxy_key,
             proxy_base_url=self.cfg.llm_proxy_base_url,
         )
-        currencies = {
-            name: p.currency
-            for name, p in self.plugins.items()
-            if isinstance(p, MarketPlugin) and p.enabled
+
+    def universe(self) -> list[Instrument]:
+        merged: dict[str, Instrument] = {}
+        market_defaults = {
+            inst.id: inst
+            for plugin in self.plugins.values()
+            if plugin.enabled and isinstance(plugin, MarketPlugin)
+            for inst in plugin.universe()
         }
-        self.portfolio = PaperPortfolio(
-            self.engine,
-            self.cfg.base_currency,
-            self.cfg.paper_slippage_bps,
-            currencies=currencies,
+        for watchlist in self.watchlists.values():
+            for instrument in watchlist.instruments():
+                default = market_defaults.get(instrument.id)
+                if default is not None:
+                    instrument = instrument.model_copy(
+                        update={
+                            "name": default.name or instrument.name,
+                            "sector": instrument.sector or default.sector,
+                            "currency": instrument.currency or default.currency,
+                        }
+                    )
+                existing = merged.get(instrument.id)
+                if existing is None:
+                    merged[instrument.id] = instrument
+                    continue
+                merged[instrument.id] = existing.model_copy(
+                    update={
+                        "watchlists": tuple(
+                            dict.fromkeys(existing.watchlists + instrument.watchlists)
+                        ),
+                        "tags": existing.tags | instrument.tags,
+                        "sector": existing.sector or instrument.sector,
+                        "asset_class": (
+                            instrument.asset_class
+                            if instrument.asset_class != "equity"
+                            else existing.asset_class
+                        ),
+                    }
+                )
+        return list(merged.values())
+
+    def _build_watchlists(self) -> dict[str, WatchlistPlugin]:
+        kinds = discover_watchlists()
+        if "tickers" not in kinds:
+            kinds["tickers"] = TickerWatchlist
+
+        watchlists: dict[str, WatchlistPlugin] = {}
+        for name, spec in self.cfg.watchlists.items():
+            kind_name = spec.get("kind", "tickers")
+            cls = kinds.get(kind_name)
+            if cls is None:
+                available = ", ".join(sorted(kinds))
+                raise KeyError(
+                    f"watchlist {name!r} names unknown kind {kind_name!r}; "
+                    f"known kinds are {available}"
+                )
+            instance = cls()
+            instance.configure({"name": name, "label": spec.get("label", name), **spec})
+            market = getattr(instance, "market", "")
+            if kind_name == "tickers" and market not in self.known_markets():
+                known = ", ".join(self.known_markets()) or "none"
+                raise KeyError(
+                    f"watchlist {name!r} names market {market!r}; known markets are {known}"
+                )
+            watchlists[name] = instance
+
+        return watchlists
+
+    def known_markets(self) -> list[str]:
+        return sorted(
+            {name for name, plugin in self.plugins.items() if isinstance(plugin, MarketPlugin)}
         )
-        broker = self.plugins.get("paper")
-        if broker is not None:
-            broker.bind(self.portfolio)
 
-    def universe(self):
-        out = []
-        for plugin in self.plugins.values():
-            if plugin.enabled and isinstance(plugin, MarketPlugin):
-                out.extend(plugin.universe())
-        return out
-
-    def context(self, universe=None) -> Context:
+    def context(self, universe: list[Instrument] | None = None) -> Context:
         return Context(
             engine=self.engine,
             settings=self.settings,
@@ -72,27 +124,4 @@ class Rigger:
         )
 
 
-def _store_signal(session: Session, s: Signal) -> None:
-    session.add(
-        SignalTable(
-            id=s.id,
-            ts=s.ts,
-            instrument_id=s.instrument_id,
-            strategy=s.strategy,
-            direction=s.direction,
-            conviction=s.conviction,
-            horizon_days=s.horizon_days,
-            thesis=s.thesis,
-            invalidation=s.invalidation,
-            evidence_ids=to_json(s.evidence_ids),
-            model=s.model,
-            prompt_version=s.prompt_version,
-            cost_usd=s.cost_usd,
-            metadata_=s.metadata,
-        )
-    )
-
-
-store_signal = _store_signal
-
-__all__ = ["Rigger", "_store_signal", "store_signal"]
+__all__ = ["Rigger"]

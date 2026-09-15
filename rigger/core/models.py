@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 
 #: Instrument id prefix format: "<MARKET>:<SYMBOL>", e.g. "US:AAPL".
 InstrumentId = str
+AssetClass = Literal["equity", "etf", "bond", "fx", "commodity", "crypto", "cash", "other"]
 
 
 class Instrument(BaseModel):
@@ -22,6 +23,15 @@ class Instrument(BaseModel):
     name: str | None = None
     currency: str
     sector: str | None = None
+    asset_class: AssetClass = "equity"
+    watchlists: tuple[str, ...] = ()
+    tags: frozenset[str] = frozenset()
+    industry: str | None = None
+    meta: dict[str, Any] = Field(default_factory=dict)
+
+    @property
+    def sector_name(self) -> str:
+        return self.sector or "unknown"
 
 
 class Bar(BaseModel):
@@ -75,64 +85,6 @@ class Fundamental(BaseModel):
     metric: str
     value: float
     source: str
-
-
-Direction = Literal["long", "short", "flat"]
-
-
-class Signal(BaseModel):
-    id: str
-    ts: datetime
-    instrument_id: str
-    strategy: str  # plugin name
-    direction: Direction
-    conviction: float = Field(ge=0, le=1)
-    horizon_days: int
-    thesis: str
-    invalidation: str
-    evidence_ids: list[str] = Field(default_factory=list)
-    model: str | None = None
-    prompt_version: str | None = None
-    cost_usd: float | None = None
-    metadata: dict[str, Any] = Field(default_factory=dict)
-
-
-class Order(BaseModel):
-    id: str
-    signal_id: str
-    instrument_id: str
-    side: Literal["buy", "sell"]
-    qty: float
-    type: Literal["market", "limit"] = "market"
-    limit_price: float | None = None
-    submitted_ts: datetime
-    broker: str
-
-
-class Fill(BaseModel):
-    order_id: str
-    ts: datetime
-    qty: float
-    price: float
-    fee: float
-    slippage: float
-
-
-class Position(BaseModel):
-    instrument_id: str
-    qty: float
-    avg_price: float
-    opened_ts: datetime
-    signal_id: str
-
-
-class Evaluation(BaseModel):
-    signal_id: str
-    evaluated_ts: datetime
-    horizon_return: float
-    hit: bool
-    benchmark_return: float
-    excess_return: float
 
 
 class LLMCall(BaseModel):

@@ -1,7 +1,7 @@
 [project]
 name = "rigger"
 version = "0.1.0"
-description = "AI-driven investment research and paper-trading harness"
+description = "AI-driven investment research assistant"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
@@ -33,13 +33,10 @@ yfinance_data = "rigger.plugins.data.yfinance:YFinanceData"
 asx_announcements = "rigger.plugins.data.asx_announcements:ASXAnnouncements"
 sec_edgar = "rigger.plugins.data.sec_edgar:SECEdgar"
 yfinance_calendar = "rigger.plugins.data.yfinance_calendar:YFinanceCalendar"
-llm_analyst = "rigger.plugins.strategies.llm_analyst:LLMAnalyst"
-ensemble = "rigger.plugins.strategies.ensemble:Ensemble"
-critic = "rigger.plugins.strategies.critic:Critic"
-paper_broker = "rigger.plugins.brokers.paper:PaperBroker"
-markdown_report = "rigger.plugins.reports.markdown:MarkdownReport"
 rss = "rigger.plugins.data.rss:RSSData"
-momentum = "rigger.plugins.strategies.momentum:Momentum"
+
+[project.entry-points."rigger.watchlists"]
+tickers = "rigger.plugins.watchlists.tickers:TickerWatchlist"
 
 [build-system]
 requires = ["uv_build>=0.12.13,<0.13.0"]

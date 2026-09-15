@@ -6,6 +6,7 @@ from datetime import UTC, datetime, time, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from rigger.core.ids import make_instrument_id
 from rigger.core.models import Instrument
 from rigger.core.plugin import MarketPlugin
 
@@ -31,7 +32,7 @@ class ASXMarket(MarketPlugin):
     def universe(self) -> list[Instrument]:
         return [
             Instrument(
-                id=f"ASX:{code}",
+                id=make_instrument_id("ASX", code),
                 market=self.name,
                 symbol=code,
                 name=code,
