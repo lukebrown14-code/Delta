@@ -1,0 +1,33 @@
+Screen {
+    layout: vertical;
+}
+
+.title {
+    padding: 1 2;
+}
+
+.diagram {
+    padding: 1 2;
+    color: $text-muted;
+}
+
+#checks, #summary, #portfolio-summary, #health, #costs, #config {
+    padding: 1 2;
+}
+
+#signals-table {
+    width: 55%;
+}
+
+#signal-detail {
+    width: 45%;
+    padding: 1 2;
+}
+
+#pipeline-log {
+    width: 75%;
+}
+
+.modal {
+    padding: 2 4;
+}

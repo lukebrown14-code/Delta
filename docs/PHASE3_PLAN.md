@@ -2,7 +2,8 @@
 
 > Split of Phase 3 (`PROJECT_SPEC.md` §10, §13) into a foundation step and four
 > parallel workstreams. Agent prompts live in `docs/agents/phase3/`. Same
-> working rules as Phase 2 (`docs/PHASE2_PLAN.md`).
+> working rules as Phase 2: no behaviour change without a test, offline
+> `pytest`, one PR per workstream.
 
 ## Goal
 

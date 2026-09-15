@@ -1,9 +1,8 @@
 # Model Selection Plan — opencode-style model choice for Rigger
 
 > Make "which model runs this step" a thing you browse and pick, not a string
-> you remember and hand-edit. Same working rules as Phase 2
-> (`docs/PHASE2_PLAN.md`): no behaviour change without a test, `pytest` stays
-> offline.
+> you remember and hand-edit. Same working rules as Phase 2: no behaviour
+> change without a test, `pytest` stays offline.
 
 ## Goal
 
@@ -127,7 +126,7 @@ against what it has been costing.
 
 ## Step 4 — The picker
 
-Config screen (tab `6` in `docs/TUI_PLAN.md`) gains a routing table: task,
+Config screen (tab `6` in the TUI) gains a routing table: task,
 model, source, 30-day spend. `enter` on a row opens a `ModelPicker` modal:
 
 - `Input` filter over `ModelInfo.id` and `.name`, substring match,

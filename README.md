@@ -60,6 +60,16 @@ Model ids are plain strings in `[llm.routing]`. Change them freely.
 
 ## Run
 
+Open the terminal UI:
+
+```bash
+uv run rig
+```
+
+Use `1`–`6` to switch between Home, Signals, Portfolio, Pipeline, Data & Costs, and Config. `uv run rig tui` is also available.
+
+### Scripting
+
 The whole daily pipeline in one command:
 
 ```bash
@@ -107,6 +117,9 @@ rigger/
 ├── core/        models, SQLite (SQLModel), config, plugin registry, event bus
 ├── llm/         provider-agnostic client, routing, structured JSON calls, prompt templates
 ├── paper/       portfolio accounting, FX conversion, fee/slippage model, risk rules
+├── runtime.py   shared Rigger wiring and signal persistence
+├── services.py  pipeline operations and read-side queries
+├── tui/         Textual app, screens, widgets, and styles
 ├── brief.py     facts-only brief: prices, news, events, fundamentals, calendar
 ├── extract.py   news → structured Event rows via the extract model
 ├── plugins/
@@ -126,13 +139,13 @@ Plugins are discovered through the `rigger.plugins` entry-point group in `pyproj
 ```bash
 uv run pytest
 uv run ruff check . && uv run ruff format .
-uv run mypy rigger/core rigger/llm
+uv run mypy rigger/core rigger/llm rigger/paper rigger/services.py
 ```
 
 ## Roadmap
 
 1. **Phase 1** — skeleton: `rig run` on five US tickers yields a report with evidence-linked signals and paper fills. *(done)*
-2. **Phase 2** — information edge: RSS, ASX announcements, SEC EDGAR, event extraction, critic and ensemble strategies, momentum baseline. *(done, see `docs/PHASE2_PLAN.md`)*
+2. **Phase 2** — information edge: RSS, ASX announcements, SEC EDGAR, event extraction, critic and ensemble strategies, momentum baseline. *(done)*
 3. **Phase 3** — evaluation loop: scorecard, source attribution, backtesting. *(next)*
 4. **Phase 4** — automation: scheduler, HTML/email reports, full risk rules, CI.
 5. **Phase 5** — optional: Rust hot paths, live brokers (hard-gated), crypto, dashboard, alerts.

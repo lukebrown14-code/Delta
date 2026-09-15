@@ -343,7 +343,14 @@ Replays the daily pipeline over `[from, to]` using only data with `ts <= day`. L
 
 ---
 
-## 11. CLI (`rig`)
+## 11. Interfaces (`rig` TUI + CLI)
+
+The **TUI is the primary interface**; `rig` with no subcommand opens it. The **CLI is the scripting surface** and shares all pipeline logic with the TUI through `rigger/services.py` (screens call services; services never import Textual).
+
+```
+rig                               # open the terminal UI (also: rig tui)
+rig --help                        # every command, still available
+```
 
 ```
 rig plugins list [--type data|strategy|...]
