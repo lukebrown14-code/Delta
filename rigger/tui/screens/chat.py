@@ -20,7 +20,8 @@ class Chat(RiggerScreen):
     """Standalone chat surface: pick targets, ask, watch the cited answer arrive."""
 
     name = "chat"
-    AUTO_FOCUS = "#chat-input"
+    # No AUTO_FOCUS here: the input would swallow the global single-letter
+    # navigation keys (1..6, c, w) before they can reach the app bindings.
 
     CSS = """
     #chat-split {
@@ -76,11 +77,11 @@ class Chat(RiggerScreen):
                 )
                 yield Input(placeholder="Ask about the selected targets...", id="chat-input")
 
-    def on_mount(self) -> None:
+    async def on_mount(self) -> None:
         selections = self.query_one("#chat-targets", SelectionList)
         for target in sorted(services.target_specs().values(), key=lambda t: t.id):
             selections.add_option((f"{target.id} ({target.kind})", target.id, False))
-        self._render_transcript()
+        await self._render_transcript()
 
     async def on_input_submitted(self, event: Input.Submitted) -> None:
         if event.input.id != "chat-input":

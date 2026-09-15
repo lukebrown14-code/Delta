@@ -5,10 +5,12 @@ from __future__ import annotations
 import shlex
 
 from textual.app import ComposeResult
-from textual.widgets import Input, RichLog
+from textual.containers import Horizontal
+from textual.widgets import Input, RichLog, Static
 
 from rigger import services
 from rigger.tui.shell import RiggerScreen
+from rigger.tui.widgets import Card
 
 
 class Console(RiggerScreen):
@@ -19,11 +21,21 @@ class Console(RiggerScreen):
         super().__init__(rig)
 
     def compose_content(self) -> ComposeResult:
-        yield Input(
-            placeholder="target add mining --kind industry --market asx --tickers BHP,RIO",
-            id="console-input",
-        )
-        yield RichLog(id="console-log")
+        with Card(title="Command console", classes="console-card"):
+            yield Static(
+                "type help for commands — target add | remove | list | show, config show",
+                markup=False,
+                classes="muted",
+            )
+            yield Horizontal(
+                Static("❯", markup=False, classes="console-prompt"),
+                Input(
+                    placeholder="target add mining --kind industry --market asx --tickers BHP,RIO",
+                    id="console-input",
+                ),
+                classes="console-row",
+            )
+            yield RichLog(id="console-log")
 
     def on_mount(self) -> None:
         self.query_one("#console-log", RichLog).write("Ready. Enter a command.")

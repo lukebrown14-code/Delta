@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
+from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
@@ -16,6 +17,15 @@ from rigger.llm.providers import Provider
 
 def _per_million(price: float) -> str:
     return f"{price * 1_000_000:.2f}"
+
+
+def _price_style(price_per_million: float) -> str:
+    """Grade a price string: green cheap, amber mid, red premium."""
+    if price_per_million < 1:
+        return "success"
+    if price_per_million < 10:
+        return "warning"
+    return "error"
 
 
 class ModelPicker(ModalScreen[ModelInfo | None]):
@@ -31,12 +41,20 @@ class ModelPicker(ModalScreen[ModelInfo | None]):
     ]
 
     DEFAULT_CSS = """
-    ModelPicker { align: center middle; }
+    ModelPicker {
+        align: center middle;
+        background: $background 60%;
+    }
     ModelPicker > Vertical {
         border: round $primary;
+        background: $surface;
         padding: 0 1;
         width: 80;
         max-height: 90%;
+    }
+    ModelPicker #mp-title {
+        color: $primary;
+        text-style: bold;
     }
     ModelPicker #mp-table { max-height: 20; }
     ModelPicker #mp-status { color: $text-muted; }
@@ -95,11 +113,13 @@ class ModelPicker(ModalScreen[ModelInfo | None]):
         ]
         for m in self._visible:
             context = "" if m.context_length is None else str(m.context_length)
+            prompt = m.prompt_price * 1_000_000
+            completion = m.completion_price * 1_000_000
             table.add_row(
                 m.id,
                 context,
-                _per_million(m.prompt_price),
-                _per_million(m.completion_price),
+                Text(_per_million(m.prompt_price), style=_price_style(prompt)),
+                Text(_per_million(m.completion_price), style=_price_style(completion)),
                 key=m.id,
             )
         status.update(f"{table.row_count} models")

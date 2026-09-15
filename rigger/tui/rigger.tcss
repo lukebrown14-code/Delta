@@ -177,13 +177,23 @@ Button {
 
 /* ---------- console ---------- */
 
-#console-input {
-    margin: 1 0;
+.console-card {
+    height: 1fr;
+}
+
+.console-row {
+    height: auto;
+    margin: 1 0 0 0;
+}
+
+.console-row #console-input {
+    margin: 0;
+    width: 1fr;
 }
 
 #console-log {
     height: 1fr;
-    margin: 0;
+    margin: 1 0 0 0;
     background: $surface;
     border: round $panel;
 }
