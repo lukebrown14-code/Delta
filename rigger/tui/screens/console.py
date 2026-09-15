@@ -1,4 +1,4 @@
-"""In-app command console: run the CLI's target commands without leaving the TUI."""
+"""In-app command console: manage targets and inspect config without leaving the TUI."""
 
 from __future__ import annotations
 

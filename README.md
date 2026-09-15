@@ -76,34 +76,13 @@ uv run rig
 | `m` | Model picker |
 | `?` / `q` | Help / quit |
 
-### Or from the shell
-
-```bash
-uv run rig target add mining --kind sector --market asx --tickers BHP,RIO,FMG
-uv run rig target list
-uv run rig ingest --since 2025-01-01      # prices, news, filings, fundamentals, calendar
-uv run rig extract                        # news → structured events
-uv run rig report mining                  # writes reports/mining/<date>.md
-```
+Everything happens inside the app. The console (**c**) takes target commands — `target add mining --kind industry --market asx --tickers BHP,RIO,FMG`, `target list`, `target remove`, `target show` — and the command palette (ctrl+p) has a **Gather evidence** action that ingests prices, news, filings and fundamentals, then turns the news into structured events.
 
 Targets come in five kinds — `company`, `sector`, `industry`, `market` and `theme`. All but `market` name tickers in one market; a market target names only the market. Older `[watchlists]` tables keep working, with their kind inferred from shape.
 
-Theses are optional. Skip them entirely and you still get targets, evidence and reports:
+Theses are optional. Skip them entirely and you still get targets, evidence and reports. On the Theses screen (**5**) write down something you believe, let the model propose candidate evidence, and accept or reject each piece yourself.
 
-```bash
-uv run rig thesis create "Iron ore demand holds through 2027" --targets mining
-uv run rig thesis propose <id>    # model suggests candidate evidence; you accept it
-uv run rig thesis show <id>
-```
-
-Inspect things:
-
-```bash
-uv run rig llm costs --since 2026-09-01
-uv run rig llm models
-uv run rig plugins list
-uv run rig config show && uv run rig config validate
-```
+To see what data has landed and what the model has cost you, press **2** for Data. To check your configuration, press **3** for Config.
 
 ## Project layout
 
@@ -123,7 +102,6 @@ rigger/
 ├── theses.py        long-horizon claims with evidence for and against
 ├── thesis_health.py pure function over accepted evidence
 ├── tui/             Textual app and screens
-└── cli.py           the `rig` command
 tests/               pytest, fully offline (respx + a fake LLM)
 ```
 

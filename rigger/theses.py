@@ -188,7 +188,7 @@ def list_theses(engine: Engine) -> list[Thesis]:
 def get_thesis(engine: Engine, id: str) -> Thesis:
     """One thesis by id or unique id prefix; ``KeyError`` when unknown.
 
-    The CLI and TUI show ids truncated, so a prefix is what a user has to hand.
+    The TUI shows ids truncated, so a prefix is what a user has to hand.
     """
     _ensure_tables(engine)
     with Session(engine) as session:

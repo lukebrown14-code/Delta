@@ -1,4 +1,4 @@
-"""Pipeline services shared by the CLI and TUI."""
+"""Pipeline services shared by the TUI."""
 
 from __future__ import annotations
 
@@ -297,5 +297,5 @@ def setup_checks(rig: Any) -> list[Check]:
         )
     )
     health = data_health(rig)
-    checks.append(Check("Price history", bool(health.latest_bar), "Run rig ingest"))
+    checks.append(Check("Price history", bool(health.latest_bar), "Gather evidence"))
     return checks

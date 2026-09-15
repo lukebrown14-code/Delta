@@ -1,4 +1,4 @@
-"""Runtime wiring shared by the CLI, services, and TUI."""
+"""Runtime wiring shared by the services and TUI."""
 
 from __future__ import annotations
 
