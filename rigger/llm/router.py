@@ -3,12 +3,18 @@
 from __future__ import annotations
 
 
-def model_for(config: object, task: str) -> str:
-    """Model id for ``task`` from ``config.llm_routing``; fails loudly when unrouted.
+def model_for(config: object, task: str, *, plugin: str | None = None) -> str:
+    """Model id for ``task``; ``[plugins.<plugin>].model`` beats ``[llm.routing]``.
 
     Strategies must not fall back to hard-coded model literals: a missing route
-    would silently diverge from config.toml.
+    would silently diverge from config.toml. An empty-string override is
+    ignored, and an unrouted task fails loudly.
     """
+    if plugin:
+        plugins: dict[str, dict[str, object]] = getattr(config, "plugins", {}) or {}
+        override = plugins.get(plugin, {}).get("model")
+        if isinstance(override, str) and override:
+            return override
     routing: dict[str, str] = getattr(config, "llm_routing", {}) or {}
     try:
         return routing[task]
