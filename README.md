@@ -1,31 +1,33 @@
 # Rigger
 
-AI-driven investment research and paper-trading harness.
+A personal investment research assistant for people who enjoy investing as a hobby.
 
-Rigger gathers market data, builds a factual brief per instrument, asks an LLM for evidence-backed trade signals, paper trades them with realistic fees and slippage, and scores every decision against real outcomes. The edge is meant to come from information quality and evaluation discipline, not from any single model.
+You tell Rigger what you're interested in — a company, a sector, an industry, a market, a theme. It gathers evidence about them from public sources, an AI synthesises that evidence into reports you can check line by line, and an optional thesis layer tracks a long-horizon idea as evidence accumulates for and against it.
 
-**Status:** Phase 2 (information edge) merged. US and ASX markets, five data sources, four strategies. Paper trading only. Nothing here is financial advice.
+**It does not trade, and it does not tell you what to buy.** The product is clarity: organised facts, cited summaries, and somewhere to reason about an idea. Nothing here is financial advice.
 
-See [PROJECT_SPEC.md](PROJECT_SPEC.md) for the full specification, architecture, plugin contracts and build phases.
-
-## How it works
+## What it does
 
 ```
-Data plugins ──ingest──▶ SQLite ──extract──▶ Events ──brief──▶ Strategy plugins ──▶ Signals + evidence
-(yfinance, rss, sec_edgar,          (LLM turns news            (llm_analyst, critic,        │
- asx_announcements, calendar)        into structured facts)     ensemble, momentum)         │
-                                                                              risk rules ──▶ Orders ──▶ Paper fills
-                                                                                                            │
-                                                                                     Markdown report (reports/YYYY-MM-DD.md)
+Data plugins ──ingest──▶ SQLite ──extract──▶ Events
+(yfinance, rss, sec_edgar,          (LLM turns news into
+ asx_announcements, calendar)        structured facts)
+                                              │
+                                    evidence pool (prices, news, events, fundamentals)
+                                              │
+                    ┌─────────────────────────┼─────────────────────────┐
+                    ▼                         ▼                         ▼
+             cited reports              grounded chat            optional theses
+        (reports/<target>/<date>.md)  (local data first,    (evidence for and against,
+                                       web search opt-in)      health computed, not claimed)
 ```
 
-Principles the code enforces:
+Four rules the code actually enforces:
 
-- **Facts come from the harness, not the model.** Prompts forbid reasoning from memory. Every fact the model uses is in the brief.
-- **Every signal carries evidence.** Signals without traceable evidence IDs are rejected.
-- **Everything is logged.** Every LLM call, signal, order and fill is persisted with model, prompt version and cost.
-- **Paper before live.** Live trading does not exist yet and will be hard-gated when it does.
-- **Config over code.** Universe, model routing, risk limits and schedules live in `config.toml`.
+- **Facts come from the harness, not the model.** Prompts forbid reasoning from memory. Every fact the model uses was collected by a data plugin.
+- **Everything is cited.** A report claim naming an evidence id that wasn't gathered is dropped before you see it, and a draft left with no substantive claims is rejected outright. Chat citations are machine-checked; an answer without verifiable support is labelled AI inference rather than passed off as fact.
+- **The AI synthesises and challenges — it doesn't tip.** It summarises what was found and argues both sides. It does not recommend buying or selling.
+- **Discovery never auto-accepts.** A thesis proposes *candidate* evidence; only you accept it, and thesis health is computed by a pure function over what you accepted. The model can write prose about that state, but it never decides it.
 
 ## Requirements
 
@@ -44,114 +46,103 @@ cp .env.example .env      # then fill in your key(s)
 
 ## Configure
 
-`config.toml` holds the universe, model routing, paper and risk settings. The defaults track five US and five ASX tickers and use AUD as the base currency. Each plugin has a `[plugins.<name>]` table with an `enabled` flag; set `[plugins.sec_edgar].contact` to a real email before ingesting US filings, as the SEC requires it.
+`config.toml` holds your targets, model routing and plugin settings. `.env` holds secrets and is never committed.
 
-Cash and equity are kept in `base_currency`. Foreign prices are converted with daily FX bars (for example `FX:USDAUD`, AUD per US dollar) that `rig ingest` fetches alongside the universe, so run `ingest` before `execute`. Fill prices and position averages stay in each instrument's own currency.
+Pick a provider under `[llm]`:
 
-`.env` holds secrets. Pick a provider in `config.toml` under `[llm]`:
+| `provider`      | What it does                                | Key needed |
+|-----------------|---------------------------------------------|------------|
+| `openrouter`    | One API for many models                     | `OPENROUTER_API_KEY` |
+| `litellm`       | LiteLLM SDK, calls vendors directly         | `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY` as needed |
+| `litellm-proxy` | A LiteLLM proxy you run at `proxy_base_url` | `LITELLM_PROXY_KEY` |
 
-| `provider`      | What it does                                   | Key needed                                          |
-|-----------------|------------------------------------------------|-----------------------------------------------------|
-| `openrouter`    | One API for many models                        | `OPENROUTER_API_KEY`                                |
-| `litellm`       | LiteLLM SDK, calls vendors directly            | `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY` as needed |
-| `litellm-proxy` | A LiteLLM proxy you run at `proxy_base_url`    | `LITELLM_PROXY_KEY`                                 |
+Four jobs route to models independently in `[llm.routing]` — `extract`, `report`, `chat` and `thesis` — so you can put a cheap fast model on bulk news extraction and a stronger one on reports. Model ids are plain strings; change them freely, or press `m` in the app to browse what your provider offers, with prices.
 
-Model ids are plain strings in `[llm.routing]`. Change them freely.
+Set `[plugins.sec_edgar].contact` to a real email before ingesting US filings — the SEC requires a contact address in the User-Agent.
 
-## Run
+## Use it
 
-Open the terminal UI:
+Open the app:
 
 ```bash
 uv run rig
 ```
 
-Use `1`–`6` to switch between Home, Signals, Portfolio, Pipeline, Data & Costs, and Config. `uv run rig tui` is also available.
+| Key | Screen |
+|-----|--------|
+| `1`–`6` | Home, Data, Config, Reports, Theses, Chat |
+| `w` | Targets — what you're following |
+| `c` | Console |
+| `m` | Model picker |
+| `?` / `q` | Help / quit |
 
-### Scripting
-
-The whole daily pipeline in one command:
+### Or from the shell
 
 ```bash
-uv run rig run
+uv run rig target add mining --kind sector --market asx --tickers BHP,RIO,FMG
+uv run rig target list
+uv run rig ingest --since 2025-01-01      # prices, news, filings, fundamentals, calendar
+uv run rig extract                        # news → structured events
+uv run rig report mining                  # writes reports/mining/<date>.md
 ```
 
-Or step by step:
+Targets come in five kinds — `company`, `sector`, `industry`, `market` and `theme`. All but `market` name tickers in one market; a market target names only the market. Older `[watchlists]` tables keep working, with their kind inferred from shape.
+
+Theses are optional. Skip them entirely and you still get targets, evidence and reports:
 
 ```bash
-uv run rig ingest --market asx --since 2025-01-01          # bars, news, filings, fundamentals, calendar
-uv run rig extract --since 2026-09-01                      # LLM turns unprocessed news into Event rows
-uv run rig analyse --dry-run                               # generate signals, don't persist
-uv run rig analyse --strategy critic                       # analyst + adversarial critique, stores both
-uv run rig analyse --strategy ensemble,momentum            # multi-model vote and the non-LLM baseline
-uv run rig execute                                         # risk-check and fill today's signals in the paper book
-uv run rig execute --all                                   # consider every unexecuted signal, not just the last day
-uv run rig report --date 2026-09-14                        # write reports/2026-09-14.md
+uv run rig thesis create "Iron ore demand holds through 2027" --targets mining
+uv run rig thesis propose <id>    # model suggests candidate evidence; you accept it
+uv run rig thesis show <id>
 ```
 
-Strategies:
-
-| Strategy      | What it does                                                                 |
-|---------------|------------------------------------------------------------------------------|
-| `llm_analyst` | Facts-only brief per instrument to the `analyse` model. One signal each.     |
-| `critic`      | Wraps another strategy. A second model attacks each thesis and revises conviction. |
-| `ensemble`    | Same brief through every model in `[llm.ensemble].models`. Majority vote, records dispersion. |
-| `momentum`    | 12-1 month momentum rank. No LLM. The baseline the others must beat.         |
-
-Inspect state:
+Inspect things:
 
 ```bash
-uv run rig paper status          # cash, positions, P&L
-uv run rig paper reset           # wipe the paper book, keep signals (--signals to drop them too)
 uv run rig llm costs --since 2026-09-01
-uv run rig llm models            # available models and prices
+uv run rig llm models
 uv run rig plugins list
-uv run rig config show
-uv run rig config validate
+uv run rig config show && uv run rig config validate
 ```
 
 ## Project layout
 
 ```
 rigger/
-├── core/        models, SQLite (SQLModel), config, plugin registry, event bus
-├── llm/         provider-agnostic client, routing, structured JSON calls, prompt templates
-├── paper/       portfolio accounting, FX conversion, fee/slippage model, risk rules
-├── runtime.py   shared Rigger wiring and signal persistence
-├── services.py  pipeline operations and read-side queries
-├── tui/         Textual app, screens, widgets, and styles
-├── brief.py     facts-only brief: prices, news, events, fundamentals, calendar
-├── extract.py   news → structured Event rows via the extract model
+├── core/            models, SQLite (SQLModel), config, plugin registry, event bus
+├── llm/             provider-agnostic client, model catalog, routing, structured calls
 ├── plugins/
 │   ├── markets/     us, asx
 │   ├── data/        yfinance, yfinance_calendar, rss, asx_announcements, sec_edgar
-│   ├── strategies/  llm_analyst, critic, ensemble, momentum
-│   ├── brokers/     paper
-│   └── reports/     markdown
-└── cli.py       the `rig` command
-tests/           pytest, no network (respx + fake LLM)
+│   └── targets/     company, sector, industry, theme, market
+├── targets.py       what you follow, and how it resolves to instruments
+├── evidence.py      one read model over bars, news, events and fundamentals
+├── extract.py       news → structured Event rows
+├── reports.py       cited research reports, with the citation contract enforced
+├── chat.py          grounded Q&A, local evidence first, web search opt-in
+├── theses.py        long-horizon claims with evidence for and against
+├── thesis_health.py pure function over accepted evidence
+├── tui/             Textual app and screens
+└── cli.py           the `rig` command
+tests/               pytest, fully offline (respx + a fake LLM)
 ```
 
-Plugins are discovered through the `rigger.plugins` entry-point group in `pyproject.toml`. A new data source is one file implementing one class.
+Plugins are discovered through the `rigger.plugins` and `rigger.targets` entry-point groups in `pyproject.toml`. A new data source is one file implementing one class.
 
 ## Develop
 
 ```bash
 uv run pytest
 uv run ruff check . && uv run ruff format .
-uv run mypy rigger/core rigger/llm rigger/paper rigger/services.py
+uv run mypy --strict rigger/core rigger/llm
 ```
 
-## Roadmap
+The same three run in CI on every push. Tests never touch the network.
 
-1. **Phase 1** — skeleton: `rig run` on five US tickers yields a report with evidence-linked signals and paper fills. *(done)*
-2. **Phase 2** — information edge: RSS, ASX announcements, SEC EDGAR, event extraction, critic and ensemble strategies, momentum baseline. *(done)*
-3. **Phase 3** — evaluation loop: scorecard, source attribution, backtesting. *(next)*
-4. **Phase 4** — automation: scheduler, HTML/email reports, full risk rules, CI.
-5. **Phase 5** — optional: Rust hot paths, live brokers (hard-gated), crypto, dashboard, alerts.
+Design docs live in `docs/`, one per piece of work — `REDESIGN_PLAN.md` explains why this stopped being a trading harness.
 
 ## Caveats
 
-- Paper results overstate real performance.
-- Free data (yfinance) is rate-limited and sometimes wrong.
-- Keep live trading off until the scorecard shows a sustained, statistically meaningful edge.
+- Free data sources are rate-limited and sometimes wrong. Treat a single citation as a lead, not a fact.
+- A cited report is only as good as what was gathered. If ingest missed something the model cannot know about it — that is the deliberate trade for never inventing facts.
+- Nothing here is financial advice, and none of it substitutes for reading the primary source.
