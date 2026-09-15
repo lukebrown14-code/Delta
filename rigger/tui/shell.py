@@ -7,6 +7,7 @@ mounted under any App, and inherit theme tokens when a Rigger theme is active.
 
 from __future__ import annotations
 
+import inspect
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -31,7 +32,7 @@ NAV_ITEMS: list[tuple[str, str, str]] = [
 ]
 
 
-def _age_text(age: timedelta) -> tuple[str, str]:
+def age_text(age: timedelta) -> tuple[str, str]:
     """Humanise a data age into (label, dot-state)."""
     seconds = age.total_seconds()
     if seconds < 300:
@@ -108,7 +109,7 @@ class TopBar(Horizontal):
                 newest = max(health.latest_bar.values())
                 if newest.tzinfo is None:
                     newest = newest.replace(tzinfo=UTC)
-                label, state = _age_text(datetime.now(UTC) - newest)
+                label, state = age_text(datetime.now(UTC) - newest)
                 self._freshness.update(f"data {label}")
                 self._dot.set_state(state)
             else:
@@ -246,11 +247,13 @@ class RiggerScreen(Screen):
         raise NotImplementedError
         yield  # pragma: no cover
 
-    def on_screen_resume(self) -> None:
+    async def on_screen_resume(self) -> None:
         self.query_one(NavRail).set_active(self.name or "")
         refresh = getattr(self, "refresh_view", None)
         if callable(refresh):
-            refresh()
+            result = refresh()
+            if inspect.isawaitable(result):
+                await result
 
     def on_nav_item_selected(self, event: NavItem.Selected) -> None:
         switch = getattr(self.app, "action_switch_screen", None)

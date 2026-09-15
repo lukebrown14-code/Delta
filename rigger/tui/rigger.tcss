@@ -99,6 +99,43 @@ KeyHint {
     margin: 0 0 0 1;
 }
 
+.muted {
+    color: $text-muted;
+}
+
+.check-row {
+    height: 1;
+    margin: 0 0 1 0;
+}
+
+.spark-row {
+    height: 3;
+    margin: 0 0 1 0;
+}
+
+.spark-row Static {
+    height: 1;
+}
+
+.spark-label {
+    width: 8;
+    color: $text-muted;
+}
+
+.spark-row Sparkline {
+    width: 1fr;
+    height: 3;
+}
+
+.report-row {
+    height: 3;
+    align-vertical: middle;
+}
+
+.report-row Static {
+    width: 1fr;
+}
+
 /* ---------- tables ---------- */
 
 DataTable {
@@ -160,21 +197,9 @@ Button {
 
 /* ---------- modals ---------- */
 
-.modal {
-    padding: 2 4;
-}
-
-/* ---------- leftovers kept from the old skin ---------- */
-
-.title {
-    padding: 1 2;
-}
+/* ---------- kept from the old skin ---------- */
 
 .diagram {
     padding: 1 2;
     color: $text-muted;
-}
-
-#checks, #targets, #health, #costs, #config {
-    padding: 1 2;
 }

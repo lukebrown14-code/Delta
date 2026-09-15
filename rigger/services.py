@@ -223,6 +223,18 @@ def data_health(rig: Any) -> DataHealth:
     return DataHealth(counts, latest, last_llm)
 
 
+def recent_closes(engine: Any, instrument_id: str, limit: int = 40) -> list[float]:
+    """Most recent close prices, oldest first, for sparklines."""
+    with Session(engine) as session:
+        rows = session.exec(
+            select(BarTable.close)
+            .where(BarTable.instrument_id == instrument_id)
+            .order_by(BarTable.ts.desc())  # type: ignore[attr-defined]
+            .limit(limit)
+        ).all()
+    return [float(close) for close in reversed(rows)]
+
+
 @dataclass
 class CostRow:
     task: str

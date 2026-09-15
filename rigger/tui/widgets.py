@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from textual.app import ComposeResult
 from textual.containers import Vertical
-from textual.widgets import Digits, Static
+from textual.widgets import DataTable, Digits, Static
 
 DOT = "●"
 
@@ -111,3 +111,11 @@ class KeyHint(Static):
 
     def __init__(self, key: str, id: str | None = None) -> None:
         super().__init__(f"[ {key} ]", id=id, markup=False)
+
+
+class RiggerTable(DataTable):
+    """DataTable with the desk defaults: zebra stripes and a row cursor."""
+
+    def on_mount(self) -> None:
+        self.zebra_stripes = True
+        self.cursor_type = "row"
