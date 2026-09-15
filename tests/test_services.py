@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -162,3 +162,119 @@ def test_remove_target_also_removes_legacy_watchlist(tmp_path, monkeypatch):
     assert services.target_specs() == {}
     with pytest.raises(KeyError, match="unknown target"):
         services.remove_target("mining")
+
+
+# --- pulse -------------------------------------------------------------------
+
+
+def _news(engine, id_, instrument_ids, published, source="rss"):
+    import json
+
+    from rigger.core.db import NewsItemTable
+
+    with Session(engine) as session:
+        session.add(
+            NewsItemTable(
+                id=id_,
+                instrument_ids=json.dumps(list(instrument_ids)),
+                published=published,
+                title=id_,
+                url="http://example.test",
+                source=source,
+            )
+        )
+        session.commit()
+
+
+def _event(engine, id_, instrument_id, ts):
+    from rigger.core.db import EventTable
+
+    with Session(engine) as session:
+        session.add(
+            EventTable(
+                id=id_,
+                instrument_id=instrument_id,
+                ts=ts,
+                kind="earnings",
+                summary=id_,
+                sentiment=0.0,
+                evidence_ids="[]",
+                extracted_by="test",
+                prompt_version="v1",
+            )
+        )
+        session.commit()
+
+
+def test_pulse_empty_database_returns_zeros(tmp_engine):
+    since = datetime.now(UTC) - timedelta(days=1)
+    result = services.pulse(tmp_engine, instrument_ids=["US:AAPL"], since=since)
+
+    assert (result.articles, result.filings, result.events, result.total) == (0, 0, 0, 0)
+    assert result.daily == [0] * 30
+    assert result.busiest is None and result.quietest is None
+
+
+def test_pulse_excludes_future_dated_calendar_events(tmp_engine):
+    """The calendar plugin writes upcoming earnings into event.ts; they have not happened."""
+    now = datetime.now(UTC)
+    _event(tmp_engine, "past", "US:AAPL", now - timedelta(hours=2))
+    _event(tmp_engine, "upcoming", "US:AAPL", now + timedelta(days=9))
+
+    result = services.pulse(tmp_engine, instrument_ids=["US:AAPL"], since=now - timedelta(days=1))
+
+    assert result.events == 1
+    assert sum(result.daily) == 1
+
+
+def test_pulse_splits_filings_from_articles(tmp_engine):
+    now = datetime.now(UTC)
+    _news(tmp_engine, "a1", ["US:AAPL"], now - timedelta(hours=1))
+    _news(tmp_engine, "a2", ["US:AAPL"], now - timedelta(hours=2))
+    _news(tmp_engine, "f1", ["US:AAPL"], now - timedelta(hours=3), source="sec_edgar")
+
+    result = services.pulse(tmp_engine, instrument_ids=["US:AAPL"], since=now - timedelta(days=1))
+
+    assert (result.articles, result.filings) == (2, 1)
+    assert result.total == 3
+
+
+def test_pulse_counts_only_since_but_ranks_over_whole_window(tmp_engine):
+    """A short visit must still name a busiest: the tally spans the full window."""
+    now = datetime.now(UTC)
+    for n in range(5):
+        _news(tmp_engine, f"old{n}", ["US:MSFT"], now - timedelta(days=10, hours=n))
+    _news(tmp_engine, "recent", ["US:AAPL"], now - timedelta(minutes=5))
+
+    result = services.pulse(
+        tmp_engine, instrument_ids=["US:AAPL", "US:MSFT"], since=now - timedelta(hours=1)
+    )
+
+    assert result.articles == 1  # only the recent one is "new"
+    assert result.busiest == ("US:MSFT", 5)  # but ranking sees the older five
+    assert result.quietest == ("US:AAPL", 1)
+
+
+def test_pulse_daily_is_zero_filled_oldest_first(tmp_engine):
+    now = datetime.now(UTC)
+    _news(tmp_engine, "today", ["US:AAPL"], now - timedelta(minutes=5))
+    _news(tmp_engine, "back", ["US:AAPL"], now - timedelta(days=3))
+
+    result = services.pulse(
+        tmp_engine, instrument_ids=["US:AAPL"], since=now - timedelta(days=30), days=7
+    )
+
+    assert len(result.daily) == 7
+    assert result.daily[-1] == 1  # today is last
+    assert result.daily[-4] == 1  # three days back
+    assert sum(result.daily) == 2
+
+
+def test_pulse_ignores_instruments_outside_the_watchlist(tmp_engine):
+    now = datetime.now(UTC)
+    _news(tmp_engine, "off", ["US:TSLA"], now - timedelta(minutes=5))
+
+    result = services.pulse(tmp_engine, instrument_ids=["US:AAPL"], since=now - timedelta(days=1))
+
+    assert result.articles == 1  # still counted as new evidence
+    assert result.busiest is None  # but TSLA is not on the watchlist, so nothing to rank

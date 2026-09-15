@@ -9,6 +9,7 @@ from textual.binding import Binding
 from textual.command import Hit, Hits, Provider
 
 from rigger import services
+from rigger.core import state
 from rigger.llm.catalog import ModelInfo, set_llm_route
 from rigger.runtime import Rigger
 from rigger.tui.screens.chat import Chat
@@ -86,7 +87,9 @@ class RiggerApp(App):
         Binding("c", "switch_screen('console')", "Console", tooltip="Type target/config commands"),
         Binding("w", "switch_screen('targets')", "Targets", tooltip="Manage watch targets"),
         Binding("m", "show_model_picker", "Model", tooltip="Pick the model for this screen"),
-        Binding("p", "show_provider_picker", "Provider", tooltip="Connect or switch the AI provider"),
+        Binding(
+            "p", "show_provider_picker", "Provider", tooltip="Connect or switch the AI provider"
+        ),
         Binding("question_mark", "show_help", "Help", tooltip="Show the keymap"),
         Binding("q", "quit", "Quit", tooltip="Leave Rigger"),
         Binding("f2", "toggle_theme", "Theme", tooltip="Switch light/dark palette"),
@@ -100,13 +103,17 @@ class RiggerApp(App):
         self.services = services
         self.log_lines: list[str] = []
         self.narrow = False
+        # Read once, then stamp this visit immediately: Home renders the whole
+        # session against the *previous* value, so re-reading would zero it out.
+        self.last_seen = state.read_last_seen(self.rig.cfg)
+        state.write_last_seen(self.rig.cfg)
 
     def on_mount(self) -> None:
         for theme in THEMES:
             self.register_theme(theme)
         self.theme = "rigger-dark"
         self._screens = {
-            "home": Home(self.rig),
+            "home": Home(self.rig, last_seen=self.last_seen),
             "data": Data(self.rig),
             "config": Config(self.rig),
             "reports": Reports(self.rig),
