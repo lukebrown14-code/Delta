@@ -18,7 +18,6 @@ dependencies = [
     "pandas>=2.2",
     "numpy>=1.26",
     "tomli-w>=1.0",
-    "litellm>=1.100.1",
     "feedparser>=6.0",
     "textual>=8.2.8",
 ]
