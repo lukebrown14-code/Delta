@@ -46,6 +46,8 @@ cp .env.example .env      # then fill in your key(s)
 
 `config.toml` holds the universe, model routing, paper and risk settings. The defaults track five US and five ASX tickers and use AUD as the base currency. Each plugin has a `[plugins.<name>]` table with an `enabled` flag; set `[plugins.sec_edgar].contact` to a real email before ingesting US filings, as the SEC requires it.
 
+Cash and equity are kept in `base_currency`. Foreign prices are converted with daily FX bars (for example `FX:USDAUD`, AUD per US dollar) that `rig ingest` fetches alongside the universe, so run `ingest` before `execute`. Fill prices and position averages stay in each instrument's own currency.
+
 `.env` holds secrets. Pick a provider in `config.toml` under `[llm]`:
 
 | `provider`      | What it does                                   | Key needed                                          |
@@ -72,7 +74,8 @@ uv run rig extract --since 2026-09-01                      # LLM turns unprocess
 uv run rig analyse --dry-run                               # generate signals, don't persist
 uv run rig analyse --strategy critic                       # analyst + adversarial critique, stores both
 uv run rig analyse --strategy ensemble,momentum            # multi-model vote and the non-LLM baseline
-uv run rig execute                                         # risk-check and fill in the paper book
+uv run rig execute                                         # risk-check and fill today's signals in the paper book
+uv run rig execute --all                                   # consider every unexecuted signal, not just the last day
 uv run rig report --date 2026-09-14                        # write reports/2026-09-14.md
 ```
 
@@ -89,7 +92,7 @@ Inspect state:
 
 ```bash
 uv run rig paper status          # cash, positions, P&L
-uv run rig paper reset           # wipe the paper book
+uv run rig paper reset           # wipe the paper book, keep signals (--signals to drop them too)
 uv run rig llm costs --since 2026-09-01
 uv run rig llm models            # available models and prices
 uv run rig plugins list
@@ -103,7 +106,7 @@ uv run rig config validate
 rigger/
 ├── core/        models, SQLite (SQLModel), config, plugin registry, event bus
 ├── llm/         provider-agnostic client, routing, structured JSON calls, prompt templates
-├── paper/       portfolio accounting, fee/slippage model, risk rules
+├── paper/       portfolio accounting, FX conversion, fee/slippage model, risk rules
 ├── brief.py     facts-only brief: prices, news, events, fundamentals, calendar
 ├── extract.py   news → structured Event rows via the extract model
 ├── plugins/

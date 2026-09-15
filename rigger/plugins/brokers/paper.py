@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from rigger.core.models import Fill, Order, Position
 from rigger.core.plugin import BrokerPlugin
+from rigger.paper.fx import market_of
 from rigger.paper.portfolio import PaperPortfolio
 
 
@@ -21,7 +22,7 @@ class PaperBroker(BrokerPlugin):
 
     async def submit(self, order: Order) -> Fill:
         assert self._portfolio is not None, "PaperBroker not bound to a portfolio"
-        return self._portfolio.fill(order, market=self._market_of(order.instrument_id))
+        return self._portfolio.fill(order, market=market_of(order.instrument_id))
 
     async def positions(self) -> list[Position]:
         assert self._portfolio is not None
@@ -30,7 +31,3 @@ class PaperBroker(BrokerPlugin):
     async def cash(self) -> float:
         assert self._portfolio is not None
         return self._portfolio.cash()
-
-    @staticmethod
-    def _market_of(instrument_id: str) -> str:
-        return instrument_id.split(":", 1)[0].lower() if ":" in instrument_id else "us"

@@ -35,6 +35,7 @@ from rigger.core.plugin import (
 )
 from rigger.core.time import parse_date
 from rigger.llm.client import build_client
+from rigger.paper.fx import fx_instruments
 from rigger.paper.portfolio import PaperPortfolio
 from rigger.paper.risk import RiskLimits, size_signal
 
@@ -79,10 +80,16 @@ class Rigger:
             litellm_proxy_key=self.settings.litellm_proxy_key,
             proxy_base_url=self.cfg.llm_proxy_base_url,
         )
+        currencies = {
+            name: p.currency
+            for name, p in self.plugins.items()
+            if isinstance(p, MarketPlugin) and p.enabled
+        }
         self.portfolio = PaperPortfolio(
             self.engine,
             self.cfg.base_currency,
             self.cfg.paper_slippage_bps,
+            currencies=currencies,
         )
         broker = self.plugins.get("paper")
         if broker is not None:
@@ -201,6 +208,12 @@ def ingest(
             if plugin.market and market and plugin.market != market:
                 continue
             target = [i for i in instruments if plugin.market is None or i.market == plugin.market]
+            if name == "yfinance":
+                # FX bars (e.g. FX:USDAUD) so the paper book can convert foreign prices to base.
+                fx = fx_instruments(target, rig.cfg.base_currency)
+                if fx:
+                    console.print("Ingesting FX: " + ", ".join(i.symbol for i in fx))
+                target = target + fx
             if not target:
                 continue
             console.print(f"Ingesting via [bold]{name}[/bold] ({len(target)} instruments)...")
@@ -259,14 +272,27 @@ def analyse(
 # execute
 # --------------------------------------------------------------------------- #
 @app.command()
-def execute() -> None:
-    """Route pending signals through risk + broker."""
+def execute(
+    since: Annotated[
+        str | None, typer.Option("--since", help="Only signals from this date")
+    ] = None,
+    all_: Annotated[bool, typer.Option("--all", help="Consider every unexecuted signal")] = False,
+) -> None:
+    """Route pending signals through risk + broker.
+
+    By default only signals from the last day are eligible, so a never-filled
+    signal is not retried on every run.
+    """
     rig = Rigger()
     limits = RiskLimits(**{k: v for k, v in rig.cfg.risk.items()})
 
     with Session(rig.engine) as session:
         executed_signal_ids = set(session.exec(select(OrderTable.signal_id)).all())
-        signals = session.exec(select(SignalTable)).all()
+        query = select(SignalTable)
+        if not all_:
+            since_dt = parse_date(since) if since else datetime.now(UTC) - timedelta(days=1)
+            query = query.where(SignalTable.ts >= since_dt)
+        signals = session.exec(query).all()
 
     broker = rig.plugins["paper"]
     universe_by_id = {i.id: i for i in rig.universe()}
@@ -280,7 +306,8 @@ def execute() -> None:
         if equity <= 0:
             return by_sector, gross
         for pos in rig.portfolio.positions():
-            pct = abs(pos.qty * pos.avg_price) / equity * 100
+            value = pos.qty * pos.avg_price * rig.portfolio.fx_rate(pos.instrument_id)
+            pct = abs(value) / equity * 100
             gross += pct
             held = universe_by_id.get(pos.instrument_id)
             sector = held.sector if held else None
@@ -298,8 +325,12 @@ def execute() -> None:
                     f"[yellow]{sig.instrument_id}: skipped — not in current universe[/yellow]"
                 )
                 continue
-            price = rig.portfolio.latest_price(sig.instrument_id) or 0.0
-            equity = rig.portfolio.equity()
+            try:
+                price = rig.portfolio.latest_price_base(sig.instrument_id) or 0.0
+                equity = rig.portfolio.equity()
+            except ValueError as exc:  # missing FX rate
+                console.print(f"[yellow]{sig.instrument_id}: skipped — {exc}[/yellow]")
+                continue
             sector_pct, gross_pct = exposures(equity)
             decision = size_signal(
                 Signal(
@@ -320,6 +351,7 @@ def execute() -> None:
                 sector_exposure_pct=sector_pct.get(inst.sector or "", 0.0),
                 gross_exposure_pct=gross_pct,
                 cash=rig.portfolio.cash(),
+                held_qty=rig.portfolio.position_qty(sig.instrument_id),
             )
             if not decision.approved:
                 console.print(f"[yellow]{sig.instrument_id}: skipped — {decision.reason}[/yellow]")
@@ -447,6 +479,8 @@ def report(
         ],
         positions=positions,
         cash=rig.portfolio.cash(),
+        equity=rig.portfolio.equity(),
+        base_currency=rig.cfg.base_currency,
     )
     path = plugin.render(rep)
     console.print(f"[green]Report written to {path}[/green]")
@@ -494,24 +528,32 @@ def paper_status() -> None:
     cash = rig.portfolio.cash()
     positions = rig.portfolio.positions()
     equity = rig.portfolio.equity()
+    base = rig.cfg.base_currency
     table = Table(title="Paper Portfolio")
     table.add_column("Instrument")
     table.add_column("Qty")
     table.add_column("Avg Price")
+    table.add_column(f"Value ({base})")
     for p in positions:
-        table.add_row(p.instrument_id, f"{p.qty:.4f}", f"{p.avg_price:.2f}")
+        ccy = rig.portfolio.currency_of(p.instrument_id)
+        value = p.qty * p.avg_price * rig.portfolio.fx_rate(p.instrument_id)
+        table.add_row(p.instrument_id, f"{p.qty:.4f}", f"{p.avg_price:.2f} {ccy}", f"{value:,.2f}")
     console.print(table)
-    console.print(f"Cash: [bold]{cash:,.2f}[/bold]")
-    console.print(f"Equity: [bold]{equity:,.2f}[/bold]")
+    console.print(f"Cash: [bold]{cash:,.2f} {base}[/bold]")
+    console.print(f"Equity: [bold]{equity:,.2f} {base}[/bold]")
 
 
 @paper_app.command("reset")
-def paper_reset() -> None:
+def paper_reset(
+    signals: Annotated[bool, typer.Option("--signals", help="Also delete stored signals")] = False,
+) -> None:
+    """Wipe orders, fills, positions and cash. Signals are kept unless --signals."""
     rig = Rigger()
     from sqlmodel import delete
 
     with Session(rig.engine) as session:
-        for model in (FillTable, OrderTable, SignalTable):
+        tables = [FillTable, OrderTable] + ([SignalTable] if signals else [])
+        for model in tables:
             session.exec(delete(model))
         from rigger.core.db import CashTable, PositionTable
 
@@ -523,7 +565,8 @@ def paper_reset() -> None:
             )
         )
         session.commit()
-    console.print("[green]Paper portfolio reset.[/green]")
+    kept = "" if signals else " Signals kept."
+    console.print(f"[green]Paper portfolio reset.{kept}[/green]")
 
 
 # --------------------------------------------------------------------------- #

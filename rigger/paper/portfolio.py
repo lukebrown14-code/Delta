@@ -9,6 +9,7 @@ from sqlmodel import Session, select
 
 from rigger.core.db import BarTable, CashTable, FillTable, PositionTable
 from rigger.core.models import Fill, Order, Position
+from rigger.paper.fx import latest_fx_rate, market_of
 
 MARKET_FEES = {
     "us": (0.0, 0.0),  # (bps, min_usd)
@@ -23,10 +24,31 @@ class PaperPortfolio:
         engine: Engine,
         base_currency: str,
         slippage_bps: float = 5.0,
+        currencies: dict[str, str] | None = None,
     ) -> None:
+        """``currencies`` maps market name -> quote currency ({"us": "USD", "asx": "AUD"}).
+
+        Prices, fills and ``avg_price`` stay in the instrument's currency; cash and
+        equity are in ``base_currency``. With ``currencies=None`` every instrument is
+        assumed to trade in the base currency (no conversion).
+        """
         self.engine = engine
         self.base_currency = base_currency
         self.slippage_bps = slippage_bps
+        self.currencies = currencies or {}
+
+    def currency_of(self, instrument_id: str) -> str:
+        return self.currencies.get(market_of(instrument_id), self.base_currency)
+
+    def fx_rate(self, instrument_id: str) -> float:
+        """Base-currency units per 1 unit of the instrument's currency."""
+        ccy = self.currency_of(instrument_id)
+        rate = latest_fx_rate(self.engine, ccy, self.base_currency)
+        if rate is None:
+            raise ValueError(
+                f"no FX rate for {ccy}/{self.base_currency}; run `rig ingest` to fetch FX bars"
+            )
+        return rate
 
     def cash(self) -> float:
         with Session(self.engine) as session:
@@ -62,9 +84,10 @@ class PaperPortfolio:
         slippage = self.slippage_bps / 10000.0 * direction
         executed = price * (1 + slippage)
         fee_bps, fee_min = MARKET_FEES.get(market, (0.0, 0.0))
-        fee = executed * order.qty * (fee_bps / 10000.0)
+        fee = executed * order.qty * (fee_bps / 10000.0)  # in the instrument's currency
         if fee_min and fee < fee_min:
             fee = fee_min
+        rate = self.fx_rate(order.instrument_id)
 
         with Session(self.engine) as session:
             cash = session.get(CashTable, 1)
@@ -77,11 +100,12 @@ class PaperPortfolio:
                     "(short positions are not supported by the paper portfolio)"
                 )
 
-            notional = executed * order.qty
+            notional_base = executed * order.qty * rate
+            fee_base = fee * rate
             if order.side == "buy":
-                cash.balance -= notional + fee
+                cash.balance -= notional_base + fee_base
             else:
-                cash.balance += notional - fee
+                cash.balance += notional_base - fee_base
 
             if order.side == "buy":
                 if pos is None:
@@ -125,12 +149,14 @@ class PaperPortfolio:
         )
 
     def equity(self, prices: dict[str, float] | None = None) -> float:
+        """Cash plus positions, in the base currency. ``prices`` are per-instrument, local currency."""
         total = self.cash()
         for pos in self.positions():
             if prices and pos.instrument_id in prices:
-                total += pos.qty * prices[pos.instrument_id]
+                price = prices[pos.instrument_id]
             else:
-                total += pos.qty * pos.avg_price
+                price = pos.avg_price
+            total += pos.qty * price * self.fx_rate(pos.instrument_id)
         return total
 
     def position_qty(self, instrument_id: str) -> float:
@@ -143,6 +169,11 @@ class PaperPortfolio:
             row = session.exec(
                 select(BarTable)
                 .where(BarTable.instrument_id == instrument_id)
-                .order_by(BarTable.ts.desc())
+                .order_by(BarTable.ts.desc())  # type: ignore[attr-defined]
             ).first()
         return row.close if row else None
+
+    def latest_price_base(self, instrument_id: str) -> float | None:
+        """Latest close converted to the base currency, for sizing against equity."""
+        price = self.latest_price(instrument_id)
+        return None if price is None else price * self.fx_rate(instrument_id)

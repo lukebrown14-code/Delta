@@ -7,6 +7,7 @@ is a config change, not a code change.
 
 from __future__ import annotations
 
+import math
 from datetime import UTC, datetime
 from typing import Any
 
@@ -57,6 +58,10 @@ class YFinanceData(YFinanceSymbols):
             if df is None or df.empty:
                 continue
             for ts, row in df.iterrows():
+                # FX and some thin symbols return rows with NaN prices; SQLite
+                # would store them as NULL and violate the bar NOT NULL columns.
+                if any(math.isnan(float(row[c])) for c in ("Open", "High", "Low", "Close")):
+                    continue
                 bars.append(
                     Bar(
                         instrument_id=inst.id,

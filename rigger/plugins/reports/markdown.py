@@ -24,7 +24,12 @@ class MarkdownReport(ReportPlugin):
         lines: list[str] = [
             f"# Rigger Report — {report.date}",
             "",
-            f"**Cash:** {report.cash:,.2f}",
+            f"**Cash:** {report.cash:,.2f} {report.base_currency}",
+            *(
+                [f"**Equity:** {report.equity:,.2f} {report.base_currency}"]
+                if report.equity is not None
+                else []
+            ),
             "",
             "## Signals",
             "",

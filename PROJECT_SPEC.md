@@ -433,18 +433,18 @@ feeds = ["https://feeds.reuters.com/reuters/businessNews"]
 ## 13. Build phases
 
 ### Phase 1 — Skeleton: one signal end-to-end
-- [ ] `uv init`; deps: `typer`, `rich`, `pydantic`, `pydantic-settings`, `sqlmodel`, `openai`, `httpx`, `apscheduler`, `jinja2`, `yfinance`, `pandas`, `numpy`
-- [ ] `core/models.py`, `core/db.py`, `core/config.py`, `core/plugin.py`, `core/events.py`
-- [ ] `llm/openrouter.py`, `llm/router.py`, `llm/structured.py`, `llm/prompts/analyst_v1.j2`
-- [ ] Plugins: `markets/us`, `data/yfinance`, `strategies/llm_analyst`, `brokers/paper`, `reports/markdown`
-- [ ] `cli.py`: `plugins list`, `ingest`, `analyse`, `execute`, `report`, `run`, `paper status`, `llm costs`
-- [ ] **Exit criterion:** `rig run` on 5 US tickers yields a markdown report with reasoned, evidence-linked signals and a paper portfolio with fills.
+- [x] `uv init`; deps: `typer`, `rich`, `pydantic`, `pydantic-settings`, `sqlmodel`, `openai`, `httpx`, `apscheduler`, `jinja2`, `yfinance`, `pandas`, `numpy`
+- [x] `core/models.py`, `core/db.py`, `core/config.py`, `core/plugin.py`, `core/events.py`
+- [x] `llm/openrouter.py`, `llm/router.py`, `llm/structured.py`, `llm/prompts/analyst_v1.j2`
+- [x] Plugins: `markets/us`, `data/yfinance`, `strategies/llm_analyst`, `brokers/paper`, `reports/markdown`
+- [x] `cli.py`: `plugins list`, `ingest`, `analyse`, `execute`, `report`, `run`, `paper status`, `llm costs`
+- [x] **Exit criterion:** `rig run` on 5 US tickers yields a markdown report with reasoned, evidence-linked signals and a paper portfolio with fills.
 
 ### Phase 2 — Information edge
-- [ ] `data/rss`, `data/asx_announcements`, `data/sec_edgar`, `markets/asx`
-- [ ] `extract` task + `Event` table; `llm/prompts/extract_v1.j2`
-- [ ] Event calendar (earnings, ex-div) in the brief
-- [ ] `strategies/critic`, `strategies/ensemble`, `strategies/momentum`
+- [x] `data/rss`, `data/asx_announcements`, `data/sec_edgar`, `markets/asx`
+- [x] `extract` task + `Event` table; `llm/prompts/extract_v1.j2`
+- [x] Event calendar (earnings, ex-div) in the brief
+- [x] `strategies/critic`, `strategies/ensemble`, `strategies/momentum`
 
 ### Phase 3 — Evaluation loop
 - [ ] `eval/scorecard.py`, `eval/attribution.py`, `eval/backtest.py`

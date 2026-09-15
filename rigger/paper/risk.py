@@ -32,9 +32,15 @@ def size_signal(
     sector_exposure_pct: float = 0.0,
     gross_exposure_pct: float = 0.0,
     cash: float | None = None,
+    held_qty: float = 0.0,
 ) -> SizingDecision:
+    """``equity``, ``price`` and ``cash`` must all be in the same (base) currency."""
     if signal.direction == "flat":
         return SizingDecision(approved=False, reason="flat signal")
+
+    if signal.direction == "long" and held_qty > 0:
+        # One position per instrument: repeated runs must not stack the same thesis.
+        return SizingDecision(approved=False, reason="already long")
 
     if signal.conviction < limits.min_conviction:
         return SizingDecision(

@@ -100,6 +100,8 @@ class Report:
     fills: list[Fill]
     positions: list[Position]
     cash: float
+    equity: float | None = None  # base currency; None when the renderer should omit it
+    base_currency: str = "AUD"
 
 
 PLUGIN_GROUP = "rigger.plugins"
