@@ -139,7 +139,7 @@ uv run mypy --strict rigger/core rigger/llm
 
 The same three run in CI on every push. Tests never touch the network.
 
-Design docs live in `docs/`, one per piece of work — `REDESIGN_PLAN.md` explains why this stopped being a trading harness.
+[PROJECT_SPEC.md](PROJECT_SPEC.md) is the source of truth for scope, architecture, plugin contracts and conventions — including why this stopped being a trading harness.
 
 ## Caveats
 
