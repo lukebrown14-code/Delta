@@ -7,6 +7,8 @@ with a Rigger-like object.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from textual.app import ComposeResult
 from textual.containers import Horizontal, VerticalScroll
 from textual.screen import Screen
@@ -14,7 +16,8 @@ from textual.widget import Widget
 from textual.widgets import Button, DataTable, Input, Static
 
 from rigger import theses
-from rigger.evidence import cite, evidence
+from rigger.evidence import EvidenceItem, cite, evidence
+from rigger.thesis_health import badge_text, compute_health, state_style
 
 
 class Theses(Screen):
@@ -150,7 +153,9 @@ class Theses(Screen):
             headline += f"\nscope: {thesis.scope}"
         title.update(headline)
 
-        cites = {item.id: cite(item) for item in evidence(self.rig.engine)}
+        items = evidence(self.rig.engine)
+        cites = {item.id: cite(item) for item in items}
+        by_id = {item.id: item for item in items}
         groups: dict[str, list[theses.ThesisEvidence]] = {
             "support": [],
             "against": [],
@@ -162,7 +167,7 @@ class Theses(Screen):
             else:
                 self.candidates.append(row)
 
-        widgets: list[Widget] = []
+        widgets: list[Widget] = [self._health_badge(thesis, groups, by_id)]
         for heading, side in (
             ("Supporting", "support"),
             ("Against", "against"),
@@ -192,3 +197,23 @@ class Theses(Screen):
     def _line(row: theses.ThesisEvidence, cites: dict[str, str]) -> str:
         citation = cites.get(row.evidence_id, row.evidence_id)
         return f"[{row.side}] {row.note} — {citation}"
+
+    def _health_badge(
+        self,
+        thesis: theses.Thesis,
+        groups: dict[str, list[theses.ThesisEvidence]],
+        by_id: dict[str, EvidenceItem],
+    ) -> Static:
+        linked = [
+            (by_id[row.evidence_id], row.side)
+            for rows in groups.values()
+            for row in rows
+            if row.evidence_id in by_id
+        ]
+        if not linked:
+            return Static("[cyan]emerging · no accepted evidence[/cyan]", id="thesis-health")
+        result = compute_health(thesis, linked, now=datetime.now(UTC))
+        return Static(
+            f"[{state_style(result.state)}]{badge_text(result)}[/]",
+            id="thesis-health",
+        )
