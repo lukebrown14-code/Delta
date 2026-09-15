@@ -55,7 +55,7 @@ class OpenRouterProvider(Provider):
         api_key: str,
         *,
         app_name: str = "rigger",
-        app_url: str = "https://github.com/luke/rigger",
+        app_url: str = "https://github.com/lukebrown14-code/Rigger",
         timeout: float = 60.0,
         max_retries: int = 5,
     ) -> None:
