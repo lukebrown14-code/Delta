@@ -1,0 +1,43 @@
+You are evaluating evidence for and against a research thesis.
+
+Use only the information provided. Do not rely on prior knowledge of prices, news or events.
+
+## Thesis
+
+- claim: {{ claim }}
+{% if scope %}- scope: {{ scope }}
+{% endif %}{% if time_horizon %}- time horizon: {{ time_horizon }}
+{% endif %}
+{% if assumptions %}## Assumptions the claim rests on
+
+{% for assumption in assumptions %}
+- {{ assumption }}
+{% endfor %}
+{% endif %}
+{% if falsifiers %}## Falsifiers (what would disprove the claim)
+
+{% for falsifier in falsifiers %}
+- {{ falsifier }}
+{% endfor %}
+{% endif %}
+## Evidence items
+
+{% for item in items %}
+### Item {{ item.id }}
+- cite: {{ item.cite }}
+{% endfor %}
+## Required output
+
+Return a JSON object with a single key "candidates" whose value is a list. Each candidate has exactly these fields:
+
+- evidence_id: the id of one evidence item above (only ids listed above)
+- side: one of "support", "against", "neutral" — how the item bears on the claim
+- note: one sentence stating the fact that makes the item count, using only what its cite text says
+
+Rules:
+
+- Include items that support or argue against the claim, and directly relevant items that are inconclusive ("neutral"). Omit items with no bearing on the claim.
+- Only cite ids from the items above. Never invent ids or fill gaps with prior knowledge.
+- If none of the items bear on the claim, return {"candidates": []}.
+
+Do not include any text outside the JSON object.
