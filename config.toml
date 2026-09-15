@@ -15,6 +15,7 @@ extract = "google/gemini-2.5-flash"
 report = "anthropic/claude-sonnet-4"
 chat = "anthropic/claude-sonnet-4"
 thesis = "google/gemini-2.5-flash"
+thesis_summary = "google/gemini-2.5-flash"
 
 [plugins.yfinance]
 enabled = true

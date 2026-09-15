@@ -1,7 +1,7 @@
 """Deterministic thesis health: an evidence-based read, never a truth claim.
 
 The state is computed by a pure function over ACCEPTED evidence — the LLM may
-draft prose about it later, but it never decides the state (docs/THESIS_HEALTH_PLAN.md).
+draft prose about it later, but it never decides the state.
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ _STYLES: dict[str, str] = {
     "emerging": "cyan",
     "building": "green",
     "mixed": "yellow",
-    "weakening": "orange",
+    "weakening": "orange1",
     "challenged": "red",
     "idle": "dim",
 }

@@ -8,12 +8,13 @@ search tool rather than stored evidence, so they never appear here.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Literal
 
 from sqlalchemy.engine import Engine
-from sqlmodel import Session, select
+from sqlmodel import Session, col, select
 
 from rigger.core.db import BarTable, EventTable, FundamentalTable, NewsItemTable
 from rigger.core.json import from_json
@@ -82,6 +83,42 @@ def evidence(
         and (kind is None or item.kind == kind)
     ]
     return _ordered(matched)[:limit]
+
+
+def evidence_by_ids(engine: Engine, ids: Sequence[str]) -> list[EvidenceItem]:
+    """Evidence items for the given ids, newest first; unknown ids are skipped.
+
+    ``evidence()`` truncates to the newest ``limit`` items, so callers holding
+    specific ids (thesis links, report cites) read them through here instead:
+    an item that has aged out of the pool window is still found.
+    """
+    raw_ids: dict[str, list[str]] = {}
+    for item_id in ids:
+        prefix, _, rest = item_id.partition(":")
+        if rest:
+            raw_ids.setdefault(prefix, []).append(rest)
+    if not raw_ids:
+        return []
+    items: list[EvidenceItem] = []
+    with Session(engine) as session:
+        bar_ids = raw_ids.get("bar", [])
+        if bar_ids:
+            stmt = select(BarTable).where(col(BarTable.id).in_(bar_ids))
+            items += [_bar_item(row) for row in session.exec(stmt).all()]
+        event_ids = raw_ids.get("event", [])
+        if event_ids:
+            stmt2 = select(EventTable).where(col(EventTable.id).in_(event_ids))
+            items += [_event_item(row) for row in session.exec(stmt2).all()]
+        fundamental_ids = raw_ids.get("fundamental", [])
+        if fundamental_ids:
+            stmt3 = select(FundamentalTable).where(col(FundamentalTable.id).in_(fundamental_ids))
+            items += [_fundamental_item(row) for row in session.exec(stmt3).all()]
+        # news and filing are the same table, split only by source.
+        news_ids = raw_ids.get("news", []) + raw_ids.get("filing", [])
+        if news_ids:
+            stmt4 = select(NewsItemTable).where(col(NewsItemTable.id).in_(news_ids))
+            items += [_news_item(row) for row in session.exec(stmt4).all()]
+    return _ordered(items)
 
 
 def _ordered(items: list[EvidenceItem]) -> list[EvidenceItem]:

@@ -236,10 +236,11 @@ def thesis_show(thesis_id: str) -> None:
     from rigger import theses as theses_mod
 
     rig = Rigger()
-    thesis = theses_mod.get_thesis(rig.engine, thesis_id)
-    if thesis is None:
-        console.print(f"[red]Unknown thesis: {thesis_id}[/red]")
-        raise typer.Exit(1)
+    try:
+        thesis = theses_mod.get_thesis(rig.engine, thesis_id)
+    except KeyError as exc:
+        console.print(f"[red]{exc.args[0]}[/red]")
+        raise typer.Exit(1) from exc
     console.print(f"[bold]{thesis.claim}[/bold]")
     console.print(f"status={thesis.status}  horizon={thesis.time_horizon}")
     rows = theses_mod.evidence_for(rig.engine, thesis.id)
@@ -259,6 +260,27 @@ def thesis_propose(
     rig = Rigger()
     candidates = asyncio.run(theses_mod.propose_evidence(rig, thesis_id, since=since))
     console.print(f"[green]Proposed {len(candidates)} candidate evidence items.[/green]")
+
+
+@thesis_app.command("summary")
+def thesis_summary(thesis_id: str) -> None:
+    """Write a cited running summary for a thesis."""
+    from rigger import thesis_summary as summary_mod
+
+    rig = Rigger()
+    result = asyncio.run(summary_mod.summarize_thesis(rig, thesis_id))
+    console.print(f"[bold]State:[/bold] {result.state}")
+    console.print(f"[bold]Summary:[/bold] {result.summary}")
+    if result.strongest_support:
+        console.print(f"[bold]Strongest support:[/bold] {result.strongest_support}")
+    if result.strongest_counter:
+        console.print(f"[bold]Strongest counter:[/bold] {result.strongest_counter}")
+    if result.unknowns:
+        console.print("[bold]Unknowns:[/bold]")
+        for unknown in result.unknowns:
+            console.print(f"  - {unknown}")
+    if result.citations:
+        console.print(f"[bold]Citations:[/bold] {', '.join(result.citations)}")
 
 
 @llm_app.command("costs")

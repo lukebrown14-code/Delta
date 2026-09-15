@@ -280,3 +280,22 @@ def test_target_specs_hide_universe_shim(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     (tmp_path / "config.toml").write_text('[universe]\nus = ["AAPL"]\n', encoding="utf-8")
     assert services.target_specs() == {}
+
+
+def test_legacy_watchlist_keeps_third_party_kind_usable(tmp_path, monkeypatch):
+    """A [watchlists] kind from a third-party plugin is modelled by shape, not rejected."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "config.toml").write_text(
+        '[watchlists.custom]\nkind = "crypto_pairs"\nmarket = "asx"\ntickers = ["BTC", "ETH"]\n',
+        encoding="utf-8",
+    )
+    assert services.target_specs()["custom"].kind == "theme"
+
+
+def test_targets_table_still_rejects_unknown_kind(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "config.toml").write_text(
+        '[targets.custom]\nkind = "crypto_pairs"\nmarket = "asx"\n', encoding="utf-8"
+    )
+    with pytest.raises(ValueError, match="unknown kind"):
+        services.target_specs()

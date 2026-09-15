@@ -139,18 +139,25 @@ All models are Pydantic v2. Persisted versions are SQLModel tables in
 `core/db.py` with the same field names.
 
 ```python
-InstrumentId = str          # "<MARKET>:<SYMBOL>", e.g. "US:AAPL"
+InstrumentId = str  # "<MARKET>:<SYMBOL>", e.g. "US:AAPL"
 AssetClass = Literal["equity", "etf", "bond", "fx", "commodity", "crypto", "cash", "other"]
 
-class Instrument(BaseModel):
-    id: str; market: str; symbol: str; name: str | None; currency: str
-    sector: str | None = None; industry: str | None = None
-    asset_class: AssetClass = "equity"
-    watchlists: tuple[str, ...] = ()        # target ids this instrument belongs to
-    tags: frozenset[str] = frozenset()
-    meta: dict[str, Any] = {}               # asset-class payload; core never reads it
 
-class WatchTarget(BaseModel):               # targets.py
+class Instrument(BaseModel):
+    id: str
+    market: str
+    symbol: str
+    name: str | None
+    currency: str
+    sector: str | None = None
+    industry: str | None = None
+    asset_class: AssetClass = "equity"
+    watchlists: tuple[str, ...] = ()  # target ids this instrument belongs to
+    tags: frozenset[str] = frozenset()
+    meta: dict[str, Any] = {}  # asset-class payload; core never reads it
+
+
+class WatchTarget(BaseModel):  # targets.py
     id: str
     kind: Literal["company", "sector", "industry", "market", "theme"]
     name: str
@@ -159,11 +166,18 @@ class WatchTarget(BaseModel):               # targets.py
     tags: frozenset[str] = frozenset()
     notes: str = ""
 
+
 @dataclass
-class EvidenceItem:                         # evidence.py — the read model
-    id: str; target_ids: tuple[str, ...]; ts: datetime
-    kind: EvidenceKind; title: str; body: str | None
-    source: str; url: str | None; sentiment: float | None
+class EvidenceItem:  # evidence.py — the read model
+    id: str
+    target_ids: tuple[str, ...]
+    ts: datetime
+    kind: EvidenceKind
+    title: str
+    body: str | None
+    source: str
+    url: str | None
+    sentiment: float | None
     raw: dict[str, Any]
 ```
 
@@ -192,31 +206,41 @@ Columns added after the fact go through the `_ADDED_COLUMNS` /
 
 ```python
 class Plugin:
-    name: str                       # unique, snake_case
+    name: str  # unique, snake_case
     version: str = "0.1.0"
     enabled: bool = True
-    shared_config: str | None = None            # borrow another plugin's table
-    def configure(self, cfg: dict) -> None: ... # receives [plugins.<name>]
+    shared_config: str | None = None  # borrow another plugin's table
 
-class TargetPlugin(Plugin):         # instantiated once per [targets.<name>] table
-    kind: str                       # entry-point name in the `rigger.targets` group
+    def configure(self, cfg: dict) -> None: ...  # receives [plugins.<name>]
+
+
+class TargetPlugin(Plugin):  # instantiated once per [targets.<name>] table
+    kind: str  # entry-point name in the `rigger.targets` group
     label: str = ""
+
     def instruments(self) -> list[Instrument]: ...
+
 
 class MarketPlugin(Plugin):
     currency: str
+
     def universe(self) -> list[Instrument]: ...
-    def is_open(self, ts) -> bool: ...          # no caller yet
-    def next_open(self, ts) -> datetime: ...    # no caller yet
+    def is_open(self, ts) -> bool: ...  # no caller yet
+    def next_open(self, ts) -> datetime: ...  # no caller yet
+
 
 class DataPlugin(Plugin):
-    market: str | None = None       # legacy sugar, folded into scope.markets
-    scope: Scope = Scope()          # from [plugins.<name>].scope
-    def universe(self, ctx) -> list[Instrument]: return self.scope.filter(ctx.universe)
+    market: str | None = None  # legacy sugar, folded into scope.markets
+    scope: Scope = Scope()  # from [plugins.<name>].scope
+
+    def universe(self, ctx) -> list[Instrument]:
+        return self.scope.filter(ctx.universe)
+
     async def fetch(self, instruments, since) -> list[Bar | NewsItem | Fundamental | Event]: ...
 
+
 @dataclass(frozen=True)
-class Scope:                        # AND across axes, OR within one; None = unrestricted
+class Scope:  # AND across axes, OR within one; None = unrestricted
     watchlists: frozenset[str] | None = None
     asset_classes: frozenset[str] | None = None
     markets: frozenset[str] | None = None

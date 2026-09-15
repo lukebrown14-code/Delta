@@ -101,12 +101,14 @@ def target_specs() -> dict[str, WatchTarget]:
     from rigger.core import config as config_mod
 
     raw = config_mod.load_toml()
-    specs: dict[str, dict[str, Any]] = {}
+    specs: dict[str, tuple[dict[str, Any], bool]] = {}
     for name, values in raw.get("targets", {}).items():
-        specs[str(name)] = {"kind": DEFAULT_KIND, **dict(values)}
+        specs[str(name)] = ({"kind": DEFAULT_KIND, **dict(values)}, False)
     for name, values in raw.get("watchlists", {}).items():
-        specs.setdefault(str(name), {"kind": LEGACY_KIND, **dict(values)})
-    return {name: target_from_spec(name, spec) for name, spec in specs.items()}
+        specs.setdefault(str(name), ({"kind": LEGACY_KIND, **dict(values)}, True))
+    return {
+        name: target_from_spec(name, spec, legacy=legacy) for name, (spec, legacy) in specs.items()
+    }
 
 
 def add_target(

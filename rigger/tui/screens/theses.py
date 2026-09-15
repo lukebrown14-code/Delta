@@ -15,8 +15,8 @@ from textual.screen import Screen
 from textual.widget import Widget
 from textual.widgets import Button, DataTable, Input, Static
 
-from rigger import theses
-from rigger.evidence import EvidenceItem, cite, evidence
+from rigger import theses, thesis_summary
+from rigger.evidence import EvidenceItem, cite, evidence_by_ids
 from rigger.thesis_health import badge_text, compute_health, state_style
 
 
@@ -55,6 +55,7 @@ class Theses(Screen):
         self.rig = rig
         self.selected: str | None = None
         self.candidates: list[theses.ThesisEvidence] = []
+        self._summary: thesis_summary.ThesisSummary | None = None
 
     def compose(self) -> ComposeResult:
         yield VerticalScroll(
@@ -65,6 +66,7 @@ class Theses(Screen):
                 Input(placeholder="targets (US:AAPL,US:MSFT)", id="th-targets"),
                 Input(placeholder="time horizon (e.g. 10y)", id="th-horizon"),
                 Button("Add", id="th-add"),
+                Button("Summarise", id="th-summarise"),
             ),
             Static(id="thesis-detail-title"),
             VerticalScroll(id="thesis-detail"),
@@ -86,12 +88,15 @@ class Theses(Screen):
     async def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         if event.row_key.value is not None:
             self.selected = event.row_key.value
+            self._summary = None
             await self.render_detail()
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         button_id = event.button.id or ""
         if button_id == "th-add":
             await self._add_thesis()
+        elif button_id == "th-summarise":
+            await self._summarise()
         elif button_id.startswith(("th-accept-", "th-reject-")):
             await self._resolve_candidate(button_id)
 
@@ -114,8 +119,20 @@ class Theses(Screen):
             self.query_one(input_id, Input).value = ""
         self.refresh_list()
         self.selected = thesis.id
+        self._summary = None
         await self.render_detail()
         self.notify(f"Added thesis {thesis.id}")
+
+    async def _summarise(self) -> None:
+        if self.selected is None:
+            self.notify("select a thesis first", severity="error")
+            return
+        try:
+            self._summary = await thesis_summary.summarize_thesis(self.rig, self.selected)
+        except Exception as exc:  # model key, network, validation — keep the panel usable
+            self.notify(f"summary failed: {exc}", severity="error")
+            return
+        await self.render_detail()
 
     async def _resolve_candidate(self, button_id: str) -> None:
         index = int(button_id.rsplit("-", 1)[-1])
@@ -153,21 +170,36 @@ class Theses(Screen):
             headline += f"\nscope: {thesis.scope}"
         title.update(headline)
 
-        items = evidence(self.rig.engine)
-        cites = {item.id: cite(item) for item in items}
-        by_id = {item.id: item for item in items}
         groups: dict[str, list[theses.ThesisEvidence]] = {
             "support": [],
             "against": [],
             "neutral": [],
         }
-        for row in theses.evidence_for(self.rig.engine, thesis.id, accepted_only=False):
+        links = theses.evidence_for(self.rig.engine, thesis.id, accepted_only=False)
+        for row in links:
             if row.accepted:
                 groups[row.side].append(row)
             else:
                 self.candidates.append(row)
 
+        # Fetch by linked id, not from the recent-evidence window: accepted
+        # evidence that has aged out of the pool still belongs to the thesis.
+        items = evidence_by_ids(self.rig.engine, [row.evidence_id for row in links])
+        cites = {item.id: cite(item) for item in items}
+        by_id = {item.id: item for item in items}
+
         widgets: list[Widget] = [self._health_badge(thesis, groups, by_id)]
+        widgets.append(Static("[bold]Summary[/bold]"))
+        if self._summary is None:
+            widgets.append(Static("press Summarise to generate", classes="diagram"))
+        else:
+            widgets.append(Static(self._summary.summary, markup=False))
+            if self._summary.strongest_support:
+                widgets.append(Static(f"support: {self._summary.strongest_support}", markup=False))
+            if self._summary.strongest_counter:
+                widgets.append(Static(f"counter: {self._summary.strongest_counter}", markup=False))
+            for unknown in self._summary.unknowns:
+                widgets.append(Static(f"unknown: {unknown}", markup=False))
         for heading, side in (
             ("Supporting", "support"),
             ("Against", "against"),

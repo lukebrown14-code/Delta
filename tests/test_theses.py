@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlmodel import Session
@@ -12,8 +12,9 @@ from textual.app import App
 from rigger import theses
 from rigger.core.db import NewsItemTable
 from rigger.core.json import to_json
+from rigger.evidence import evidence
 from rigger.tui.screens.theses import Theses
-from tests.conftest import FakeConfig, FakeLLM
+from tests.conftest import FakeConfig, FakeLLM, seed_bars
 
 INST = "US:AAPL"
 OTHER = "US:MSFT"
@@ -264,5 +265,60 @@ def test_theses_screen_smoke(tmp_engine):
             detail_text = "\n".join(str(widget.render()) for widget in screen.query("Static"))
             assert "Cloud deal reported." in detail_text
             assert "Supporting" in detail_text
+
+    asyncio.run(run())
+
+
+def test_get_thesis_accepts_the_truncated_id_the_ui_shows(tmp_engine):
+    """The CLI and TUI print ids at 12 chars, so a prefix must resolve."""
+    thesis = theses.create_thesis(tmp_engine, CLAIM, scope=SCOPE)
+
+    assert theses.get_thesis(tmp_engine, thesis.id[:12]) == thesis
+    with pytest.raises(KeyError, match="unknown thesis"):
+        theses.get_thesis(tmp_engine, "nope")
+
+
+def test_re_linking_evidence_keeps_it_accepted(tmp_engine):
+    """Correcting a side or note must not silently drop the item from the thesis."""
+    thesis = theses.create_thesis(tmp_engine, CLAIM)
+    theses.add_evidence(tmp_engine, thesis.id, "news:n1", "support", "note")
+    theses.set_accepted(tmp_engine, thesis.id, "news:n1", True)
+
+    updated = theses.add_evidence(tmp_engine, thesis.id, "news:n1", "against", "corrected note")
+
+    assert updated.accepted is True
+    visible = theses.evidence_for(tmp_engine, thesis.id)
+    assert [(row.side, row.note) for row in visible] == [("against", "corrected note")]
+    assert (
+        theses.add_evidence(
+            tmp_engine, thesis.id, "news:n1", "against", "note", accepted=False
+        ).accepted
+        is False
+    )
+    assert theses.evidence_for(tmp_engine, thesis.id) == []
+
+
+def test_screen_keeps_accepted_evidence_that_aged_out_of_the_pool(tmp_engine):
+    """Evidence is fetched by linked id, so the newest-200 pool window can't hide it."""
+    _seed_news(tmp_engine)
+    seed_bars(tmp_engine, INST, n=250, start=NOW + timedelta(days=1))
+    thesis = theses.create_thesis(tmp_engine, CLAIM, targets=(INST,))
+    theses.add_evidence(tmp_engine, thesis.id, "news:n1", "support", "Cloud deal reported.")
+    theses.set_accepted(tmp_engine, thesis.id, "news:n1", True)
+    assert "news:n1" not in {item.id for item in evidence(tmp_engine)}
+
+    class ThesesApp(App):
+        def on_mount(self) -> None:
+            self.push_screen(Theses(FakeRig(tmp_engine)))
+
+    async def run():
+        app = ThesesApp()
+        async with app.run_test() as pilot:
+            app.screen.query_one("#thesis-table").focus()
+            await pilot.press("enter")
+            await pilot.pause()
+            detail_text = "\n".join(str(widget.render()) for widget in app.screen.query("Static"))
+            assert "no accepted evidence" not in detail_text
+            assert "Title n1 <https://example.com/n1>" in detail_text
 
     asyncio.run(run())

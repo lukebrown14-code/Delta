@@ -231,3 +231,17 @@ def test_model_picker_empty_catalog_degrades_to_free_text(monkeypatch, tmp_path)
             completion_price=0.0,
         )
     ]
+
+
+@respx.mock
+def test_failed_fetch_keeps_previous_catalog(monkeypatch, tmp_path):
+    """A transient error must not wipe a good cache for the whole TTL."""
+    monkeypatch.chdir(tmp_path)
+    _write_cache("openrouter", [SONNET, GPT])
+    stamped = _read_cache_entry("openrouter")
+    assert stamped is not None
+    respx.get(MODELS_URL).mock(return_value=httpx.Response(500))
+    provider = OpenRouterProvider(api_key="k")
+
+    assert asyncio.run(catalog(provider, force=True)) == [SONNET, GPT]
+    assert cached_catalog("openrouter") == [SONNET, GPT]

@@ -77,11 +77,17 @@ class Targets(Screen):
             self.refresh_view()
             self.notify(f"Added target {name}")
         elif event.button.id == "tg-remove":
-            row = self.query_one("#target-table", DataTable).cursor_row
-            if row < 0:
+            table = self.query_one("#target-table", DataTable)
+            # An empty DataTable still reports cursor_row == 0, so row_count is
+            # the only reliable "nothing to select" test.
+            if table.row_count == 0:
                 self.notify("Select a target first", severity="error")
                 return
-            name = self.query_one("#target-table", DataTable).get_row_at(row)[0]
-            services.remove_target(str(name))
+            name = table.get_row_at(table.cursor_row)[0]
+            try:
+                services.remove_target(str(name))
+            except (ValueError, KeyError) as exc:
+                self.notify(exc.args[0], severity="error")
+                return
             self.refresh_view()
             self.notify(f"Removed target {name}")

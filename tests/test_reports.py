@@ -222,3 +222,56 @@ def test_reports_screen_lists_targets_and_generates(tmp_engine, tmp_path, monkey
 
     report_cite_line = "[rss] Apple and Microsoft sign cloud deal <https://example.com/news-1>"
     asyncio.run(run())
+
+
+def test_reports_screen_shows_newest_report_across_instruments(tmp_engine, tmp_path, monkeypatch):
+    """Paths sort by filename: a plain path sort would show the last ticker's report."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "config.toml").write_text(
+        '[targets.pair]\nkind = "theme"\nmarket = "us"\ntickers = ["AAPL", "MSFT"]\n',
+        encoding="utf-8",
+    )
+    reports_dir = tmp_path / "reports"
+    other = "US:MSFT"
+    for instrument, day, body in ((INST, "2026-03-20", "newest"), (other, "2026-03-19", "older")):
+        path = reports_dir / instrument / f"{day}.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(body, encoding="utf-8")
+    universe = [
+        Instrument(id=INST, market="us", symbol="AAPL", currency="USD", watchlists=("pair",)),
+        Instrument(id=other, market="us", symbol="MSFT", currency="USD", watchlists=("pair",)),
+    ]
+    rig = ScreenRig(tmp_engine, FakeLLM({}), universe, str(reports_dir))
+
+    class ReportsApp(App):
+        def on_mount(self) -> None:
+            self.push_screen(Reports(rig))
+
+    async def run():
+        app = ReportsApp()
+        async with app.run_test() as pilot:
+            app.screen.show_latest("pair")
+            await pilot.pause()
+            log = app.screen.query_one("#report-view")
+            assert "newest" in "".join(str(line) for line in log.lines)
+
+    asyncio.run(run())
+
+
+def test_reports_screen_generate_with_no_targets_notifies(tmp_engine, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "config.toml").write_text("", encoding="utf-8")
+    rig = ScreenRig(tmp_engine, FakeLLM({}), [], str(tmp_path / "reports"))
+
+    class ReportsApp(App):
+        def on_mount(self) -> None:
+            self.push_screen(Reports(rig))
+
+    async def run():
+        app = ReportsApp()
+        async with app.run_test() as pilot:
+            assert app.screen.query_one("#report-targets", DataTable).row_count == 0
+            await pilot.click("#report-generate")
+            await pilot.pause()
+
+    asyncio.run(run())

@@ -36,9 +36,9 @@ class WatchTarget(BaseModel):
     notes: str = ""
 
 
-def _kind_of(name: str, spec: dict[str, Any]) -> TargetKind:
+def _kind_of(name: str, spec: dict[str, Any], *, legacy: bool = False) -> TargetKind:
     raw = str(spec.get("kind", "")).lower()
-    if raw in ("", LEGACY_KIND):
+    if raw in ("", LEGACY_KIND) or (legacy and raw not in KNOWN_KINDS):
         tickers = [t for t in spec.get("tickers", []) if t]
         return "company" if len(tickers) == 1 else "theme"
     if raw not in KNOWN_KINDS:
@@ -48,12 +48,17 @@ def _kind_of(name: str, spec: dict[str, Any]) -> TargetKind:
     return cast(TargetKind, raw)
 
 
-def target_from_spec(name: str, spec: dict[str, Any]) -> WatchTarget:
-    """Build the domain model from a ``[targets.<name>]`` (or legacy) table."""
+def target_from_spec(name: str, spec: dict[str, Any], *, legacy: bool = False) -> WatchTarget:
+    """Build the domain model from a ``[targets.<name>]`` (or legacy) table.
+
+    ``legacy`` marks a ``[watchlists.<name>]`` table. Its ``kind`` may name a
+    third-party kind from the ``rigger.watchlists`` entry-point group, which is
+    still honoured, so such a kind is modelled by shape rather than rejected.
+    """
     market = str(spec.get("market", "")).lower()
     return WatchTarget(
         id=name,
-        kind=_kind_of(name, spec),
+        kind=_kind_of(name, spec, legacy=legacy),
         name=str(spec.get("label", name)),
         markets=(market,) if market else (),
         tickers=tuple(str(t).upper() for t in spec.get("tickers", []) if t),

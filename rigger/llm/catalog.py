@@ -77,6 +77,12 @@ async def catalog(provider: Provider, *, force: bool = False) -> list[ModelInfo]
         models = await provider.models(force=force)
     except Exception:
         models = []
+    # A failed fetch must not overwrite a good catalog: writing [] here would
+    # also stamp a fresh fetched_at and hide the real models for a full TTL.
+    # Providers report a failure as an empty list, so an empty result is
+    # treated the same way and the cache is served instead.
+    if not models and entry is not None:
+        return entry[1]
     _write_cache(provider.name, models)
     return models
 

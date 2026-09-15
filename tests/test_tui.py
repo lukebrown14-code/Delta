@@ -144,3 +144,19 @@ def test_question_mark_opens_help_then_closes(rig):
             assert app.screen.name == "home"
 
     asyncio.run(run())
+
+
+def test_targets_panel_remove_with_no_targets_notifies(rig, monkeypatch, tmp_path):
+    """An empty DataTable reports cursor_row == 0, so row_count is the real guard."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "config.toml").write_text("", encoding="utf-8")
+
+    async def run():
+        app = RiggerApp(rig)
+        async with app.run_test() as pilot:
+            await pilot.press("w")
+            assert app.screen.query_one("#target-table").row_count == 0
+            await pilot.click("#tg-remove")
+            await pilot.pause()
+
+    asyncio.run(run())

@@ -71,7 +71,9 @@ class Reports(Screen):
         if event.button.id != "report-generate":
             return
         table = self.query_one("#report-targets", DataTable)
-        if table.cursor_row < 0:
+        # An empty DataTable still reports cursor_row == 0, so row_count is the
+        # only reliable "nothing to select" test.
+        if table.row_count == 0:
             self.notify("Select a target first", severity="error")
             return
         self.generate(str(table.get_row_at(table.cursor_row)[0]))
@@ -84,8 +86,12 @@ class Reports(Screen):
         log = self.query_one("#report-view", RichLog)
         log.clear()
         base = Path(getattr(self.rig.cfg, "reports_dir", "reports"))
+        # Reports live at base/<instrument>/<date>.md, so sort by filename: a
+        # plain path sort would order by instrument first and show the last
+        # ticker's report rather than the newest one.
         paths = sorted(
-            path for inst in self._instruments(target_id) for path in (base / inst).glob("*.md")
+            (path for inst in self._instruments(target_id) for path in (base / inst).glob("*.md")),
+            key=lambda path: path.name,
         )
         if not paths:
             log.write(f"No report yet for {target_id} — select it and press Generate.")

@@ -1,0 +1,27 @@
+Use only the information provided. Do not rely on prior knowledge of prices, news or events. Do not recommend buying or selling anything.
+
+You are summarising the current state of a long-horizon thesis for its author. Never call the thesis "right" or "wrong": it is a forward-looking claim.
+
+Claim: {{ claim }}
+Scope: {{ scope or "(not specified)" }}
+Time horizon: {{ time_horizon or "(not specified)" }}
+Assumptions: {{ assumptions | join("; ") or "(none)" }}
+Falsifiers (what would disprove it): {{ falsifiers | join("; ") or "(none)" }}
+
+Determined health state (computed from the evidence below; report it as-is, do not change it): {{ state }}
+Evidence tilt: {{ "%.2f" | format(tilt) }} (negative means the evidence leans against)
+Accepted evidence: {{ support }} for, {{ against }} against, {{ neutral }} neutral.
+
+Accepted evidence, cited:
+{% for item in items %}
+[{{ item.id }}] {{ item.side }} — {{ item.note }} — {{ item.cite }}
+{% endfor %}
+
+Write, citing evidence ids in [id] form:
+- "summary": one paragraph giving the current view, honest about the balance, never asserting the thesis is correct.
+- "strongest_support": one sentence naming the single strongest supporting item (cite its id); "" if none.
+- "strongest_counter": one sentence naming the strongest opposing item (cite its id); "" if none.
+- "unknowns": a list of questions the existing evidence does not answer.
+- "citations": the list of evidence ids you cited.
+
+Only cite ids from the list above. Return valid JSON matching the schema.

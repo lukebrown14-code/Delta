@@ -15,7 +15,7 @@ from sqlmodel import Session
 
 from rigger.core.db import EventTable, FundamentalTable, NewsItemTable
 from rigger.core.json import to_json
-from rigger.evidence import cite, evidence
+from rigger.evidence import cite, evidence, evidence_by_ids
 from tests.conftest import seed_bars
 
 INST = "US:AAPL"
@@ -240,3 +240,21 @@ def test_limit_is_respected(tmp_engine):
     ]
     assert evidence(tmp_engine, limit=0) == []
     assert len(evidence(tmp_engine, limit=200)) == 14
+
+
+def test_evidence_by_ids_reaches_past_the_pool_window(tmp_engine):
+    """Ids are read directly, so an item outside the newest-N window is still found."""
+    _seed(tmp_engine)
+    recent = [item.id for item in evidence(tmp_engine, limit=2)]
+    aged = "fundamental:1"
+    assert aged not in recent
+
+    found = evidence_by_ids(tmp_engine, [aged, "news:news-1", "bar:1", "event:event-1"])
+
+    assert [item.id for item in found] == ["news:news-1", "event:event-1", "bar:1", aged]
+
+
+def test_evidence_by_ids_skips_unknown_and_malformed_ids(tmp_engine):
+    _seed(tmp_engine)
+    assert evidence_by_ids(tmp_engine, []) == []
+    assert evidence_by_ids(tmp_engine, ["no-prefix", "news:nope"]) == []

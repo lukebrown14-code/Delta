@@ -17,7 +17,7 @@ from typing import Any, Literal, cast
 from pydantic import BaseModel, Field
 from sqlalchemy.engine import Engine
 from sqlmodel import Field as SQLField
-from sqlmodel import Session, SQLModel, select
+from sqlmodel import Session, SQLModel, col, select
 
 from rigger.core.ids import stable_id
 from rigger.core.json import from_json, to_json
@@ -186,12 +186,22 @@ def list_theses(engine: Engine) -> list[Thesis]:
 
 
 def get_thesis(engine: Engine, id: str) -> Thesis:
-    """One thesis by id; ``KeyError`` when unknown."""
+    """One thesis by id or unique id prefix; ``KeyError`` when unknown.
+
+    The CLI and TUI show ids truncated, so a prefix is what a user has to hand.
+    """
     _ensure_tables(engine)
     with Session(engine) as session:
         row = session.get(ThesisTable, id)
         if row is None:
-            raise KeyError(f"unknown thesis: {id}")
+            matches = session.exec(
+                select(ThesisTable).where(col(ThesisTable.id).startswith(id))
+            ).all()
+            if len(matches) > 1:
+                raise KeyError(f"ambiguous thesis id prefix: {id}")
+            if not matches:
+                raise KeyError(f"unknown thesis: {id}")
+            row = matches[0]
         return _thesis_from_row(row)
 
 
@@ -216,9 +226,14 @@ def add_evidence(
     side: str,
     note: str,
     *,
-    accepted: bool = False,
+    accepted: bool | None = None,
 ) -> ThesisEvidence:
-    """Link evidence to a thesis, inserting or updating the (thesis, evidence) row."""
+    """Link evidence to a thesis, inserting or updating the (thesis, evidence) row.
+
+    ``accepted=None`` keeps an existing link's accepted flag, so re-linking to
+    correct a side or note does not silently drop the item out of the thesis.
+    New links default to not accepted.
+    """
     if side not in SIDES:
         raise ValueError(f"side must be one of {', '.join(SIDES)}; got {side!r}")
     _ensure_tables(engine)
@@ -227,26 +242,28 @@ def add_evidence(
             raise KeyError(f"unknown thesis: {thesis_id}")
         row = session.get(ThesisEvidenceTable, (thesis_id, evidence_id))
         if row is None:
+            effective = bool(accepted)
             session.add(
                 ThesisEvidenceTable(
                     thesis_id=thesis_id,
                     evidence_id=evidence_id,
                     side=side,
                     note=note,
-                    accepted=accepted,
+                    accepted=effective,
                 )
             )
         else:
+            effective = row.accepted if accepted is None else accepted
             row.side = side
             row.note = note
-            row.accepted = accepted
+            row.accepted = effective
         session.commit()
     return ThesisEvidence(
         thesis_id=thesis_id,
         evidence_id=evidence_id,
         side=cast(EvidenceSide, side),
         note=note,
-        accepted=accepted,
+        accepted=effective,
     )
 
 
@@ -286,6 +303,20 @@ def evidence_for(
             stmt = stmt.where(ThesisEvidenceTable.accepted.is_(True))  # type: ignore[attr-defined]
         stmt = stmt.order_by(ThesisEvidenceTable.evidence_id)
         return [_evidence_from_row(row) for row in session.exec(stmt).all()]
+
+
+def accepted_items(
+    engine: Engine, thesis_id: str, *, limit: int = 10_000
+) -> list[tuple[EvidenceItem, ThesisEvidence]]:
+    """Accepted evidence resolved to ``(EvidenceItem, ThesisEvidence)`` pairs.
+
+    Resolution runs over the thesis targets (all evidence when no targets), the
+    same pool discovery proposes from, so accepted ids align with stored rows.
+    """
+    thesis = get_thesis(engine, thesis_id)
+    rows = evidence_for(engine, thesis_id, accepted_only=True)
+    by_id = {item.id: item for item in _gather(engine, thesis.targets, since=None, limit=limit)}
+    return [(by_id[row.evidence_id], row) for row in rows if row.evidence_id in by_id]
 
 
 async def propose_evidence(
