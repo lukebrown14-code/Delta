@@ -7,7 +7,6 @@ import json
 import time
 
 import httpx
-import pytest
 import respx
 from textual.app import App
 from textual.widgets import DataTable, Input
@@ -25,7 +24,6 @@ from rigger.llm.catalog import (
 )
 from rigger.llm.providers import (
     OPENROUTER_BASE_URL,
-    LiteLLMSDKProvider,
     OpenRouterProvider,
 )
 from rigger.tui.screens.model_picker import ModelPicker
@@ -138,24 +136,8 @@ def test_disk_cache_round_trips_with_fetched_at_stamp(monkeypatch, tmp_path):
     assert before <= fetched_at <= time.time()
     assert loaded == models
     assert cached_catalog("openrouter") == models
-    assert cached_catalog("litellm") == []
-    assert _read_cache_entry("litellm") is None
-
-
-def test_litellm_sdk_maps_model_cost_without_network(monkeypatch, tmp_path):
-    monkeypatch.chdir(tmp_path)
-    with respx.mock(assert_all_called=False) as mock:
-        provider = LiteLLMSDKProvider()
-        models = asyncio.run(provider.models())
-        assert mock.calls.call_count == 0
-
-    assert len(models) > 100
-    by_id = {m.id: m for m in models}
-    gpt = by_id["gpt-4o"]
-    assert gpt.context_length == 128000
-    assert gpt.prompt_price == pytest.approx(2.5e-06)
-    assert gpt.completion_price == pytest.approx(1e-05)
-    assert "sample_spec" not in by_id
+    assert cached_catalog("openai") == []
+    assert _read_cache_entry("openai") is None
 
 
 def test_set_llm_route_round_trips(monkeypatch, tmp_path):

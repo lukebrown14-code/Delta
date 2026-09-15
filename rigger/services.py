@@ -19,9 +19,17 @@ from rigger.core.db import (
     store_items,
 )
 from rigger.core.time import parse_date
+from rigger.llm.providers import PROVIDERS, ProviderSpec
 from rigger.targets import DEFAULT_KIND, KNOWN_KINDS, LEGACY_KIND, WatchTarget, target_from_spec
 
 Log = Callable[[str], None]
+
+#: Settings attribute serving each fixed provider's env var; custom reads .env.
+_ENV_TO_ATTR = {
+    "OPENROUTER_API_KEY": "openrouter_api_key",
+    "OPENAI_API_KEY": "openai_api_key",
+    "ANTHROPIC_API_KEY": "anthropic_api_key",
+}
 
 
 def _noop_log(_message: str) -> None:
@@ -265,22 +273,44 @@ class Check:
     fix: str
 
 
+def _provider_key(rig: Any, spec: ProviderSpec) -> str:
+    """The configured key for ``spec``: Settings field, or .env for custom."""
+    from rigger.core.config import read_env_value
+
+    attr = _ENV_TO_ATTR.get(spec.env_var)
+    if attr is not None:
+        return str(getattr(rig.settings, attr, "") or "")
+    return read_env_value(spec.env_var)
+
+
 def setup_checks(rig: Any) -> list[Check]:
     provider = rig.cfg.llm_provider
-    key = (
-        rig.settings.openrouter_api_key
-        if provider == "openrouter"
-        else rig.settings.litellm_proxy_key
-        if provider == "litellm-proxy"
-        else "env"
-    )
-    checks = [
-        Check(
-            f"LLM provider ({provider})",
-            bool(key),
-            "Set OPENROUTER_API_KEY or LITELLM_PROXY_KEY in .env",
-        )
-    ]
+    spec = PROVIDERS.get(provider)
+    if spec is None:
+        checks = [
+            Check(
+                f"LLM provider ({provider})",
+                False,
+                f"unknown provider; valid: {', '.join(sorted(PROVIDERS))}",
+            )
+        ]
+    elif spec.name == "custom":
+        ok = bool(_provider_key(rig, spec)) and bool(getattr(rig.cfg, "llm_base_url", ""))
+        checks = [
+            Check(
+                f"LLM provider ({provider})",
+                ok,
+                "Press p on the Config screen to connect a custom endpoint",
+            )
+        ]
+    else:
+        checks = [
+            Check(
+                f"LLM provider ({provider})",
+                bool(_provider_key(rig, spec)),
+                f"Set {spec.env_var} in .env or press p on the Config screen",
+            )
+        ]
     checks.append(Check("Config file", Path("config.toml").exists(), "Create config.toml"))
     try:
         with Session(rig.engine) as session:

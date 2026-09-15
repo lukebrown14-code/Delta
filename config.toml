@@ -3,12 +3,23 @@ db_path = "data/rigger.db"
 reports_dir = "reports"
 
 [universe]
-us = ["AAPL", "MSFT", "NVDA", "GOOGL", "AMZN"]
-asx = ["BHP", "CBA", "CSL", "WES", "FMG"]
+us = [
+    "AAPL",
+    "MSFT",
+    "NVDA",
+    "GOOGL",
+    "AMZN",
+]
+asx = [
+    "BHP",
+    "CBA",
+    "CSL",
+    "WES",
+    "FMG",
+]
 
 [llm]
-provider = "openrouter"                # litellm | openrouter | litellm-proxy
-proxy_base_url = "http://localhost:4000"
+provider = "openrouter"
 
 [llm.routing]
 extract = "google/gemini-2.5-flash"
@@ -19,27 +30,27 @@ thesis_summary = "google/gemini-2.5-flash"
 
 [plugins.yfinance]
 enabled = true
-# yfinance ticker suffix per market; add a market here, not in code
-suffixes = { us = "", asx = ".AX" }
+
+[plugins.yfinance.suffixes]
+us = ""
+asx = ".AX"
 
 [plugins.asx]
 enabled = true
 
 [plugins.asx_announcements]
 enabled = true
-count = 20            # announcements per company per fetch
-timeout = 20          # seconds
-max_retries = 3       # on 429/5xx, exponential backoff from backoff_seconds
+count = 20
+timeout = 20
+max_retries = 3
 backoff_seconds = 1.0
 
 [plugins.sec_edgar]
 enabled = true
-contact = "luke_brown14@icloud.com"  # SEC requires a contact address in the User-Agent
+contact = "luke_brown14@icloud.com"
 
 [plugins.rss]
 enabled = true
-# Business news feeds. Items are matched to universe instruments by ticker or
-# company name; unmatched (macro) items are still stored with no instrument.
 feeds = [
     "https://feeds.a.dj.com/rss/RSSMarketsMain.xml",
     "https://www.cnbc.com/id/10001147/device/rss/rss.html",
@@ -48,3 +59,10 @@ feeds = [
 
 [plugins.yfinance_calendar]
 enabled = true
+
+[targets.bhp]
+kind = "company"
+market = "asx"
+tickers = [
+    "BHP",
+]

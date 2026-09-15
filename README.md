@@ -53,10 +53,20 @@ Pick a provider under `[llm]`:
 | `provider`      | What it does                                | Key needed |
 |-----------------|---------------------------------------------|------------|
 | `openrouter`    | One API for many models                     | `OPENROUTER_API_KEY` |
-| `litellm`       | LiteLLM SDK, calls vendors directly         | `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY` as needed |
-| `litellm-proxy` | A LiteLLM proxy you run at `proxy_base_url` | `LITELLM_PROXY_KEY` |
+| `openai`        | ChatGPT models direct from OpenAI           | `OPENAI_API_KEY` |
+| `anthropic`     | Claude models direct from Anthropic         | `ANTHROPIC_API_KEY` |
+| `custom`        | Any OpenAI-compatible server (Ollama, Groq, Together…) | `[llm] base_url` + key |
 
-Four jobs route to models independently in `[llm.routing]` — `extract`, `report`, `chat` and `thesis` — so you can put a cheap fast model on bulk news extraction and a stronger one on reports. Model ids are plain strings; change them freely, or press `m` in the app to browse what your provider offers, with prices.
+The easiest way to connect one is in the app: press `p` to browse providers, paste your key (masked input), and it's verified live, saved to `.env`, and activated immediately — no file editing, no restart. Manual setup works too: put the key in `.env`, set `provider` in `config.toml`. For `custom`, also set `base_url` (and optionally `api_key_env`, default `CUSTOM_API_KEY`):
+
+```toml
+[llm]
+provider = "custom"
+base_url = "http://localhost:11434/v1"   # e.g. Ollama
+api_key_env = "OLLAMA_KEY"               # optional, for non-local servers
+```
+
+Four jobs route to models independently in `[llm.routing]` — `extract`, `report`, `chat` and `thesis` — so you can put a cheap fast model on bulk news extraction and a stronger one on reports. Model ids are plain strings; change them freely, or press `m` in the app to browse what your provider offers, with prices. Route ids are provider-native (e.g. `claude-sonnet-4-...` on `anthropic`, `gpt-4o` on `openai`, `vendor/model` on `openrouter`) — switching providers warns when existing routes don't look right.
 
 Set `[plugins.sec_edgar].contact` to a real email before ingesting US filings — the SEC requires a contact address in the User-Agent.
 

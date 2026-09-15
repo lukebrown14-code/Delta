@@ -23,6 +23,11 @@ class Config(RiggerScreen):
             with Horizontal(classes="check-row"):
                 yield Static("llm provider:", markup=False, classes="muted")
                 yield Pill("none", id="cfg-provider")
+            yield Static(
+                "press p to connect or switch providers",
+                markup=False,
+                classes="empty-hint",
+            )
         with Card(title="Model routing"):
             yield RiggerTable(id="cfg-routing")
             yield Static("no routes set — press m to pick models", id="cfg-routing-empty", markup=False, classes="empty-hint")

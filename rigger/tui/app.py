@@ -9,7 +9,6 @@ from textual.binding import Binding
 from textual.command import Hit, Hits, Provider
 
 from rigger import services
-from rigger.core import config as config_mod
 from rigger.llm.catalog import ModelInfo, set_llm_route
 from rigger.runtime import Rigger
 from rigger.tui.screens.chat import Chat
@@ -87,6 +86,7 @@ class RiggerApp(App):
         Binding("c", "switch_screen('console')", "Console", tooltip="Type target/config commands"),
         Binding("w", "switch_screen('targets')", "Targets", tooltip="Manage watch targets"),
         Binding("m", "show_model_picker", "Model", tooltip="Pick the model for this screen"),
+        Binding("p", "show_provider_picker", "Provider", tooltip="Connect or switch the AI provider"),
         Binding("question_mark", "show_help", "Help", tooltip="Show the keymap"),
         Binding("q", "quit", "Quit", tooltip="Leave Rigger"),
         Binding("f2", "toggle_theme", "Theme", tooltip="Switch light/dark palette"),
@@ -150,11 +150,23 @@ class RiggerApp(App):
             set_llm_route(task, model.id)
             self.notify(f"{task} route set to {model.id}")
             if isinstance(self.rig, Rigger):
-                self.rig.settings, self.rig.cfg = config_mod.load_config()
+                self.rig.reload_llm()
 
         self.push_screen(
             ModelPicker(on_select, provider=provider, provider_name=self.rig.cfg.llm_provider)
         )
+
+    def action_show_provider_picker(self) -> None:
+        from rigger.tui.screens.provider_picker import (
+            ProviderPicker,
+            connect_provider,
+            provider_key_status,
+        )
+
+        def on_select(name: str) -> None:
+            self.run_worker(connect_provider(self, self.rig, name), exclusive=True)
+
+        self.push_screen(ProviderPicker(on_select, key_status=provider_key_status(self.rig)))
 
 
 def run_tui(rig: Rigger | None = None) -> None:

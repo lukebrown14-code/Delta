@@ -89,7 +89,7 @@ rigger/
 │   └── events.py        in-process async event bus
 ├── llm/
 │   ├── client.py        provider-agnostic client: cache, cost + latency logging
-│   ├── providers.py     OpenRouter, LiteLLM SDK, LiteLLM Proxy
+│   ├── providers.py     OpenRouter, OpenAI-compat (OpenAI, Anthropic, custom)
 │   ├── catalog.py       model catalog, config writeback (routes, per-plugin models)
 │   ├── router.py        task -> model id, with per-plugin override
 │   ├── structured.py    JSON-schema enforced calls returning validated models
@@ -263,8 +263,9 @@ inferred from shape when unstated. Do not migrate users' TOML.
 ## 6. LLM layer
 
 One provider-agnostic `LLMClient`. The call is delegated to a `Provider`:
-`openrouter` (one API, many models), `litellm` (SDK, calls vendors directly), or
-`litellm-proxy`. The client owns caching keyed on
+`openrouter` (one API, many models, credit auto-fit), or any OpenAI-compatible
+endpoint (`openai`, `anthropic`, `custom` for Ollama/Groq/Together). The client
+owns caching keyed on
 `sha256(model + prompt_version + prompt)`, persists every call to `llmcall`, and
 applies the retry policy.
 
