@@ -227,12 +227,18 @@ def update_thesis(
     targets: Sequence[str],
     time_horizon: str,
     status: str,
+    scope: str | None = None,
+    assumptions: Sequence[str] | None = None,
+    falsifiers: Sequence[str] | None = None,
 ) -> Thesis:
-    """Update a thesis and retain its linked evidence if its claim changes.
+    """Update a thesis and retain its linked evidence if its identity changes.
 
-    A thesis id is derived from its claim and scope. Editing the claim therefore
+    A thesis id is derived from its claim and scope. Editing either therefore
     changes the id; evidence rows are moved in the same transaction so editing
     does not silently discard a review history.
+
+    ``scope``, ``assumptions`` and ``falsifiers`` default to ``None``, meaning
+    "leave as stored" — a caller that does not collect a field cannot erase it.
     """
     claim = claim.strip()
     if not claim:
@@ -244,7 +250,12 @@ def update_thesis(
         row = session.get(ThesisTable, id)
         if row is None:
             raise KeyError(f"unknown thesis: {id}")
-        new_id = thesis_id(claim, row.scope)
+        new_scope = row.scope if scope is None else scope.strip()
+        new_assumptions = (
+            row.assumptions if assumptions is None else to_json(list(assumptions))
+        )
+        new_falsifiers = row.falsifiers if falsifiers is None else to_json(list(falsifiers))
+        new_id = thesis_id(claim, new_scope)
         if new_id != row.id:
             if session.get(ThesisTable, new_id) is not None:
                 raise ValueError(f"thesis {new_id} already exists")
@@ -266,9 +277,9 @@ def update_thesis(
             row = ThesisTable(
                 id=new_id,
                 claim=claim,
-                scope=row.scope,
-                assumptions=row.assumptions,
-                falsifiers=row.falsifiers,
+                scope=new_scope,
+                assumptions=new_assumptions,
+                falsifiers=new_falsifiers,
                 targets=to_json(list(targets)),
                 time_horizon=time_horizon,
                 created_at=row.created_at,
@@ -277,6 +288,9 @@ def update_thesis(
             session.add(row)
         else:
             row.claim = claim
+            row.scope = new_scope
+            row.assumptions = new_assumptions
+            row.falsifiers = new_falsifiers
             row.targets = to_json(list(targets))
             row.time_horizon = time_horizon
             row.status = status

@@ -7,7 +7,15 @@ from datetime import UTC, datetime
 import pytest
 
 from rigger.core.models import Instrument
-from rigger.quotes import YahooQuotes, parse_quote, yahoo_search
+from rigger.quotes import YahooQuotes, classify_yahoo_asset, parse_quote, yahoo_search
+
+
+@pytest.mark.parametrize(
+    ("quote_type", "expected"),
+    [("EQUITY", "equity"), ("ETF", "etf"), ("BOND", "bond"), ("CURRENCY", "fx"), ("FUTURE", "commodity"), ("CRYPTOCURRENCY", "crypto")],
+)
+def test_classify_yahoo_asset(quote_type, expected):
+    assert classify_yahoo_asset("TEST", quote_type) == expected
 
 
 def message(**overrides):
@@ -50,6 +58,7 @@ def test_yahoo_search_normalizes_exchange_and_currency(monkeypatch):
             self.quotes = [
                 {"symbol": "BHP.AX", "longname": "BHP Group Limited", "exchange": "ASX", "currency": "AUD"},
                 {"symbol": "AAPL", "shortname": "Apple Inc.", "exchange": "NMS"},
+                {"symbol": "BTC-USD", "shortname": "Bitcoin USD", "exchange": "CCC", "quoteType": "CRYPTOCURRENCY"},
             ]
 
     monkeypatch.setattr(yfinance, "Search", Search)
@@ -58,6 +67,7 @@ def test_yahoo_search_normalizes_exchange_and_currency(monkeypatch):
     assert results[0].currency == "AUD"
     assert results[1].market == "us"
     assert results[1].currency == "USD"
+    assert results[2].asset_class == "crypto"
 
 
 def instrument():

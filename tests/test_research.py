@@ -273,11 +273,11 @@ def test_settings_diagnostics_and_gather_refresh(tmp_engine, tmp_path, monkeypat
     rig.plugins = {}
     calls = []
 
-    async def ingest(_):
-        calls.append("ingest")
+    async def ingest(_, **kwargs):
+        calls.append(("ingest", kwargs.get("tickers")))
 
-    async def extract(_):
-        calls.append("extract")
+    async def extract(_, **kwargs):
+        calls.append(("extract", kwargs.get("instruments")))
 
     monkeypatch.setattr("rigger.services.ingest", ingest)
     monkeypatch.setattr("rigger.services.extract", extract)
@@ -291,7 +291,7 @@ def test_settings_diagnostics_and_gather_refresh(tmp_engine, tmp_path, monkeypat
         async with TestApp().run_test() as pilot:
             screen = pilot.app.screen
             await screen.gather_all().wait()
-            assert calls == ["ingest", "extract"]
+            assert calls == [("ingest", None), ("extract", None)]
             assert screen.items
             assert not screen.state.busy
             pilot.app.switch_screen("config")
@@ -300,5 +300,176 @@ def test_settings_diagnostics_and_gather_refresh(tmp_engine, tmp_path, monkeypat
             assert settings.query_one(Collapsible).collapsed
             assert settings.query_one("#health-table").row_count > 0
             assert "US:AAPL" in str(settings.query_one("#health-latest", Static).render())
+
+    asyncio.run(run())
+
+
+def test_report_age_and_section_counts_surface_staleness(tmp_engine, tmp_path, monkeypatch):
+    """A week-old report must not read the same as a fresh one."""
+    rig = setup_rig(tmp_engine, tmp_path, monkeypatch)
+    stale = Report(
+        target_id=INST,
+        as_of=datetime.now(UTC) - timedelta(days=9),
+        prompt_version="report_v1",
+        summary="An ageing summary",
+        sentiment=-0.5,
+        bull=[Claim(text="One bull claim.", evidence_ids=["news:news-1"])],
+        bear=[Claim(text="One bear claim.", evidence_ids=["news:news-1"])],
+        citations={"news:news-1": "Partnership filing"},
+    )
+    write_report(stale, rig.cfg.reports_dir)
+
+    class TestApp(App):
+        def on_mount(self):
+            self.push_screen(Reports(rig))
+
+    async def run():
+        async with TestApp().run_test() as pilot:
+            screen = pilot.app.screen
+            label, state = screen.report_age(None)
+            assert label == "9d old"
+            assert state == "error"
+            assert screen.query_one("#report-age-dot").state == "error"
+            # Sentiment is a coloured pill, not buried italic body text.
+            assert "-0.50" in str(screen.query_one("#report-sentiment").render())
+            assert screen.query_one("#report-sentiment").has_class("-error")
+            # The badge says how much substance the report has.
+            badge = str(screen.query_one("#report-doc")._bar._badge.render())
+            assert "bull 1" in badge and "bear 1" in badge
+            # A claim's source count is visible without counting cite lines.
+            assert "(1 source)" in screen.query_one(MarkdownViewer).document.source
+
+    asyncio.run(run())
+
+
+def test_same_day_regeneration_keeps_the_previous_run(tmp_engine, tmp_path, monkeypatch):
+    """The change between two runs is the signal; it must survive a rerun."""
+    from rigger.reports import report_history
+
+    rig = setup_rig(tmp_engine, tmp_path, monkeypatch)
+    base = rig.cfg.reports_dir
+    day = datetime.now(UTC).replace(hour=1, minute=0, second=0, microsecond=0)
+
+    def run_at(when, sentiment):
+        return write_report(
+            Report(
+                target_id=INST,
+                as_of=when,
+                prompt_version="report_v1",
+                summary="s",
+                sentiment=sentiment,
+                bull=[Claim(text="A claim.", evidence_ids=["news:news-1"])],
+                citations={"news:news-1": "Partnership filing"},
+            ),
+            base,
+        )
+
+    first = run_at(day, -0.10)
+    second = run_at(day.replace(hour=2), -0.30)
+    assert first == second, "the canonical path stays the dated file"
+
+    history = report_history(base, INST)
+    assert [round(report.sentiment, 2) for report in history] == [-0.30, -0.10]
+
+    class TestApp(App):
+        def on_mount(self):
+            self.push_screen(Reports(rig))
+
+    async def run():
+        async with TestApp().run_test() as pilot:
+            screen = pilot.app.screen
+            # show_latest still resolves the newest run, not an archived one.
+            assert screen.report is not None
+            assert round(screen.report.sentiment, 2) == -0.30
+            assert "was -0.10" in str(screen.query_one("#report-sentiment-delta").render())
+            history = screen.query_one("#report-history")
+            assert history.display
+            assert "-0.30" in str(history.render()) and "-0.10" in str(history.render())
+
+    asyncio.run(run())
+
+
+def test_status_line_reports_a_price_not_a_bare_date(tmp_engine, tmp_path, monkeypatch):
+    rig = setup_rig(tmp_engine, tmp_path, monkeypatch)
+
+    class TestApp(App):
+        def on_mount(self):
+            self.push_screen(Reports(rig))
+
+    async def run():
+        async with TestApp().run_test() as pilot:
+            screen = pilot.app.screen
+            close = evidence(rig.engine, target=INST, kind="bar", limit=1)[0].raw["close"]
+            assert f"{close:,.2f} USD" in screen.last_close(INST)
+            assert f"{close:,.2f} USD" in screen.status_text
+            assert screen.last_close("US:NOPE") == "last close: none"
+
+    asyncio.run(run())
+
+
+def test_every_action_is_reachable_from_the_keyboard(tmp_engine, tmp_path, monkeypatch):
+    """The app is keyboard-first; this screen used to be mouse-only."""
+    rig = setup_rig(tmp_engine, tmp_path, monkeypatch)
+    saved_report(rig)
+
+    class TestApp(App):
+        def on_mount(self):
+            self.push_screen(Reports(rig))
+
+    async def run():
+        async with TestApp().run_test() as pilot:
+            screen = pilot.app.screen
+            await pilot.press("e")
+            assert screen.tab == "evidence"
+            await pilot.press("r")
+            assert screen.tab == "report"
+            # The active tab is marked by class, leaving one primary button.
+            assert screen.query_one("#tab-report", Button).has_class("-tab-active")
+            primaries = [
+                button
+                for button in screen.query(Button)
+                if button.variant == "primary" and button.display
+            ]
+            assert [button.id for button in primaries] == ["report-generate"]
+            await pilot.press("slash")
+            assert screen.tab == "evidence"
+            assert screen.query_one("#evidence-search", Input).has_focus
+            # None of the screen keys may shadow the app-level navigation keys.
+            app_keys = {"1", "2", "3", "4", "5", "c", "h", "m", "p", "g", "q"}
+            assert not app_keys & {key for key, _, _ in screen.BINDINGS}
+
+    asyncio.run(run())
+
+
+def test_promote_claim_creates_a_thesis_with_its_evidence(tmp_engine, tmp_path, monkeypatch):
+    """A report claim becomes a thesis without re-finding its sources by hand."""
+    from rigger import theses
+
+    rig = setup_rig(tmp_engine, tmp_path, monkeypatch)
+    saved_report(rig)
+
+    class TestApp(App):
+        def on_mount(self):
+            self.push_screen(Reports(rig))
+
+    async def run():
+        async with TestApp().run_test() as pilot:
+            screen = pilot.app.screen
+            assert "(thesis:bull:0)" in screen.query_one(MarkdownViewer).document.source
+            screen.promote_claim("bull:0")
+            await pilot.pause()
+            dialog = pilot.app.screen
+            assert dialog.query_one("#th-claim", Input).value == "The companies partnered."
+            assert dialog.query_one("#th-targets", Input).value == INST
+            await pilot.press("enter")
+            await pilot.pause()
+            stored = theses.list_theses(rig.engine)
+            assert [thesis.claim for thesis in stored] == ["The companies partnered."]
+            linked = theses.evidence_for(rig.engine, stored[0].id)
+            assert [item.evidence_id for item in linked] == ["news:news-1"]
+            assert linked[0].side == "support"
+            # A claim reference that no longer resolves must not raise.
+            screen.promote_claim("bull:99")
+            screen.promote_claim("nonsense")
 
     asyncio.run(run())

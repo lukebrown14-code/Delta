@@ -29,9 +29,7 @@ def provider_key_status(rig: Any) -> dict[str, bool]:
     for name, spec in PROVIDERS.items():
         if name == "custom":
             env = getattr(rig.cfg, "llm_api_key_env", "") or spec.env_var
-            status[name] = bool(read_env_value(env)) and bool(
-                getattr(rig.cfg, "llm_base_url", "")
-            )
+            status[name] = bool(read_env_value(env)) and bool(getattr(rig.cfg, "llm_base_url", ""))
         else:
             status[name] = bool(read_env_value(spec.env_var))
     return status

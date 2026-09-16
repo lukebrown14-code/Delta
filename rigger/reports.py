@@ -20,6 +20,11 @@ from rigger.evidence import EvidenceItem, cite, evidence
 from rigger.llm.router import model_for
 from rigger.targets import WatchTarget
 
+#: Superseded reports are moved here rather than overwritten, so the current
+#: report stays the only ``*.md`` at the top of a target's directory and the
+#: existing ``glob("*.md")`` readers keep working unchanged.
+HISTORY_DIR = "history"
+
 REPORT_TEMPLATE = "report_v1.j2"
 PROMPT_VERSION = REPORT_TEMPLATE.removesuffix(".j2")
 
@@ -145,7 +150,14 @@ async def build_report(rig: Any, target_id: str, *, since: str | None = None) ->
 
 
 def render_markdown(report: Report, *, interactive: bool = False) -> str:
-    """Markdown with every claim followed by the cite lines of its evidence."""
+    """Markdown with every claim followed by the cite lines of its evidence.
+
+    ``interactive`` is the in-app render: cites become ``evidence:`` links and
+    each claim carries its source count, so a claim resting on one source is
+    distinguishable from one resting on several. The plain render is the
+    persisted form and must stay byte-stable — ``show_latest`` compares it
+    against the stored markdown to decide whether the sidecar still matches.
+    """
     lines = [
         f"# Report — {report.target_id}",
         "",
@@ -161,8 +173,13 @@ def render_markdown(report: Report, *, interactive: bool = False) -> str:
         claims: list[Claim] = getattr(report, field)
         lines += [f"## {title}", ""]
         if claims:
-            for claim in claims:
-                lines.append(f"- {claim.text}")
+            for index, claim in enumerate(claims):
+                suffix = ""
+                if interactive:
+                    count = len(claim.evidence_ids)
+                    plural = "" if count == 1 else "s"
+                    suffix = f" *({count} source{plural})* [+thesis](thesis:{field}:{index})"
+                lines.append(f"- {claim.text}{suffix}")
                 lines.extend(
                     (
                         f"  - [Inspect source](evidence:{evidence_id}) — "
@@ -180,11 +197,95 @@ def render_markdown(report: Report, *, interactive: bool = False) -> str:
     return "\n".join(lines) + "\n"
 
 
+#: Badge labels for the claim sections. Explicit rather than derived from the
+#: headings: "Sentiment reasons" would shorten to "sentiment" and read as the
+#: sentiment score, which is a different number shown right beside it.
+_SECTION_LABELS: dict[str, str] = {
+    "bull": "bull",
+    "bear": "bear",
+    "risks": "risks",
+    "catalysts": "catalysts",
+    "sentiment_reasons": "reasons",
+}
+
+
+def section_counts(report: Report) -> str:
+    """Compact per-section claim counts, e.g. ``bull 3 · bear 2 · risks 1``."""
+    return " · ".join(
+        f"{_SECTION_LABELS[field]} {len(getattr(report, field))}"
+        for field, _title in _SECTIONS
+        if getattr(report, field)
+    )
+
+
 def write_report(report: Report, base_dir: str | Path) -> Path:
-    """Write ``base_dir/<target_id>/<YYYY-MM-DD>.md`` and return its path."""
+    """Write ``base_dir/<target_id>/<YYYY-MM-DD>.md`` and return its path.
+
+    Regenerating on a day that already has a report moves the old pair into
+    ``history/`` first: the change between two runs — a sentiment that moved, a
+    bear claim that appeared — is the signal, so it is never overwritten.
+    """
     target_dir = Path(base_dir) / report.target_id
     target_dir.mkdir(parents=True, exist_ok=True)
     path = target_dir / f"{report.as_of:%Y-%m-%d}.md"
+    sidecar = path.with_suffix(".json")
+    _archive_superseded(path, sidecar)
     path.write_text(render_markdown(report), encoding="utf-8")
-    path.with_suffix(".json").write_text(report.model_dump_json(indent=2), encoding="utf-8")
+    sidecar.write_text(report.model_dump_json(indent=2), encoding="utf-8")
     return path
+
+
+def _archive_superseded(path: Path, sidecar: Path) -> None:
+    """Move an existing same-day report pair into ``history/``."""
+    if not path.exists():
+        return
+    history = path.parent / HISTORY_DIR
+    history.mkdir(parents=True, exist_ok=True)
+    stem = _archive_stem(path, sidecar)
+    # Two runs inside the same second would collide on the timestamp alone.
+    target = history / f"{stem}.md"
+    suffix = 1
+    while target.exists():
+        target = history / f"{stem}-{suffix}.md"
+        suffix += 1
+    path.replace(target)
+    if sidecar.exists():
+        sidecar.replace(target.with_suffix(".json"))
+
+
+def _archive_stem(path: Path, sidecar: Path) -> str:
+    """Name the archived copy after the generation time it actually holds."""
+    as_of = _as_of(sidecar) or datetime.fromtimestamp(path.stat().st_mtime, UTC)
+    return f"{as_of:%Y-%m-%dT%H-%M-%S}"
+
+
+def _as_of(sidecar: Path) -> datetime | None:
+    """The ``as_of`` of a persisted sidecar, or None when it is missing or stale."""
+    report = read_report(sidecar)
+    return report.as_of if report else None
+
+
+def read_report(sidecar: Path) -> Report | None:
+    """Parse a persisted ``.json`` sidecar, or None when absent or unreadable."""
+    try:
+        report = Report.model_validate_json(sidecar.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if report.as_of.tzinfo is None:
+        return report.model_copy(update={"as_of": report.as_of.replace(tzinfo=UTC)})
+    return report
+
+
+def report_history(base_dir: str | Path, target_id: str) -> list[Report]:
+    """Every sidecar-backed report for a target, newest first.
+
+    The current report and its archived predecessors read the same way, so the
+    caller gets the run sequence without caring which directory a file sits in.
+    Markdown with no valid sidecar (pre-sidecar reports) is skipped: there is no
+    structured sentiment to compare.
+    """
+    target_dir = Path(base_dir) / target_id
+    sidecars = sorted(target_dir.glob("*.json")) + sorted((target_dir / HISTORY_DIR).glob("*.json"))
+    reports = [report for report in map(read_report, sidecars) if report is not None]
+    reports.sort(key=lambda report: report.as_of, reverse=True)
+    return reports

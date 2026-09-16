@@ -131,6 +131,9 @@ class RiggerApp(App):
     def __init__(self, rig: Rigger | None = None) -> None:
         super().__init__()
         self.rig = rig if rig is not None else Rigger()
+        #: Public registry of the installed screens. Screens that keep each
+        #: other in sync read this rather than Textual's private ``_screens``.
+        self.screens_by_name: dict[str, Any] = {}
         self._screens: dict[str, Any] = {}
         self.services = services
         self.log_lines: list[str] = []
@@ -154,6 +157,7 @@ class RiggerApp(App):
             "chat": Chat(self.rig),
             "targets": Targets(self.rig),
         }
+        self.screens_by_name = dict(self._screens)
         for screen in self._screens.values():
             self.install_screen(screen, screen.name)
         self.push_screen("home")

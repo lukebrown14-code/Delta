@@ -742,7 +742,10 @@ class Targets(RiggerScreen):
     def _paint_quotes(self) -> None:
         if not self.is_mounted:
             return
-        table = self.query_one("#target-table", WatchlistList)
+        try:
+            table = self.query_one("#target-table", WatchlistList)
+        except Exception:
+            return
         for key, (_, ident) in self.rows.items():
             target = self.specs.get(self.rows[key][0])
             if target is None:

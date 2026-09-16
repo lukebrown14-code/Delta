@@ -60,29 +60,18 @@ feeds = [
 [plugins.yfinance_calendar]
 enabled = true
 
-[targets.BHP]
-kind = "company"
-market = "asx"
-tickers = [
-    "BHP",
-]
-tags = [
-    "Mining",
-]
-
-[targets.apple]
+[targets."Apple Inc."]
 kind = "company"
 market = "us"
+asset_class = "equity"
 tickers = [
-    "APPL",
+    "AAPL",
 ]
 
-[targets."Rio Tinto Group"]
+[targets."Bitcoin USD"]
 kind = "company"
 market = "us"
+asset_class = "crypto"
 tickers = [
-    "RIO",
-]
-tags = [
-    "mining",
+    "BTC-USD",
 ]

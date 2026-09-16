@@ -54,11 +54,12 @@ async def ingest(
     *,
     market: str | None = None,
     tickers: str | None = None,
+    instruments: Sequence[Any] | None = None,
     since: str | None = None,
     log: Log = _noop_log,
 ) -> IngestResult:
     since = since or (datetime.now(UTC) - timedelta(days=365)).strftime("%Y-%m-%d")
-    instruments = rig.universe()
+    instruments = list(instruments) if instruments is not None else rig.universe()
     if market:
         instruments = [i for i in instruments if i.market == market]
     if tickers:
@@ -81,11 +82,24 @@ async def ingest(
     return IngestResult(total)
 
 
-async def extract(rig: Any, *, since: str | None = None, log: Log = _noop_log) -> ExtractResult:
+async def extract(
+    rig: Any,
+    *,
+    since: str | None = None,
+    instruments: list[Any] | None = None,
+    log: Log = _noop_log,
+) -> ExtractResult:
+    """Extract events from stored evidence.
+
+    ``instruments`` narrows the run to a subset of the universe, so a caller
+    refreshing one company does not pay for extraction across every target.
+    """
     from rigger.extract import extract_events
 
     since = since or (datetime.now(UTC) - timedelta(days=14)).strftime("%Y-%m-%d")
-    events = await extract_events(rig.context(rig.universe()), parse_date(since))
+    events = await extract_events(
+        rig.context(rig.universe() if instruments is None else instruments), parse_date(since)
+    )
     instruments = len({event.instrument_id for event in events})
     log(
         f"[green]Extracted {len(events)} events across {instruments} instruments since {since}.[/green]"

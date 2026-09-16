@@ -21,6 +21,34 @@ class SearchResult:
     market: str
     currency: str
     exchange: str = ""
+    asset_class: str = "equity"
+
+
+def classify_yahoo_asset(symbol: str, quote_type: str) -> str:
+    """Map Yahoo quote metadata to Rigger's supported asset classes."""
+    value = quote_type.casefold()
+    if "crypto" in value or symbol.upper().endswith("-USD"):
+        return "crypto"
+    if "etf" in value:
+        return "etf"
+    if "bond" in value or "fixed income" in value:
+        return "bond"
+    if "currency" in value or "forex" in value:
+        return "fx"
+    if "commodity" in value or "future" in value:
+        return "commodity"
+    if "cash" in value:
+        return "cash"
+    return "equity"
+
+
+def canonical_symbol(symbol: str, market: str, suffixes: dict[str, str] | None = None) -> str:
+    """Convert a Yahoo provider symbol to the symbol stored in a target spec."""
+    symbol = symbol.strip().upper()
+    suffix = (suffixes or {}).get(market.lower(), "")
+    if suffix and symbol.endswith(suffix.upper()):
+        return symbol[: -len(suffix)]
+    return symbol
 
 
 async def yahoo_search(query: str, max_results: int = 8) -> list[SearchResult]:
@@ -35,9 +63,19 @@ async def yahoo_search(query: str, max_results: int = 8) -> list[SearchResult]:
         exchange = str(item.get("exchange") or item.get("fullExchangeName") or "").strip()
         if not symbol:
             continue
-        market = "asx" if "ASX" in exchange.upper() else "us"
+        exchange_code = exchange.upper()
+        if "ASX" in exchange_code:
+            market = "asx"
+        elif exchange_code in {"NMS", "NAS", "NASDAQ", "NYQ", "NYSE", "ASE", "ARCA", "BTS"}:
+            market = "us"
+        else:
+            # Keep unknown listings usable as US results for compatibility with
+            # Yahoo's incomplete exchange metadata; the UI can still be edited.
+            market = "us"
         currency = str(item.get("currency") or ("AUD" if market == "asx" else "USD"))
-        results.append(SearchResult(symbol, name, market, currency, exchange))
+        quote_type = str(item.get("quoteType") or item.get("typeDisp") or "").casefold()
+        asset_class = classify_yahoo_asset(symbol, quote_type)
+        results.append(SearchResult(symbol, name, market, currency, exchange, asset_class))
     return results
 
 
