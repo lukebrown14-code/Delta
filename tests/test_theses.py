@@ -270,7 +270,7 @@ def test_theses_screen_smoke(tmp_engine):
             app.screen.query_one("#th-claim").value = "Microsoft gains cloud share."
             app.screen.query_one("#th-targets").value = f"{OTHER},{INST}"
             app.screen.query_one("#th-horizon").value = "5y"
-            await pilot.click("#th-add")
+            await pilot.click("#th-save")
             await pilot.pause()
             assert screen.query_one("#thesis-table").row_count == 2
             assert screen.selected is not None
@@ -419,10 +419,10 @@ def test_screen_edit_button_updates_selected_thesis(tmp_engine):
             await pilot.pause()
 
             await pilot.press("d")
-            assert app.screen.query_one("#th-edit-claim", Input).value == CLAIM
-            app.screen.query_one("#th-edit-claim", Input).value = "Solar demand keeps rising."
-            app.screen.query_one("#th-edit-targets", Input).value = f"{INST}, {OTHER}"
-            app.screen.query_one("#th-edit-horizon", Input).value = "10y"
+            assert app.screen.query_one("#th-claim", Input).value == CLAIM
+            app.screen.query_one("#th-claim", Input).value = "Solar demand keeps rising."
+            app.screen.query_one("#th-targets", Input).value = f"{INST}, {OTHER}"
+            app.screen.query_one("#th-horizon", Input).value = "10y"
             await pilot.click("#th-save")
             await pilot.pause()
 
@@ -680,5 +680,49 @@ def test_shift_arrows_scroll_the_note_only_from_the_ledger(tmp_engine):
             await pilot.press("shift+down")
             await pilot.pause()
             assert preview.scroll_y == 1
+
+    asyncio.run(run())
+
+
+def test_pane_width_constants_match_the_stylesheet():
+    """The breakpoint is derived from the pane widths, so the CSS must agree.
+
+    Textual CSS cannot read a Python constant, so the numbers are written twice.
+    This is the mechanism that keeps the two copies honest.
+    """
+    from rigger.tui.screens import theses as screen
+
+    assert f"min-width: {screen.CLAIMS_MIN_WIDTH};" in screen.Theses.CSS
+    assert f"width: {screen.EVIDENCE_WIDTH};" in screen.Theses.CSS
+    assert f"min-width: {screen.DETAIL_MIN_WIDTH};" in screen.Theses.CSS
+    assert screen.Theses.WIDE_WIDTH == (
+        screen.CLAIMS_MIN_WIDTH + screen.EVIDENCE_WIDTH + screen.DETAIL_MIN_WIDTH + 4
+    )
+
+
+def test_key_strip_restores_chips_when_the_terminal_widens(tmp_engine):
+    """Hidden chips must come back: a narrow width must not be a one-way door."""
+    theses.create_thesis(tmp_engine, CLAIM, targets=(INST,))
+
+    async def run():
+        app = App()
+        async with app.run_test(size=(130, 32)) as pilot:
+            screen = Theses(FakeRig(tmp_engine))
+            await app.push_screen(screen)
+            await pilot.pause()
+            strip = screen.query_one("#thesis-keys")
+
+            def shown() -> int:
+                return sum(1 for child in strip.children if child.display)
+
+            wide = shown()
+
+            await pilot.resize_terminal(70, 20)
+            await pilot.pause()
+            assert shown() < wide
+
+            await pilot.resize_terminal(130, 32)
+            await pilot.pause()
+            assert shown() == wide
 
     asyncio.run(run())

@@ -749,7 +749,7 @@ class Research(RiggerScreen):
         to hold. This is the step between the two, so the claim's sources stay
         attached rather than being re-found by hand.
         """
-        from rigger.tui.screens.theses import NewThesis
+        from rigger.tui.screens.theses import ThesisForm
 
         field, _, index = ref.partition(":")
         claims = getattr(self.report, field, []) if self.report else []
@@ -758,20 +758,13 @@ class Research(RiggerScreen):
             return
         claim = claims[int(index)]
 
-        def created(result: Any) -> None:
-            if result is None:
+        def created(fields: dict[str, Any] | None) -> None:
+            if fields is None:
                 return
-            text, targets, horizon, scope, assumptions, falsifiers = result
+            text = fields.pop("claim")
+            fields["targets"] = fields["targets"] or (self.state.company,)
             try:
-                thesis = theses.create_thesis(
-                    self.rig.engine,
-                    text,
-                    targets=targets or (self.state.company,),
-                    time_horizon=horizon,
-                    scope=scope,
-                    assumptions=assumptions,
-                    falsifiers=falsifiers,
-                )
+                thesis = theses.create_thesis(self.rig.engine, text, **fields)
             except ValueError as exc:
                 self.notify(str(exc), severity="error")
                 return
@@ -789,7 +782,9 @@ class Research(RiggerScreen):
                 )
             self.notify(f"Thesis created with {len(claim.evidence_ids)} linked sources", timeout=6)
 
-        self.app.push_screen(NewThesis(claim.text, self.state.company), created)
+        self.app.push_screen(
+            ThesisForm(claim=claim.text, targets=self.state.company), created
+        )
 
     def research_screens(self) -> list[Research]:
         """Every mounted Research panel, so Reports and Research stay in sync.

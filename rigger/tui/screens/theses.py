@@ -15,8 +15,9 @@ from textual.widget import Widget
 from textual.widgets import Button, Input, Select, Static
 
 from rigger import theses, thesis_summary
+from rigger.core.time import to_utc
 from rigger.evidence import EvidenceItem, cite, evidence_by_ids
-from rigger.thesis_health import HealthResult, compute_health
+from rigger.thesis_health import HealthResult, badge_text, compute_health
 from rigger.tui.shell import RiggerScreen, age_text
 from rigger.tui.widgets import (
     Dialog,
@@ -26,13 +27,16 @@ from rigger.tui.widgets import (
     Pill,
     RiggerTable,
     health_variant,
+    shown_bindings,
 )
 
-#: Side glyph and the theme token that colours it, shared by ledger and legend.
-SIDE_MARKS: dict[str, tuple[str, str]] = {
-    "support": ("+", "success"),
-    "against": ("−", "error"),
-    "neutral": ("?", "warning"),
+#: Per side: ledger glyph, the theme token that colours it, and the word the
+#: preview uses. One table so the ledger, the legend and the preview cannot
+#: disagree about what a side is called.
+SIDE_MARKS: dict[str, tuple[str, str, str]] = {
+    "support": ("+", "success", "Supporting"),
+    "against": ("−", "error", "Against"),
+    "neutral": ("?", "warning", "Neutral"),
 }
 
 #: Claims-list status marker: glyph plus the theme token that colours it.
@@ -45,10 +49,11 @@ STATUS_MARKS: dict[str, tuple[str, str]] = {
     "concluded": ("○", "foreground"),
 }
 
-#: Pane widths, mirrored in ``Theses.CSS``. The claims and detail panes share
-#: the space left over in 2:3, so a wide terminal lengthens the claim column
-#: instead of padding the prose; the ledger is a fixed-shape table, so it keeps
-#: a fixed width. Named here because the breakpoint below is derived from them.
+#: Pane widths. The claims and detail panes share the space left over in 2:3,
+#: so a wide terminal lengthens the claim column instead of padding the prose;
+#: the ledger is a fixed-shape table, so it keeps a fixed width. ``Theses.CSS``
+#: repeats these numbers because Textual CSS cannot read them —
+#: ``test_pane_width_constants_match_the_stylesheet`` holds the two in step.
 CLAIMS_MIN_WIDTH = 24
 EVIDENCE_WIDTH = 42
 DETAIL_MIN_WIDTH = 34
@@ -60,12 +65,16 @@ def _csv(value: str) -> tuple[str, ...]:
 
 
 class ThesisForm(Dialog):
-    """Shared frame for the thesis dialogs.
+    """Create or edit a thesis: one form, seeded when editing.
 
-    Six framing fields at the app's default three-row Input would overflow a
-    24-row terminal and clip the submit button, so fields here are one row
-    with a left marker for focus instead of a full border.
+    New and edit differ only by seeded values, the status field and the button
+    label, so they are one class. Six framing fields at the app's default
+    three-row Input would overflow a 24-row terminal and clip the submit
+    button, so fields here are one row with a left marker for focus instead of
+    a full border.
     """
+
+    dialog_hint = "tab next field · enter save · esc cancel"
 
     DEFAULT_CSS = """
     ThesisForm Input, ThesisForm Select {
@@ -97,122 +106,98 @@ class ThesisForm(Dialog):
     }
     """
 
-
-class NewThesis(ThesisForm):
-    dialog_title = "new thesis"
-    dialog_hint = "tab next field · enter create · esc cancel"
-
-    def __init__(self, claim: str = "", targets: str = "") -> None:
+    def __init__(
+        self,
+        thesis: theses.Thesis | None = None,
+        *,
+        claim: str = "",
+        targets: str = "",
+    ) -> None:
         super().__init__()
-        self._claim = claim
-        self._targets = targets
+        self.thesis = thesis
+        self.dialog_title = "edit thesis" if thesis else "new thesis"
+        self._seed = {
+            "claim": thesis.claim if thesis else claim,
+            "targets": ", ".join(thesis.targets) if thesis else targets,
+            "horizon": thesis.time_horizon if thesis else "",
+            "scope": thesis.scope if thesis else "",
+            "assumptions": ", ".join(thesis.assumptions) if thesis else "",
+            "falsifiers": ", ".join(thesis.falsifiers) if thesis else "",
+        }
 
     def compose_dialog(self) -> ComposeResult:
-        yield Input(value=self._claim, placeholder="Claim", id="th-claim")
+        yield Input(value=self._seed["claim"], placeholder="Claim", id="th-claim")
         with Horizontal(classes="form-row"):
-            yield Input(value=self._targets, placeholder="Targets (US:AAPL)", id="th-targets")
-            yield Input(placeholder="Horizon (5y)", id="th-horizon")
-        yield Input(placeholder="Scope (what the claim is about)", id="th-scope")
-        yield Input(placeholder="Holds if — assumptions, comma separated", id="th-assumptions")
-        yield Input(placeholder="Breaks if — what would disprove it", id="th-falsifiers")
-        yield Button("Create thesis", id="th-add", variant="primary")
+            yield Input(
+                value=self._seed["targets"],
+                placeholder="Targets (US:AAPL)",
+                id="th-targets",
+            )
+            yield Input(
+                value=self._seed["horizon"], placeholder="Horizon (5y)", id="th-horizon"
+            )
+        with Horizontal(classes="form-row"):
+            yield Input(
+                value=self._seed["scope"],
+                placeholder="Scope (what the claim is about)",
+                id="th-scope",
+            )
+            if self.thesis is not None:
+                yield Select(
+                    [(status.title(), status) for status in theses.STATUSES],
+                    value=self.thesis.status,
+                    allow_blank=False,
+                    id="th-status",
+                )
+        yield Input(
+            value=self._seed["assumptions"],
+            placeholder="Holds if — assumptions, comma separated",
+            id="th-assumptions",
+        )
+        yield Input(
+            value=self._seed["falsifiers"],
+            placeholder="Breaks if — what would disprove it",
+            id="th-falsifiers",
+        )
+        yield Button(
+            "Save changes" if self.thesis else "Create thesis",
+            id="th-save",
+            variant="primary",
+        )
 
     def on_mount(self) -> None:
         self.query_one("#th-claim", Input).focus()
 
     def on_input_submitted(self) -> None:
-        self.create()
-
-    def on_button_pressed(self) -> None:
-        self.create()
-
-    def create(self) -> None:
-        claim = self.query_one("#th-claim", Input).value.strip()
-        if not claim:
-            self.notify("claim is required", severity="error")
-            return
-        self.dismiss(
-            (
-                claim,
-                _csv(self.query_one("#th-targets", Input).value),
-                self.query_one("#th-horizon", Input).value.strip(),
-                self.query_one("#th-scope", Input).value.strip(),
-                _csv(self.query_one("#th-assumptions", Input).value),
-                _csv(self.query_one("#th-falsifiers", Input).value),
-            )
-        )
-
-
-class EditThesis(ThesisForm):
-    dialog_title = "edit thesis"
-    dialog_hint = "tab next field · enter save · esc cancel"
-
-    def __init__(self, thesis: theses.Thesis) -> None:
-        super().__init__()
-        self.thesis = thesis
-
-    def compose_dialog(self) -> ComposeResult:
-        yield Input(value=self.thesis.claim, placeholder="Claim", id="th-edit-claim")
-        with Horizontal(classes="form-row"):
-            yield Input(
-                value=", ".join(self.thesis.targets),
-                placeholder="Targets (US:AAPL)",
-                id="th-edit-targets",
-            )
-            yield Input(
-                value=self.thesis.time_horizon,
-                placeholder="Horizon (5y)",
-                id="th-edit-horizon",
-            )
-        with Horizontal(classes="form-row"):
-            yield Input(
-                value=self.thesis.scope,
-                placeholder="Scope (what the claim is about)",
-                id="th-edit-scope",
-            )
-            yield Select(
-                [(status.title(), status) for status in theses.STATUSES],
-                value=self.thesis.status,
-                allow_blank=False,
-                id="th-edit-status",
-            )
-        yield Input(
-            value=", ".join(self.thesis.assumptions),
-            placeholder="Holds if — assumptions, comma separated",
-            id="th-edit-assumptions",
-        )
-        yield Input(
-            value=", ".join(self.thesis.falsifiers),
-            placeholder="Breaks if — what would disprove it",
-            id="th-edit-falsifiers",
-        )
-        yield Button("Save changes", id="th-save", variant="primary")
-
-    def on_mount(self) -> None:
-        self.query_one("#th-edit-claim", Input).focus()
-
-    def on_input_submitted(self) -> None:
         self.save()
 
     def on_button_pressed(self) -> None:
         self.save()
+
+    def _value(self, field: str) -> str:
+        return self.query_one(f"#th-{field}", Input).value.strip()
 
     def save(self) -> None:
-        claim = self.query_one("#th-edit-claim", Input).value.strip()
+        """Dismiss with the ``create_thesis``/``update_thesis`` keywords.
+
+        A dict rather than a tuple: the two calls take different field sets, and
+        a positional contract silently mis-binds when one of them gains a field.
+        """
+        claim = self._value("claim")
         if not claim:
             self.notify("claim is required", severity="error")
             return
-        self.dismiss(
-            (
-                claim,
-                _csv(self.query_one("#th-edit-targets", Input).value),
-                self.query_one("#th-edit-horizon", Input).value.strip(),
-                str(self.query_one("#th-edit-status", Select).value),
-                self.query_one("#th-edit-scope", Input).value.strip(),
-                _csv(self.query_one("#th-edit-assumptions", Input).value),
-                _csv(self.query_one("#th-edit-falsifiers", Input).value),
-            )
-        )
+        fields: dict[str, Any] = {
+            "claim": claim,
+            "targets": _csv(self.query_one("#th-targets", Input).value),
+            "time_horizon": self._value("horizon"),
+            "scope": self._value("scope"),
+            "assumptions": _csv(self.query_one("#th-assumptions", Input).value),
+            "falsifiers": _csv(self.query_one("#th-falsifiers", Input).value),
+        }
+        if self.thesis is not None:
+            fields["status"] = str(self.query_one("#th-status", Select).value)
+        self.dismiss(fields)
 
 
 class Theses(RiggerScreen):
@@ -274,10 +259,12 @@ class Theses(RiggerScreen):
     Theses.-compact #thesis-detail-pane { width: 1fr; }
     Theses.-compact #thesis-evidence-pane { width: 1fr; }
     /* Last word on width: when the row stacks there are no columns to share,
-       so every pane takes the full width. The app stylesheet's `!important`
-       version of this rule does not outrank an #id width, so the screen that
-       sets those widths has to undo them itself — and it has to do so after
-       the compact rules above, which are of equal specificity. */
+       so every pane takes the full width. rigger.tcss carries this rule too,
+       with !important, and that copy wins wherever the app stylesheet is
+       loaded. This one is for the standalone case — the panel screens are
+       built to mount under any App, and under a bare one the widths above
+       would otherwise multiply out past the row. It sits after the compact
+       rules because it is of equal specificity and has to be the last word. */
     #thesis-split.-narrow > Pane { width: 1fr; min-width: 0; }
     """
 
@@ -292,6 +279,8 @@ class Theses(RiggerScreen):
         self._cites: dict[str, str] = {}
         self._ages: dict[str, str] = {}
         self._links: list[theses.ThesisEvidence] = []
+        self._theses: list[theses.Thesis] = []
+        self._overflowing = False
         self._summarising = False
         self._finding = False
         self._widths: tuple[int, int] | None = None
@@ -372,8 +361,13 @@ class Theses(RiggerScreen):
         return True
 
     def _colours(self) -> dict[str, str]:
-        """Theme tokens resolved once per render, not once per row."""
-        return self.app.current_theme.to_color_system().generate()
+        """The app's cached theme tokens.
+
+        ``theme_variables`` is the same mapping Textual builds for CSS and
+        refreshes on a theme change, so this costs a dict lookup; generating
+        the colour system here instead rebuilt 168 tokens on every call.
+        """
+        return self.app.theme_variables
 
     # ---------- navigation ----------
 
@@ -419,19 +413,28 @@ class Theses(RiggerScreen):
     # ---------- claims list ----------
 
     async def refresh_view(self) -> None:
-        self.refresh_list()
+        self.reload_theses()
         await self.render_detail()
+
+    def reload_theses(self) -> None:
+        """Re-read the claims from the database, then redraw the list.
+
+        The only place that queries: filtering and resizing redraw from this
+        cache, so neither a keystroke in the filter box nor a column of a drag
+        resize costs a query.
+        """
+        self._theses = theses.list_theses(self.rig.engine)
+        self.refresh_list()
 
     def refresh_list(self) -> None:
         table = self.query_one("#thesis-table", RiggerTable)
-        rows = theses.list_theses(self.rig.engine)
         query = self.query_one("#thesis-filter", Input).value.casefold().strip()
-        if query:
-            rows = [row for row in rows if query in row.claim.casefold()]
+        rows = [row for row in self._theses if query in row.claim.casefold()] if query else self._theses
+        index = {row.id: position for position, row in enumerate(rows)}
         colours = self._colours()
         with self.prevent(RiggerTable.RowHighlighted, RiggerTable.RowSelected):
             table.clear()
-            if self.selected not in {row.id for row in rows}:
+            if self.selected not in index:
                 self.selected = rows[0].id if rows else None
                 self._summary = None
             for row in rows:
@@ -439,10 +442,8 @@ class Theses(RiggerScreen):
                 cell = Text(glyph, style=colours.get(token, "white"))
                 cell.append(" " + row.claim, style="")
                 table.add_row(cell, key=row.id)
-            if self.selected:
-                table.move_cursor(
-                    row=next(i for i, row in enumerate(rows) if row.id == self.selected)
-                )
+            if self.selected is not None:
+                table.move_cursor(row=index[self.selected])
         self.query_one("#thesis-claims", Pane).set_badge(str(len(rows)))
 
     async def on_data_table_row_selected(self, event: RiggerTable.RowSelected) -> None:
@@ -458,54 +459,34 @@ class Theses(RiggerScreen):
     # ---------- create / edit ----------
 
     def action_new_thesis(self) -> None:
-        self.app.push_screen(NewThesis(), self._create_thesis)
+        self.app.push_screen(ThesisForm(), self._save_thesis)
 
     def action_edit_thesis(self) -> None:
         if self.selected is None:
             self.notify("select a thesis first", severity="error")
             return
         self.app.push_screen(
-            EditThesis(theses.get_thesis(self.rig.engine, self.selected)), self._update_thesis
+            ThesisForm(theses.get_thesis(self.rig.engine, self.selected)), self._save_thesis
         )
 
-    async def _update_thesis(self, result) -> None:
-        if result is None or self.selected is None:
-            return
-        claim, targets, horizon, status, scope, assumptions, falsifiers = result
-        try:
-            thesis = theses.update_thesis(
-                self.rig.engine,
-                self.selected,
-                claim=claim,
-                targets=targets,
-                time_horizon=horizon,
-                status=status,
-                scope=scope,
-                assumptions=assumptions,
-                falsifiers=falsifiers,
-            )
-        except (KeyError, ValueError) as exc:
-            self.notify(str(exc), severity="error")
-            return
-        self.selected = thesis.id
-        self._summary = None
-        await self.refresh_view()
+    async def _save_thesis(self, fields: dict[str, Any] | None) -> None:
+        """Create or update, depending on whether a thesis was being edited.
 
-    async def _create_thesis(self, result) -> None:
-        if result is None:
+        The dialog hands back the keywords both service calls already take, so
+        neither the order nor the arity has to be restated here.
+        """
+        if fields is None:
             return
-        claim, targets, horizon, scope, assumptions, falsifiers = result
+        editing = "status" in fields
         try:
-            thesis = theses.create_thesis(
-                self.rig.engine,
-                claim,
-                targets=targets,
-                time_horizon=horizon,
-                scope=scope,
-                assumptions=assumptions,
-                falsifiers=falsifiers,
-            )
-        except ValueError as exc:
+            if editing:
+                if self.selected is None:
+                    return
+                thesis = theses.update_thesis(self.rig.engine, self.selected, **fields)
+            else:
+                claim = fields.pop("claim")
+                thesis = theses.create_thesis(self.rig.engine, claim, **fields)
+        except (KeyError, ValueError) as exc:
             self.notify(str(exc), severity="error")
             return
         self.selected = thesis.id
@@ -583,15 +564,20 @@ class Theses(RiggerScreen):
         row = self._current_row()
         text = "No evidence yet. Press f to find candidate evidence."
         if row:
-            side = {"support": "Supporting", "against": "Against", "neutral": "Neutral"}[row.side]
+            side = SIDE_MARKS[row.side][2]
             text = f"{side} · {'accepted' if row.accepted else 'pending review'}\n\n{row.note}\n\n{self._cites.get(row.evidence_id, row.evidence_id)}"
         self.query_one("#thesis-preview-text", Static).update(text)
         # A new note starts at its top, not wherever the last one was left.
         self.query_one("#thesis-preview", VerticalScroll).scroll_home(animate=False)
         self._render_actions(row)
         # Whether the note overflows is only known once the new text has been
-        # laid out, so the line is rendered again when it has been.
-        self.call_after_refresh(self._render_actions, row)
+        # laid out, so the line is checked again then — and re-rendered only if
+        # that answer changed, rather than unconditionally drawing it twice.
+        self.call_after_refresh(self._rerender_actions_if_overflow_changed, row)
+
+    def _rerender_actions_if_overflow_changed(self, row: theses.ThesisEvidence | None) -> None:
+        if self._overflowing != self._preview_overflows():
+            self._render_actions(row)
 
     def _render_actions(self, row: theses.ThesisEvidence | None) -> None:
         """Say what applies to the highlighted row, rather than greying buttons.
@@ -602,13 +588,17 @@ class Theses(RiggerScreen):
         changes with the row, which disabled buttons only hinted at by fading.
         """
         if row is None:
-            keys: list[tuple[str, str]] = []
+            wanted: tuple[str, ...] = ()
         elif row.accepted:
             # Accepted evidence is removed in two steps — un-accept, then
             # reject — so one stray keystroke cannot delete curated evidence.
-            keys = [("u", "un-accept")]
+            wanted = ("u",)
         else:
-            keys = [("a", "accept"), ("x", "reject")]
+            wanted = ("a", "x")
+        # Labels come from BINDINGS rather than a second list, for the same
+        # reason the key strip is generated: two spellings of one key drift.
+        by_key = {b.key: b for b in shown_bindings(self.BINDINGS)}
+        keys = [(key, by_key[key].description) for key in wanted if key in by_key]
         # Only the keys are styled here; the muted body colour comes from the
         # widget's own CSS, because $text-muted resolves to a blend token that
         # is not a colour Rich can parse.
@@ -621,7 +611,8 @@ class Theses(RiggerScreen):
                 line.append("   ")
             line.append(key, style=key_style)
             line.append(f" {label}")
-        if self._preview_overflows():
+        self._overflowing = self._preview_overflows()
+        if self._overflowing:
             line.append("   ")
             line.append("⇧↑↓", style=key_style)
             line.append(" scroll note")
@@ -707,20 +698,23 @@ class Theses(RiggerScreen):
         thesis = theses.get_thesis(self.rig.engine, self.selected)
         self._links = theses.evidence_for(self.rig.engine, thesis.id, accepted_only=False)
         links = self._links
-        groups = {
-            side: [r for r in links if r.accepted and r.side == side]
-            for side in ("support", "against", "neutral")
-        }
         self.candidates = [r for r in links if not r.accepted]
         items = evidence_by_ids(self.rig.engine, [r.evidence_id for r in links])
         by_id = {item.id: item for item in items}
         self._cites = {item.id: cite(item) for item in items}
         now = datetime.now(UTC)
-        self._ages = {item.id: age_text(now - _as_utc(item.ts))[0] for item in items}
-        await detail.mount(*self._detail_widgets(thesis, groups, by_id, now))
+        self._ages = {item.id: age_text(now - to_utc(item.ts))[0] for item in items}
+        accepted = [
+            (by_id[r.evidence_id], r.side) for r in links if r.accepted and r.evidence_id in by_id
+        ]
+        result = compute_health(thesis, accepted, now=now) if accepted else None
+        await detail.mount(*self._detail_widgets(thesis, result, by_id, now))
         self._fill_ledger()
+        # The per-side counts are read off the health result rather than
+        # regrouped here, so the legend and the pill cannot disagree.
+        counts = (result.support, result.against, result.neutral) if result else (0, 0, 0)
         self.query_one("#thesis-counts", Static).update(
-            f"+ {len(groups['support'])} supporting  − {len(groups['against'])} against  ? {len(groups['neutral'])} neutral"
+            f"+ {counts[0]} supporting  − {counts[1]} against  ? {counts[2]} neutral"
         )
         self.query_one("#thesis-evidence-pane", Pane).set_badge(
             f"{len(self.candidates)} pending / {len(links)} total"
@@ -730,11 +724,15 @@ class Theses(RiggerScreen):
     def _detail_widgets(
         self,
         thesis: theses.Thesis,
-        groups: dict[str, list[theses.ThesisEvidence]],
+        result: HealthResult | None,
         by_id: dict[str, EvidenceItem],
         now: datetime,
     ) -> list[Widget]:
-        pill, result = self._health(thesis, groups, by_id)
+        pill = (
+            Pill(badge_text(result), variant=health_variant(result.state), id="thesis-health")
+            if result is not None
+            else Pill("emerging · no accepted evidence", variant="dim", id="thesis-health")
+        )
         widgets: list[Widget] = [
             Static(thesis.claim, classes="thesis-claim", markup=False),
             Horizontal(
@@ -796,7 +794,7 @@ class Theses(RiggerScreen):
             self._rows = {}
             for row in sorted(self._links, key=lambda r: r.accepted):
                 self._rows[row.evidence_id] = row
-                symbol, token = SIDE_MARKS[row.side]
+                symbol, token, _label = SIDE_MARKS[row.side]
                 table.add_row(
                     "✓" if row.accepted else "",
                     Text(symbol, style=colours.get(token, "white")),
@@ -813,9 +811,9 @@ class Theses(RiggerScreen):
             return [
                 Static("No summary yet. Press s to summarise accepted evidence.", classes="muted")
             ]
-        as_of = _as_utc(self._summary.as_of)
+        as_of = to_utc(self._summary.as_of)
         newest = max(
-            (_as_utc(item.ts) for item in by_id.values()),
+            (to_utc(item.ts) for item in by_id.values()),
             default=None,
         )
         stale = newest is not None and newest > as_of
@@ -840,38 +838,3 @@ class Theses(RiggerScreen):
         for unknown in self._summary.unknowns:
             widgets.append(Static(f"unknown: {unknown}", markup=False, classes="muted"))
         return widgets
-
-    def _health(
-        self,
-        thesis: theses.Thesis,
-        groups: dict[str, list[theses.ThesisEvidence]],
-        by_id: dict[str, EvidenceItem],
-    ) -> tuple[Pill, HealthResult | None]:
-        """The health pill plus the result behind it.
-
-        The pill carries state and tilt only: the per-side counts are the
-        evidence pane's legend, and repeating them here said the same thing
-        three times on one screen.
-        """
-        linked = [
-            (by_id[row.evidence_id], row.side)
-            for rows in groups.values()
-            for row in rows
-            if row.evidence_id in by_id
-        ]
-        if not linked:
-            return Pill("emerging · no accepted evidence", variant="dim", id="thesis-health"), None
-        result = compute_health(thesis, linked, now=datetime.now(UTC))
-        return (
-            Pill(
-                f"{result.state} · tilt {result.tilt:+.2f}",
-                variant=health_variant(result.state),
-                id="thesis-health",
-            ),
-            result,
-        )
-
-
-def _as_utc(value: datetime) -> datetime:
-    """Stored timestamps are UTC; some arrive naive from SQLite."""
-    return value if value.tzinfo else value.replace(tzinfo=UTC)

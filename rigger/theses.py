@@ -255,6 +255,17 @@ def update_thesis(
             row.assumptions if assumptions is None else to_json(list(assumptions))
         )
         new_falsifiers = row.falsifiers if falsifiers is None else to_json(list(falsifiers))
+        # One spelling of the column set, so a new field cannot be added to the
+        # rename branch and forgotten in the in-place one.
+        values = {
+            "claim": claim,
+            "scope": new_scope,
+            "assumptions": new_assumptions,
+            "falsifiers": new_falsifiers,
+            "targets": to_json(list(targets)),
+            "time_horizon": time_horizon,
+            "status": status,
+        }
         new_id = thesis_id(claim, new_scope)
         if new_id != row.id:
             if session.get(ThesisTable, new_id) is not None:
@@ -274,26 +285,11 @@ def update_thesis(
                     )
                 )
             session.delete(row)
-            row = ThesisTable(
-                id=new_id,
-                claim=claim,
-                scope=new_scope,
-                assumptions=new_assumptions,
-                falsifiers=new_falsifiers,
-                targets=to_json(list(targets)),
-                time_horizon=time_horizon,
-                created_at=row.created_at,
-                status=status,
-            )
+            row = ThesisTable(id=new_id, created_at=row.created_at, **values)
             session.add(row)
         else:
-            row.claim = claim
-            row.scope = new_scope
-            row.assumptions = new_assumptions
-            row.falsifiers = new_falsifiers
-            row.targets = to_json(list(targets))
-            row.time_horizon = time_horizon
-            row.status = status
+            for column, value in values.items():
+                setattr(row, column, value)
         session.commit()
         return _thesis_from_row(row)
 

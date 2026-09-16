@@ -118,7 +118,7 @@ def test_badge_text_and_styles():
     thesis = _thesis()
     result = compute_health(thesis, [_linked(f"s{i}", 1) for i in range(4)], now=NOW)
     assert "building" in badge_text(result)
-    assert "4 for / 0 against" in badge_text(result)
+    assert "tilt +1.00" in badge_text(result)
     assert state_style("challenged") == "red"
     assert state_style("building") == "green"
 

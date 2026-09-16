@@ -117,10 +117,12 @@ Button {
 /* ---------- panes ---------- */
 
 /* Stacked panes must lose the fixed side-pane widths the screens set. Those
-   are #id rules, which outrank any class selector, so !important is the only
-   way to reclaim the full width when a row stacks. */
+   are #id rules, so !important is what reclaims the full width when a row
+   stacks. A screen's min-width has to go the same way: left standing it holds
+   a stacked pane wider than the row and overflows it horizontally. */
 .pane-row.-narrow > Pane {
     width: 1fr !important;
+    min-width: 0 !important;
 }
 
 /* ---------- modals ---------- */

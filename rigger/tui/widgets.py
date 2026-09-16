@@ -293,6 +293,10 @@ class KeyStrip(Horizontal):
     }
     """
 
+    #: Margin columns a chip costs on top of its text: one between the key and
+    #: its description, two after the pair. Mirrors the margins in DEFAULT_CSS.
+    CHIP_GAP = 3
+
     def __init__(self, bindings: Sequence[Any], id: str | None = None) -> None:
         super().__init__(id=id)
         self._pairs = [
@@ -306,19 +310,18 @@ class KeyStrip(Horizontal):
             yield Static(description, markup=False)
 
     def on_resize(self, event) -> None:
-        """Hide the chips that would not fit rather than wrapping the strip."""
-        budget = event.size.width
-        for key, description in self._pairs:
-            budget -= len(key) + len(description) + 3
-        if budget >= 0:
-            return
+        """Hide the chips that would not fit rather than wrapping the strip.
+
+        Every chip is re-evaluated on every resize: an early "they all fit"
+        return would never restore chips hidden at a narrower width.
+        """
+        chips = list(self.query(Static))
         used = 0
-        pairs = iter(self.query(Static))
-        for key, description in self._pairs:
-            used += len(key) + len(description) + 3
+        for index, (key, description) in enumerate(self._pairs):
+            used += len(key) + len(description) + self.CHIP_GAP
             fits = used <= event.size.width
-            next(pairs).display = fits
-            next(pairs).display = fits
+            chips[index * 2].display = fits
+            chips[index * 2 + 1].display = fits
 
 
 class KeyGrid(Vertical):
