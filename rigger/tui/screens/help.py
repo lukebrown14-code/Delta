@@ -28,10 +28,10 @@ to buy or sell. The point is clarity, not tips.
 
 ## 1. Tell it what you care about
 
-Press **w** for Targets.
+Press **1** for Watchlist.
 
-A *target* is anything you want watched — one company, a whole sector, or a
-theme. Fill in the row at the bottom and press **Add**:
+A watchlist entry is anything you want watched — one company, a whole
+sector, or a theme. Fill in the row at the bottom and press **Add**:
 
 | Field | Example |
 | --- | --- |
@@ -39,12 +39,6 @@ theme. Fill in the row at the bottom and press **Add**:
 | kind | `industry` |
 | market | `asx` |
 | tickers | `BHP,RIO,FMG` |
-
-Prefer typing? Press **c** for the console and run:
-
-```
-target add iron-ore --kind industry --market asx --tickers BHP,RIO
-```
 
 ## 2. Let it go collect
 
@@ -58,9 +52,9 @@ and what the model has cost you so far.
 
 ## 3. Read what it found
 
-Press **4** for Reports.
+Press **3** for Reports.
 
-Pick a target, press **Generate**, and wait. You get a written summary with a
+Pick a watchlist entry, press **Generate**, and wait. You get a written summary with a
 citation on every claim. If a sentence could not be traced back to something
 collected in step 2, it gets dropped rather than guessed.
 
@@ -68,9 +62,9 @@ The contents panel on the left jumps between sections.
 
 ## 4. Ask it questions
 
-Press **6** for Ask.
+Press **5** for Ask.
 
-Tick the targets you want in scope, then type a question. Answers come only
+Tick the watchlist entries you want in scope, then type a question. Answers come only
 from the evidence collected in step 2 — not from the model's own memory.
 
 Web search is a toggle, it is **off by default**, and anything it returns is
@@ -78,7 +72,7 @@ used once and never saved.
 
 ## 5. Track an idea over time
 
-Press **5** for Theses.
+Press **4** for Theses.
 
 Write down something you believe — *"iron ore volumes hold up through 2027"* —
 and Rigger proposes evidence for and against it as new facts arrive.

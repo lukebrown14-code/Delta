@@ -1,12 +1,13 @@
-"""Persistent shell: the footer nav strip, statusline and shared screen base.
+"""Persistent shell: the footer status bar and shared screen base.
 
 There is no nav rail and no top bar. Navigation is keyboard-driven (number
-keys, ``g``, the command palette) and the chrome is two docked rows: a
-footer listing every panel with its hotkey, the current one highlighted,
-and a statusline. Shell styling lives in ``DEFAULT_CSS`` so the screens
-that double as standalone panels (reports, theses, chat) keep the shell
-when mounted under any App, and inherit theme tokens when a Rigger theme
-is active.
+keys, ``g``, the command palette) and the chrome is a single docked row:
+every panel with its hotkey on the left, the current one highlighted, then
+the live status cells, then the chrome actions and the help/palette hint
+flush right. Shell styling lives in ``DEFAULT_CSS`` so the screens that
+double as standalone panels (reports, theses, chat) keep the shell when
+mounted under any App, and inherit theme tokens when a Rigger theme is
+active.
 """
 
 from __future__ import annotations
@@ -25,15 +26,29 @@ from rigger import services
 from rigger.tui.widgets import StatusDot
 
 NAV_ITEMS: list[tuple[str, str, str]] = [
-    ("1", "home", "Watch"),
+    ("1", "targets", "Watchlist"),
     ("2", "data", "Evidence"),
-    ("3", "config", "Config"),
-    ("4", "reports", "Reports"),
-    ("5", "theses", "Theses"),
-    ("6", "chat", "Ask"),
-    ("w", "targets", "Targets"),
-    ("c", "console", "Console"),
+    ("3", "reports", "Reports"),
+    ("4", "theses", "Theses"),
+    ("5", "chat", "Ask"),
 ]
+
+# Chrome actions, rendered flush-right on the status bar. Same 3-tuple shape as
+# NAV_ITEMS so GoPicker / the command palette can iterate NAV_ITEMS + CHROME_ITEMS.
+CHROME_ITEMS: list[tuple[str, str, str]] = [
+    ("c", "config", "Config"),
+]
+
+# Reachable by hotkey, ``g`` and the palette, but not shown on the bar: Home is
+# the screen you land on, so a permanent entry pointing at it earns no columns.
+# Same 3-tuple shape again — ALL_ITEMS is what navigation should iterate.
+OFF_BAR_ITEMS: list[tuple[str, str, str]] = [
+    ("h", "home", "Home"),
+]
+
+ALL_ITEMS: list[tuple[str, str, str]] = NAV_ITEMS + CHROME_ITEMS + OFF_BAR_ITEMS
+
+CHROME_HINT = "? help · ^p go"
 
 
 def age_text(age: timedelta) -> tuple[str, str]:
@@ -97,82 +112,62 @@ class NavKey(Static):
         self.post_message(NavKey.Selected(self.screen_name))
 
 
-class NavStrip(Horizontal):
-    """Footer listing every panel and its hotkey, current one highlighted."""
+class StatusBar(Horizontal):
+    """The whole footer on one row: panels, live status cells, chrome.
 
-    #: The eight labelled entries need 81 columns. Below that every entry
-    #: but the active one drops to its hotkey alone.
-    COMPACT_WIDTH = 81
+    Left to right: every panel with its hotkey (current one highlighted), a
+    ``1fr`` context cell that doubles as the spacer, the live status cells,
+    then ``c Config`` and the help/palette hint flush right. The panel name
+    is not repeated among the status cells — the highlight already names it.
+    """
+
+    #: Everything labelled needs 109 columns: five panel entries (53), the
+    #: status cells (30), ``c Config`` (10) and the chrome hint (16). Below
+    #: that every panel entry but the active one drops to its hotkey alone,
+    #: which buys back up to 28.
+    COMPACT_WIDTH = 109
+
+    #: Even fully compacted the row still wants 81 columns. Below that the
+    #: hint and the provider name give up theirs, in that order: the hint is a
+    #: reminder you need once, and the provider is the least urgent cell.
+    MINIMAL_WIDTH = 81
 
     DEFAULT_CSS = """
-    NavStrip {
+    StatusBar {
         height: 1;
         background: $panel;
     }
-    """
-
-    def __init__(self, active: str = "") -> None:
-        super().__init__()
-        self._items = {name: NavKey(key, name, label) for key, name, label in NAV_ITEMS}
-        self._active = active
-        self._compact = False
-
-    def compose(self) -> ComposeResult:
-        yield from self._items.values()
-
-    def on_mount(self) -> None:
-        self.set_active(self._active)
-
-    def on_resize(self, event: Any) -> None:
-        self._compact = event.size.width < self.COMPACT_WIDTH
-        self._render_items()
-
-    def set_active(self, screen_name: str) -> None:
-        self._active = screen_name
-        self._render_items()
-
-    def _render_items(self) -> None:
-        for name, item in self._items.items():
-            active = name == self._active
-            item.set_class(active, "-active")
-            item.render_label(compact=self._compact, active=active)
-
-
-class StatusLine(Horizontal):
-    """One-row bottom chrome: screen context and live status cells.
-
-    The panel name is not repeated here — the nav strip above highlights it.
-    """
-
-    DEFAULT_CSS = """
-    StatusLine {
-        height: 1;
-        background: $panel;
-    }
-    StatusLine #sl-context {
+    StatusBar #sl-context {
         width: 1fr;
         padding: 0 1;
         color: $text-muted;
     }
-    StatusLine .sl-value {
+    StatusBar .sl-value {
         width: auto;
         padding: 0 1;
         color: $foreground;
     }
-    StatusLine #sl-dot {
+    StatusBar #sl-dot {
         width: 2;
         padding: 0 0 0 1;
     }
-    StatusLine #sl-keys {
+    StatusBar #sl-keys {
         width: auto;
         padding: 0 1;
         color: $text-muted;
     }
     """
 
-    def __init__(self, rig: Any, context: str = "") -> None:
+    def __init__(self, rig: Any, active: str = "", context: str = "") -> None:
         super().__init__()
         self.rig = rig
+        # Chrome entries live in the same map so the current screen still picks
+        # up its ``-active`` highlight when it is a chrome screen (Config).
+        self._items = {
+            name: NavKey(key, name, label) for key, name, label in NAV_ITEMS + CHROME_ITEMS
+        }
+        self._active = active
+        self._compact = False
         # NB: not ``self._context`` — that name shadows a Textual MessagePump
         # attribute and silently deadlocks the widget's message loop.
         self._ctx = Static(context, id="sl-context", markup=False)
@@ -180,26 +175,53 @@ class StatusLine(Horizontal):
         self._freshness = Static("data —", markup=False, classes="sl-value")
         self._model = Static("", markup=False, classes="sl-value")
         self._spend = Static("", markup=False, classes="sl-value")
+        self._keys = Static(CHROME_HINT, id="sl-keys", markup=False)
 
     def compose(self) -> ComposeResult:
         # Flat children only: auto-width Horizontals nested inside a docked
-        # auto row deadlock Textual's layout pass.
+        # auto row deadlock Textual's layout pass. The 1fr context cell — not
+        # a nested container — is what pushes everything after it flush right.
+        for _key, name, _label in NAV_ITEMS:
+            yield self._items[name]
         yield self._ctx
         yield self._dot
         yield self._freshness
         yield self._model
         yield self._spend
-        yield Static("? help · ^p go", id="sl-keys", markup=False)
+        for _key, name, _label in CHROME_ITEMS:
+            yield self._items[name]
+        yield self._keys
 
     def on_mount(self) -> None:
+        self.set_active(self._active)
         self._refresh()
         self.set_interval(30, self._refresh)
+
+    def on_resize(self, event: Any) -> None:
+        width = event.size.width
+        self._compact = width < self.COMPACT_WIDTH
+        minimal = width < self.MINIMAL_WIDTH
+        self._keys.display = not minimal
+        self._model.display = not minimal
+        self._render_items()
+
+    def set_active(self, screen_name: str) -> None:
+        self._active = screen_name
+        self._render_items()
 
     def set_context(self, text: str) -> None:
         self._ctx.update(text)
 
+    def _render_items(self) -> None:
+        chrome = {name for _key, name, _label in CHROME_ITEMS}
+        for name, item in self._items.items():
+            active = name == self._active
+            item.set_class(active, "-active")
+            # The chrome group keeps its labels at every width.
+            item.render_label(compact=self._compact and name not in chrome, active=active)
+
     def _refresh(self) -> None:
-        """Update status cells; the statusline must never take a screen down."""
+        """Update status cells; the status bar must never take a screen down."""
         try:
             health = services.data_health(self.rig)
             if health.latest_bar:
@@ -221,16 +243,16 @@ class StatusLine(Horizontal):
 
 
 class ScreenFooter(Vertical):
-    """The two docked chrome rows: nav strip above, statusline below.
+    """The docked chrome row.
 
-    They share one docked container because two widgets docked to the same
-    edge independently resolve to the same row rather than stacking.
+    A container rather than docking ``StatusBar`` directly: it keeps the dock
+    rule in one place, so a screen never has to know how the shell is pinned.
     """
 
     DEFAULT_CSS = """
     ScreenFooter {
         dock: bottom;
-        height: 2;
+        height: 1;
     }
     """
 
@@ -240,12 +262,11 @@ class ScreenFooter(Vertical):
         self._active = active
 
     def compose(self) -> ComposeResult:
-        yield NavStrip(active=self._active)
-        yield StatusLine(self.rig)
+        yield StatusBar(self.rig, active=self._active)
 
 
 class RiggerScreen(Screen):
-    """Base screen: pane content above a docked nav footer and statusline.
+    """Base screen: pane content above the docked status bar.
 
     Screens implement ``compose_content`` and keep their ``name`` class
     attribute. Content is *not* wrapped in a scroller — a screen that needs
@@ -275,9 +296,9 @@ class RiggerScreen(Screen):
         yield  # pragma: no cover
 
     def set_context(self, text: str) -> None:
-        """Update the statusline's middle cell, if it is mounted."""
+        """Update the status bar's context cell, if it is mounted."""
         try:
-            self.query_one(StatusLine).set_context(text)
+            self.query_one(StatusBar).set_context(text)
         except Exception:
             pass
 
@@ -287,7 +308,7 @@ class RiggerScreen(Screen):
             switch(event.screen_name)
 
     async def on_screen_resume(self) -> None:
-        self.query_one(NavStrip).set_active(self.name or "")
+        self.query_one(StatusBar).set_active(self.name or "")
         refresh = getattr(self, "refresh_view", None)
         if callable(refresh):
             result = refresh()

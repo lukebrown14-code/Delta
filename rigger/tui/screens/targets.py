@@ -1,4 +1,4 @@
-"""Watch target management panel."""
+"""Watchlist panel: what Rigger watches for you."""
 
 from __future__ import annotations
 
@@ -48,9 +48,9 @@ class Targets(RiggerScreen):
 
     def compose_content(self) -> ComposeResult:
         with PaneRow(id="target-split"):
-            with Pane(title="targets", icon="", id="target-list-pane"):
+            with Pane(title="watchlist", icon="", id="target-list-pane"):
                 yield RiggerTable(id="target-table")
-            with Pane(title="add a target", icon="", id="target-form-pane"):
+            with Pane(title="add to watchlist", icon="", id="target-form-pane"):
                 yield Vertical(
                     Input(placeholder="name", id="tg-name"),
                     Input(placeholder="kind (company|sector|…)", id="tg-kind"),
@@ -110,13 +110,13 @@ class Targets(RiggerScreen):
             self.query_one("#tg-name", Input).value = ""
             self.query_one("#tg-tickers", Input).value = ""
             self.refresh_view()
-            self.notify(f"Added target {name}")
+            self.notify(f"Added {name} to the watchlist")
         elif event.button.id == "tg-remove":
             table = self.query_one("#target-table", RiggerTable)
             # An empty DataTable still reports cursor_row == 0, so row_count is
             # the only reliable "nothing to select" test.
             if table.row_count == 0:
-                self.notify("Select a target first", severity="error")
+                self.notify("Select a watchlist entry first", severity="error")
                 return
             name = table.get_row_at(table.cursor_row)[0]
             try:
@@ -125,4 +125,4 @@ class Targets(RiggerScreen):
                 self.notify(exc.args[0], severity="error")
                 return
             self.refresh_view()
-            self.notify(f"Removed target {name}")
+            self.notify(f"Removed {name} from the watchlist")

@@ -290,10 +290,10 @@ validation failure.
 
 ## 7. Surfaces
 
-**TUI** (`uv run rig`) — `1`–`6` Home, Data, Config, Reports, Theses, Chat;
-`w` Targets; `c` Console; `m` model picker; `?` help; `q` quit. The console
-takes `target add/remove/list/show` and `config show`; the command palette
-has a **Gather evidence** action (ingest + extract).
+**TUI** (`uv run rig`) — `1`–`5` Watchlist, Data, Reports, Theses, Chat;
+`c` Config; `h` Home; `m` model picker; `?` help; `q` quit. What is watched
+is managed on the Watchlist panel; the command palette has a **Gather
+evidence** action (ingest + extract).
 
 Reports are written to `reports/<target_id>/<YYYY-MM-DD>.md`.
 

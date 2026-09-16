@@ -51,13 +51,12 @@ class MenuItem:
 
 
 MENU: list[MenuItem] = [
-    MenuItem("w", "Add a watch target", "add target", "do", screen="targets"),
-    MenuItem("4", "Read a report", "report", "do", screen="reports"),
-    MenuItem("6", "Ask a question", "ask", "do", screen="chat"),
-    MenuItem("5", "Track a thesis", "thesis", "do", screen="theses"),
+    MenuItem("1", "Add to the watchlist", "watchlist", "do", screen="targets"),
+    MenuItem("3", "Read a report", "report", "do", screen="reports"),
+    MenuItem("5", "Ask a question", "ask", "do", screen="chat"),
+    MenuItem("4", "Track a thesis", "thesis", "do", screen="theses"),
     MenuItem("2", "Evidence & spend", "evidence", "look", screen="data"),
-    MenuItem("c", "Command console", "console", "look", screen="console"),
-    MenuItem("3", "Settings", "settings", "look", screen="config"),
+    MenuItem("c", "Settings", "settings", "look", screen="config"),
     MenuItem("?", "Help", "help", "app", action="show_help"),
     MenuItem("q", "Quit", "quit", "app", action="quit"),
 ]
@@ -142,7 +141,7 @@ class Home(Screen):
     name = "home"
     # Nothing is focused on arrival: #home-prompt is the first focusable
     # widget, and while it holds focus it swallows the single-letter nav
-    # keys (1..6, w, c, ?) before they reach the app bindings.
+    # keys (1..5, c, h, ?) before they reach the app bindings.
     AUTO_FOCUS = ""  # "" disables; None would inherit the app default of "*"
 
     DEFAULT_CSS = """
@@ -418,7 +417,7 @@ class Home(Screen):
         await holder.remove_children()
         watched = self._watched()
         if not watched:
-            await holder.mount(self._row("nothing yet — press w to add a target", ""))
+            await holder.mount(self._row("nothing yet — press 1 to build the watchlist", ""))
             return
         rows: list[Any] = []
         for instrument in watched[:MARKET_ROWS]:

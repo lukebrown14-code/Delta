@@ -80,19 +80,19 @@ uv run rig
 
 | Key | Screen |
 |-----|--------|
-| `1`–`6` | Home, Data, Config, Reports, Theses, Chat |
-| `w` | Targets — what you're following |
-| `c` | Console |
+| `1`–`5` | Watchlist, Data, Reports, Theses, Chat |
+| `c` | Config |
+| `h` | Home |
 | `m` | Model picker |
 | `?` / `q` | Help / quit |
 
-Everything happens inside the app. The console (**c**) takes target commands — `target add mining --kind industry --market asx --tickers BHP,RIO,FMG`, `target list`, `target remove`, `target show` — and the command palette (ctrl+p) has a **Gather evidence** action that ingests prices, news, filings and fundamentals, then turns the news into structured events.
+Everything happens inside the app. The watchlist is built on the Watchlist panel (**1**), which takes a name, kind, market, tickers and tags — and the command palette (ctrl+p) has a **Gather evidence** action that ingests prices, news, filings and fundamentals, then turns the news into structured events.
 
-Targets come in five kinds — `company`, `sector`, `industry`, `market` and `theme`. All but `market` name tickers in one market; a market target names only the market. Older `[watchlists]` tables keep working, with their kind inferred from shape.
+Watchlist entries come in five kinds — `company`, `sector`, `industry`, `market` and `theme`. All but `market` name tickers in one market; a market entry names only the market. Older `[watchlists]` tables keep working, with their kind inferred from shape.
 
-Theses are optional. Skip them entirely and you still get targets, evidence and reports. On the Theses screen (**5**) write down something you believe, let the model propose candidate evidence, and accept or reject each piece yourself.
+Theses are optional. Skip them entirely and you still get a watchlist, evidence and reports. On the Theses screen (**4**) write down something you believe, let the model propose candidate evidence, and accept or reject each piece yourself.
 
-To see what data has landed and what the model has cost you, press **2** for Data. To check your configuration, press **3** for Config.
+To see what data has landed and what the model has cost you, press **2** for Data. To check your configuration, press **c** for Config.
 
 ## Project layout
 
