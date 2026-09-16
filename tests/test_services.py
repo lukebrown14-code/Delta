@@ -25,7 +25,9 @@ class FakeRig:
         self.engine = engine
         self.llm = llm
         self._universe = universe
-        self.settings = SimpleNamespace(openrouter_api_key="", openai_api_key="", anthropic_api_key="")
+        self.settings = SimpleNamespace(
+            openrouter_api_key="", openai_api_key="", anthropic_api_key=""
+        )
         self.cfg = SimpleNamespace(
             base_currency="AUD",
             llm_provider="openrouter",
@@ -278,3 +280,46 @@ def test_pulse_ignores_instruments_outside_the_watchlist(tmp_engine):
 
     assert result.articles == 1  # still counted as new evidence
     assert result.busiest is None  # but TSLA is not on the watchlist, so nothing to rank
+
+
+# --- upcoming_events ----------------------------------------------------------
+
+
+def test_upcoming_events_excludes_the_past(tmp_engine):
+    """The mirror of pulse(): pulse counts what happened, this takes what has not."""
+    now = datetime.now(UTC)
+    _event(tmp_engine, "past", "US:AAPL", now - timedelta(days=2))
+    _event(tmp_engine, "soon", "US:AAPL", now + timedelta(days=4))
+
+    result = services.upcoming_events(tmp_engine, instrument_ids=["US:AAPL"])
+
+    assert [item.instrument_id for item in result] == ["US:AAPL"]
+    assert result[0].ts > now
+
+
+def test_upcoming_events_are_soonest_first_and_respect_limit(tmp_engine):
+    now = datetime.now(UTC)
+    for days in (30, 3, 12):
+        _event(tmp_engine, f"e{days}", "US:AAPL", now + timedelta(days=days))
+
+    result = services.upcoming_events(tmp_engine, instrument_ids=["US:AAPL"], limit=2)
+
+    assert len(result) == 2
+    assert [round((item.ts - now).total_seconds() / 86400) for item in result] == [3, 12]
+
+
+def test_upcoming_events_ignores_unwatched_instruments(tmp_engine):
+    now = datetime.now(UTC)
+    _event(tmp_engine, "watched", "US:AAPL", now + timedelta(days=1))
+    _event(tmp_engine, "other", "US:TSLA", now + timedelta(hours=1))
+
+    result = services.upcoming_events(tmp_engine, instrument_ids=["US:AAPL"])
+
+    assert [item.instrument_id for item in result] == ["US:AAPL"]
+
+
+def test_upcoming_events_with_no_instruments_returns_empty(tmp_engine):
+    """An empty IN () is a SQL error, so this must short-circuit before querying."""
+    _event(tmp_engine, "future", "US:AAPL", datetime.now(UTC) + timedelta(days=1))
+
+    assert services.upcoming_events(tmp_engine, instrument_ids=[]) == []

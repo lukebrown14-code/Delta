@@ -65,6 +65,8 @@ MENU: list[MenuItem] = [
 HINT_COLUMNS = 3
 
 PULSE_DAYS = 30
+MARKET_ROWS = 5
+UPCOMING_ROWS = 3
 
 
 def _plural(count: int, noun: str) -> str:
@@ -84,6 +86,18 @@ def _headline(pulse: services.Pulse) -> str:
         if count
     ]
     return "   ".join(live) if live else "nothing new since your last visit"
+
+
+def _when(ts: datetime, now: datetime) -> str:
+    """Relative distance: what you react to, beside the date you diarise."""
+    days = (ts.date() - now.date()).days
+    if days <= 0:
+        return "today"
+    if days == 1:
+        return "tomorrow"
+    if days < 14:
+        return f"in {days}d"
+    return f"in {days // 7}w"
 
 
 def _symbol(watched: list[Any], instrument_id: str) -> str:
@@ -139,7 +153,11 @@ class Home(Screen):
     Home #dash {
         width: 118;
         max-width: 100%;
-        height: auto;
+        /* 1fr, not auto: #page-footer is dock: bottom, so on a short terminal an
+           auto-height block runs underneath it. Bounded height plus scroll makes
+           short terminals degrade instead of overlapping. */
+        height: 1fr;
+        overflow-y: auto;
         padding-top: 2;
     }
     Home #dash-body {
@@ -213,7 +231,7 @@ class Home(Screen):
         height: auto;
         padding-bottom: 1;
     }
-    Home #tickers { height: auto; }
+    Home #tickers, Home #upcoming { height: auto; }
     Home #menu-block { height: auto; margin: 1 3 0 3; }
     Home #setup-line {
         width: 100%;
@@ -224,6 +242,11 @@ class Home(Screen):
     }
     Home #setup-line.-ok { color: $success; }
     Home #setup-line.-bad { color: $error; }
+    Home .up-row { height: 1; }
+    Home .up-sym { width: 9; color: $foreground; text-style: bold; }
+    Home .up-kind { width: 12; color: $text-muted; }
+    Home .up-date { width: 9; color: $foreground; }
+    Home .up-when { width: 1fr; color: $primary; }
     Home .tick-row { height: 1; }
     Home .tick-sym { width: 9; color: $foreground; text-style: bold; }
     Home .tick-px { width: 11; text-align: right; color: $foreground; }
@@ -288,6 +311,8 @@ class Home(Screen):
                 with Vertical(id="dash-right"):
                     yield Static("MARKET", classes="sec-head", markup=False)
                     yield Vertical(id="tickers")
+                    yield Static("COMING UP", classes="sec-head", markup=False)
+                    yield Vertical(id="upcoming")
         with Vertical(id="page-footer"):
             yield Static("", id="setup-line", markup=False)
             yield Static("", id="boot", markup=False)
@@ -308,22 +333,25 @@ class Home(Screen):
 
     async def refresh_view(self) -> None:
         self._tick()
-        self._refresh_status()
+        # setup_checks() runs data_health() internally, so fetch it once here and
+        # pass it down rather than letting each panel query it again.
+        health = services.data_health(self.rig)
+        self._refresh_status(health)
         await self._refresh_statbox()
         await self._refresh_tickers()
+        await self._refresh_upcoming()
         self._refresh_setup()
 
-    def _refresh_status(self) -> None:
+    def _refresh_status(self, health: Any) -> None:
         plugins = getattr(self.rig, "plugins", {}) or {}
         ready = sum(1 for p in plugins.values() if getattr(p, "enabled", False))
         spend = sum(row.cost_usd for row in services.llm_costs(self.rig.engine))
         self.query_one("#boot", Static).update(
-            f"⚡ {ready}/{len(plugins)} plugins  ·  {self._freshness()}  ·  ${spend:.2f} spent"
+            f"⚡ {ready}/{len(plugins)} plugins  ·  {self._freshness(health)}  ·  ${spend:.2f} spent"
         )
 
-    def _freshness(self) -> str:
+    def _freshness(self, health: Any) -> str:
         """Age of the newest price bar — the figure that decides if a report is stale."""
-        health = services.data_health(self.rig)
         if not health.latest_bar:
             return "no price data"
         label, _state = age_text(datetime.now(UTC) - to_utc(max(health.latest_bar.values())))
@@ -392,8 +420,8 @@ class Home(Screen):
         if not watched:
             await holder.mount(self._row("nothing yet — press w to add a target", ""))
             return
-        rows: list[Horizontal] = []
-        for instrument in watched[:5]:
+        rows: list[Any] = []
+        for instrument in watched[:MARKET_ROWS]:
             closes = services.recent_closes(self.rig.engine, instrument.id)
             if not closes:
                 continue
@@ -410,7 +438,38 @@ class Home(Screen):
                     classes="tick-row",
                 )
             )
+        # Say so rather than silently showing the first few of a long watchlist.
+        hidden = len(watched) - MARKET_ROWS
+        if hidden > 0:
+            rows.append(self._row(f"+{hidden} more · press 2", ""))
         await holder.mount(*rows)
+
+    async def _refresh_upcoming(self) -> None:
+        """What is scheduled next for the watchlist — the mirror of the pulse panel."""
+        holder = self.query_one("#upcoming", Vertical)
+        await holder.remove_children()
+        watched = self._watched()
+        events = services.upcoming_events(
+            self.rig.engine,
+            instrument_ids=[instrument.id for instrument in watched],
+            limit=UPCOMING_ROWS,
+        )
+        if not events:
+            await holder.mount(self._row("nothing scheduled — run rig ingest", ""))
+            return
+        now = datetime.now(UTC)
+        await holder.mount(
+            *(
+                Horizontal(
+                    Static(_symbol(watched, item.instrument_id), classes="up-sym", markup=False),
+                    Static(item.kind, classes="up-kind", markup=False),
+                    Static(f"{item.ts:%d %b}", classes="up-date", markup=False),
+                    Static(_when(item.ts, now), classes="up-when", markup=False),
+                    classes="up-row",
+                )
+                for item in events
+            )
+        )
 
     def _refresh_setup(self) -> None:
         """One status line, like the boot line: stay quiet unless something is wrong."""

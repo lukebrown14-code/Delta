@@ -298,7 +298,9 @@ def pulse(
     was written — so this reports what was *published* since the last visit.
 
     Future-dated rows are excluded: the calendar plugin writes upcoming earnings
-    into ``event.ts``, and those have not happened yet.
+    into ``event.ts``, and those have not happened yet. ``upcoming_events`` is
+    the mirror of this and takes exactly those rows — same table, opposite side
+    of ``now``. Change one boundary and you must change the other.
 
     ``busiest``/``quietest`` cover the whole ``days`` window; the counts cover
     only ``since``. One windowed scan per table feeds all three outputs. Do not switch the
@@ -360,6 +362,52 @@ def pulse(
         busiest=None if quiet else ranked[0],
         quietest=None if quiet or len(ranked) < 2 else ranked[-1],
     )
+
+
+@dataclass
+class Upcoming:
+    """A scheduled event that has not happened yet."""
+
+    instrument_id: str
+    ts: datetime
+    kind: str
+    summary: str
+
+
+def upcoming_events(
+    engine: Any,
+    *,
+    instrument_ids: Sequence[str] = (),
+    limit: int = 3,
+) -> list[Upcoming]:
+    """The next scheduled events for ``instrument_ids``, soonest first.
+
+    The mirror of :func:`pulse`, which counts what has already happened: this
+    takes the rows on the other side of ``now``. The calendar plugin writes
+    upcoming earnings and ex-dividend dates into ``event.ts``, and nothing else
+    in the app reads them.
+
+    Both columns are indexed, so this stays one cheap query. No ``kind`` filter:
+    only earnings and dividends are ever future-dated, and extracted events
+    (regulatory, insider_trade) are always in the past.
+    """
+    ids = list(instrument_ids)
+    if not ids:
+        return []  # an empty IN () is a SQL error, and there is nothing to ask for
+
+    now = datetime.now(UTC)
+    with Session(engine) as session:
+        rows = session.exec(
+            select(EventTable.ts, EventTable.instrument_id, EventTable.kind, EventTable.summary)
+            .where(EventTable.instrument_id.in_(ids))  # type: ignore[attr-defined]
+            .where(EventTable.ts > now)
+            .order_by(EventTable.ts)  # type: ignore[arg-type]
+            .limit(limit)
+        ).all()
+    return [
+        Upcoming(instrument_id=instrument_id, ts=to_utc(ts), kind=kind, summary=summary)
+        for ts, instrument_id, kind, summary in rows
+    ]
 
 
 @dataclass
