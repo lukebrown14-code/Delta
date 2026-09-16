@@ -7,6 +7,7 @@ is a config change, not a code change.
 
 from __future__ import annotations
 
+import asyncio
 import math
 from datetime import UTC, datetime
 from typing import Any
@@ -49,6 +50,12 @@ class YFinanceData(YFinanceSymbols):
     async def fetch(
         self, instruments: list[Instrument], since: datetime
     ) -> list[Bar | NewsItem | Fundamental | Event]:
+        # yfinance's HTTP calls are synchronous; hopping to a thread keeps
+        # ``await fetch(...)`` (watchlist add, palette ingest) from freezing
+        # the TUI event loop for the duration of the request.
+        return await asyncio.to_thread(self._fetch_bars, instruments, since)
+
+    def _fetch_bars(self, instruments: list[Instrument], since: datetime) -> list[Bar]:
         import yfinance as yf
 
         bars: list[Bar] = []
