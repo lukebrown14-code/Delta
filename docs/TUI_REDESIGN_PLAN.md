@@ -1,5 +1,28 @@
 # Rigger TUI Redesign — "Terminal Desk"
 
+> **Status: delivered — historical record, not a work item.**
+>
+> This plan was written against the pre-redesign TUI and committed after the
+> redesign had already landed (`fce9dc4`, `9bca979`, `0c3549a`). Every root
+> cause in *Context* below is already fixed: `rigger/tui/theme.py`,
+> `rigger/tui/shell.py` and a 337-line `rigger/tui/widgets.py` all exist,
+> `rigger.tcss` is 153 lines of token-based rules, `RiggerCommands` is wired
+> into the command palette, `RiggerScreen.on_screen_resume` re-runs
+> `refresh_view`, and `screens/help.py` generates its keymap from `BINDINGS`.
+> **Read it for the reasoning and the test contract, not as instructions.**
+>
+> Where the shipped design deliberately diverges from this plan, the code
+> wins:
+>
+> | Plan says | Shipped instead |
+> |---|---|
+> | Persistent left `NavRail` | `NavStrip` + `GoPicker` modal ("the replacement for the nav rail") |
+> | Bordered `Card` widget | Borderless `Pane` grammar — inline winbar title, gutter + faint rule |
+> | Mount Textual's `Header()`/`Footer()` | Custom `StatusLine` / `ScreenFooter` in `shell.py` |
+> | `StatTile`, `Sparkline`, `Digits` | Not adopted |
+>
+> The *Hard constraints* section is still accurate and still binding.
+
 ## Context
 
 The TUI works but looks and feels like a debug harness. The root causes are specific, not vague:
