@@ -31,7 +31,17 @@ to buy or sell. The point is clarity, not tips.
 Press **1** for Watchlist.
 
 A watchlist entry is anything you want watched — one company, a whole
-sector, or a theme. Fill in the row at the bottom and press **Add**:
+sector, or a theme. Press **a** to open the entry form, fill in the fields,
+and click **save**. Press **Escape** to close the form.
+
+Use **/** to filter, **↑/↓** to select, and **Enter** to expand a target.
+Grouped targets reveal individual ticker prices. Press **d** to remove a
+selected target; ticker child rows are informational.
+
+Prices stream from Yahoo while Watchlist is open. **DAY %** is Yahoo’s
+daily percentage change: **▲** up, **▼** down, **─** unchanged. Quote age
+and connection state are separate; delivery may vary by market. Missing
+quotes show **—**. Streaming quotes do not replace gathered historical bars.
 
 | Field | Example |
 | --- | --- |
