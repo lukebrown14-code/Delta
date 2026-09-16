@@ -455,7 +455,7 @@ class Home(Screen):
             limit=UPCOMING_ROWS,
         )
         if not events:
-            await holder.mount(self._row("nothing scheduled — run rig ingest", ""))
+            await holder.mount(self._row("nothing scheduled — gather evidence (ctrl+p)", ""))
             return
         now = datetime.now(UTC)
         await holder.mount(
