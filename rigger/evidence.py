@@ -56,24 +56,28 @@ def evidence(
     since: str | None = None,
     kind: str | None = None,
     limit: int = 200,
+    search: str | None = None,
 ) -> list[EvidenceItem]:
     """Read evidence across all source tables.
 
     ``target`` keeps items whose ``target_ids`` contain it; ``since`` is an
     inclusive ``YYYY-MM-DD`` floor on ``ts``; ``kind`` filters the mapped kind.
+    ``search`` matches title, body and source case-insensitively before limiting.
     Results are ordered ``ts`` desc then ``id`` asc, truncated to ``limit``.
     """
     limit = max(limit, 0)
+    # Search must see older matches before the final result limit.
+    read_limit = None if search else limit
     with Session(engine) as session:
         items: list[EvidenceItem] = []
         if kind is None or kind == "bar":
-            items += _bars(session, target, since, limit)
+            items += _bars(session, target, since, read_limit)
         if kind is None or kind in ("news", "filing"):
-            items += _news(session, target, since, kind, limit)
+            items += _news(session, target, since, kind, read_limit)
         if kind is None or kind == "event":
-            items += _events(session, target, since, limit)
+            items += _events(session, target, since, read_limit)
         if kind is None or kind == "fundamental":
-            items += _fundamentals(session, target, since, limit)
+            items += _fundamentals(session, target, since, read_limit)
     floor = parse_date(since) if since is not None else None
     matched = [
         item
@@ -82,6 +86,13 @@ def evidence(
         and (floor is None or item.ts >= floor)
         and (kind is None or item.kind == kind)
     ]
+    if search:
+        needle = search.casefold()
+        matched = [
+            item
+            for item in matched
+            if needle in " ".join((item.title, item.body or "", item.source)).casefold()
+        ]
     return _ordered(matched)[:limit]
 
 
@@ -129,19 +140,19 @@ def _ordered(items: list[EvidenceItem]) -> list[EvidenceItem]:
 
 
 def _bars(
-    session: Session, target: str | None, since: str | None, limit: int
+    session: Session, target: str | None, since: str | None, limit: int | None
 ) -> list[EvidenceItem]:
     stmt = select(BarTable)
     if target is not None:
         stmt = stmt.where(BarTable.instrument_id == target)
     if since is not None:
         stmt = stmt.where(BarTable.ts >= parse_date(since))
-    stmt = stmt.order_by(BarTable.ts.desc()).limit(limit)  # type: ignore[attr-defined]
+    stmt = stmt.order_by(BarTable.ts.desc(), BarTable.id).limit(limit)  # type: ignore[attr-defined]
     return [_bar_item(row) for row in session.exec(stmt).all()]
 
 
 def _news(
-    session: Session, target: str | None, since: str | None, kind: str | None, limit: int
+    session: Session, target: str | None, since: str | None, kind: str | None, limit: int | None
 ) -> list[EvidenceItem]:
     stmt = select(NewsItemTable)
     if target is not None:
@@ -154,31 +165,31 @@ def _news(
         stmt = stmt.where(NewsItemTable.source != FILING_SOURCE)
     elif kind == "filing":
         stmt = stmt.where(NewsItemTable.source == FILING_SOURCE)
-    stmt = stmt.order_by(NewsItemTable.published.desc()).limit(limit)  # type: ignore[attr-defined]
+    stmt = stmt.order_by(NewsItemTable.published.desc(), NewsItemTable.id).limit(limit)  # type: ignore[attr-defined]
     return [_news_item(row) for row in session.exec(stmt).all()]
 
 
 def _events(
-    session: Session, target: str | None, since: str | None, limit: int
+    session: Session, target: str | None, since: str | None, limit: int | None
 ) -> list[EvidenceItem]:
     stmt = select(EventTable)
     if target is not None:
         stmt = stmt.where(EventTable.instrument_id == target)
     if since is not None:
         stmt = stmt.where(EventTable.ts >= parse_date(since))
-    stmt = stmt.order_by(EventTable.ts.desc()).limit(limit)  # type: ignore[attr-defined]
+    stmt = stmt.order_by(EventTable.ts.desc(), EventTable.id).limit(limit)  # type: ignore[attr-defined]
     return [_event_item(row) for row in session.exec(stmt).all()]
 
 
 def _fundamentals(
-    session: Session, target: str | None, since: str | None, limit: int
+    session: Session, target: str | None, since: str | None, limit: int | None
 ) -> list[EvidenceItem]:
     stmt = select(FundamentalTable)
     if target is not None:
         stmt = stmt.where(FundamentalTable.instrument_id == target)
     if since is not None:
         stmt = stmt.where(FundamentalTable.as_of >= parse_date(since).date())
-    stmt = stmt.order_by(FundamentalTable.as_of.desc()).limit(limit)  # type: ignore[attr-defined]
+    stmt = stmt.order_by(FundamentalTable.as_of.desc(), FundamentalTable.id).limit(limit)  # type: ignore[attr-defined]
     return [_fundamental_item(row) for row in session.exec(stmt).all()]
 
 

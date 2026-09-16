@@ -19,6 +19,7 @@ from rigger.tui.screens.help import HelpScreen
 from rigger.tui.screens.home import Home
 from rigger.tui.screens.model_picker import ModelPicker
 from rigger.tui.screens.reports import Reports
+from rigger.tui.screens.research import ResearchState
 from rigger.tui.screens.targets import Targets
 from rigger.tui.screens.theses import Theses
 from rigger.tui.shell import ALL_ITEMS
@@ -98,11 +99,23 @@ class RiggerApp(App):
     CSS_PATH = "rigger.tcss"
     BINDINGS = [
         Binding("1", "switch_screen('targets')", "Watchlist", tooltip="Manage what is watched"),
-        Binding("2", "switch_screen('data')", "Data", tooltip="Stored evidence and spend"),
-        Binding("3", "switch_screen('reports')", "Reports", tooltip="Generate and read reports"),
+        Binding(
+            "2", "switch_screen('data')", "Research · Evidence", tooltip="Browse company sources"
+        ),
+        Binding(
+            "3",
+            "switch_screen('reports')",
+            "Research · Report",
+            tooltip="Generate and read company reports",
+        ),
         Binding("4", "switch_screen('theses')", "Theses", tooltip="Track claims and evidence"),
         Binding("5", "switch_screen('chat')", "Ask", tooltip="Grounded Q&A over evidence"),
-        Binding("c", "switch_screen('config')", "Config", tooltip="Providers, routing, plugins"),
+        Binding(
+            "c",
+            "switch_screen('config')",
+            "Settings",
+            tooltip="Providers, routing, plugins and diagnostics",
+        ),
         Binding("h", "switch_screen('home')", "Home", tooltip="The landing dashboard"),
         Binding("m", "show_model_picker", "Model", tooltip="Pick the model for this screen"),
         Binding(
@@ -131,11 +144,12 @@ class RiggerApp(App):
         for theme in THEMES:
             self.register_theme(theme)
         self.theme = "rigger-dark"
+        research_state = ResearchState()
         self._screens = {
             "home": Home(self.rig, last_seen=self.last_seen),
-            "data": Data(self.rig),
+            "data": Data(self.rig, research_state),
             "config": Config(self.rig),
-            "reports": Reports(self.rig),
+            "reports": Reports(self.rig, research_state),
             "theses": Theses(self.rig),
             "chat": Chat(self.rig),
             "targets": Targets(self.rig),
@@ -149,6 +163,8 @@ class RiggerApp(App):
         self.narrow = event.size.width < PaneRow.NARROW_WIDTH
 
     def action_switch_screen(self, name: str) -> None:
+        if name in ("data", "reports"):
+            self._screens[name].tab = "evidence" if name == "data" else "report"
         self.switch_screen(name)
 
     def action_toggle_theme(self) -> None:
@@ -165,7 +181,7 @@ class RiggerApp(App):
             self.push_screen(HelpScreen())
 
     def action_show_model_picker(self) -> None:
-        task = {"reports": "report", "chat": "chat", "theses": "thesis"}.get(
+        task = {"data": "report", "reports": "report", "chat": "chat", "theses": "thesis"}.get(
             self.screen.name or "", "extract"
         )
         provider = getattr(getattr(self.rig, "llm", None), "provider", None)

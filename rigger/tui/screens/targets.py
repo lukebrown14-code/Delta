@@ -8,17 +8,19 @@ from datetime import UTC, datetime
 from typing import Any
 
 from rich.text import Text
+from textual import work
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
-from textual.widgets import Button, DataTable, Input, Label, OptionList, Static
+from textual.widgets import Button, DataTable, Input, Label, OptionList, Sparkline, Static
 from textual.widgets.option_list import Option
 
 from rigger import services
+from rigger.asset_metrics import AssetMetrics, chart_window, fetch_asset_metrics
 from rigger.core.models import Instrument
 from rigger.plugins.data.yfinance import DEFAULT_SUFFIXES
 from rigger.quotes import SearchResult, YahooQuotes, yahoo_search
 from rigger.tui.shell import RiggerScreen
-from rigger.tui.widgets import Dialog, Pane, RiggerTable
+from rigger.tui.widgets import Dialog, Pane, PaneRow, RiggerTable
 
 
 class TargetAddModal(Dialog):
@@ -59,7 +61,9 @@ class TargetAddModal(Dialog):
         ):
             fields.append(
                 Horizontal(
-                    Label(label), Input(placeholder=placeholder, id=f"tg-{field}"), classes="tg-field"
+                    Label(label),
+                    Input(placeholder=placeholder, id=f"tg-{field}"),
+                    classes="tg-field",
                 )
             )
             if field == "name":
@@ -90,7 +94,9 @@ class TargetAddModal(Dialog):
         for inst in self.rig.universe():
             haystack = " ".join((inst.symbol, inst.name or "", inst.market)).casefold()
             if needle in haystack:
-                results.append(SearchResult(inst.symbol, inst.name or inst.symbol, inst.market, inst.currency))
+                results.append(
+                    SearchResult(inst.symbol, inst.name or inst.symbol, inst.market, inst.currency)
+                )
         return results[:8]
 
     def _show_results(self, results: list[SearchResult]) -> None:
@@ -99,7 +105,12 @@ class TargetAddModal(Dialog):
         self._results_by_symbol = {result.symbol: result for result in results}
         for result in results:
             exchange = f" · {result.exchange}" if result.exchange else ""
-            options.add_option(Option(f"{result.symbol} — {result.name} · {result.market.upper()}{exchange}", id=result.symbol))
+            options.add_option(
+                Option(
+                    f"{result.symbol} — {result.name} · {result.market.upper()}{exchange}",
+                    id=result.symbol,
+                )
+            )
         options.display = bool(results)
 
     async def _search(self, query: str, generation: int) -> None:
@@ -210,6 +221,7 @@ class TargetAddModal(Dialog):
 class Targets(RiggerScreen):
     name = "targets"
     BINDINGS = [
+        ("space", "inspect", "Inspect metrics"),
         ("a", "add", "Add"),
         ("d", "remove", "Remove"),
         ("slash", "filter", "Filter"),
@@ -233,6 +245,11 @@ class Targets(RiggerScreen):
     #tg-action-spacer { width: 1fr; height: 1; background: $panel; }
     #tg-empty, #tg-details, #tg-state { height: auto; color: $text-muted; }
     #tg-details { padding: 0 1; }
+    #target-inspector-pane { width: 2fr; }
+    #target-inspector-title, #target-inspector-status, #target-metrics { height: auto; }
+    #target-inspector-title { color: $primary; text-style: bold; }
+    #target-inspector-status, #target-inspector-empty { color: $text-muted; }
+    #target-chart { height: 5; width: 1fr; }
     """
 
     def __init__(self, rig: Any) -> None:
@@ -245,24 +262,34 @@ class Targets(RiggerScreen):
         self.signature: tuple = ()
         self.narrow = False
         self.specs = {}
+        self._metrics: dict[str, AssetMetrics] = {}
+        self._selected_instrument: Instrument | None = None
 
     def compose_content(self) -> ComposeResult:
-        with Pane(title="watchlist", id="target-list-pane"):
-            yield Static("quotes: idle", id="tg-state", markup=False)
-            yield Input(placeholder="filter names, tickers, markets, kinds or tags", id="tg-filter")
-            yield RiggerTable(id="target-table")
-            yield Static("No targets yet — a add your first target.", id="tg-empty")
-            yield Static("", id="tg-details", markup=False)
-            # Retain this hidden compatibility node for callers that inspect
-            # the old inline form; the real form is the centered modal.
-            yield Static("", id="tg-form")
-            with Horizontal(id="tg-actions"):
-                yield Button("/ filter", id="tg-search")
-                yield Button("enter expand", id="tg-expand")
-                yield Button("a add", id="tg-add")
-                yield Button("d remove", id="tg-remove")
-                yield Button("esc close", id="tg-close")
-                yield Static("", id="tg-action-spacer")
+        with PaneRow(id="target-split"):
+            with Pane(title="watchlist", id="target-list-pane"):
+                yield Static("quotes: idle", id="tg-state", markup=False)
+                yield Input(
+                    placeholder="filter names, tickers, markets, kinds or tags", id="tg-filter"
+                )
+                yield RiggerTable(id="target-table")
+                yield Static("No targets yet — a add your first target.", id="tg-empty")
+                yield Static("", id="tg-details", markup=False)
+                yield Static("", id="tg-form")
+                with Horizontal(id="tg-actions"):
+                    yield Button("/ filter", id="tg-search")
+                    yield Button("enter expand", id="tg-expand")
+                    yield Button("a add", id="tg-add")
+                    yield Button("d remove", id="tg-remove")
+                    yield Button("esc close", id="tg-close")
+                    yield Static("", id="tg-action-spacer")
+            with Pane(title="metrics", icon="", id="target-inspector-pane"):
+                yield Static("Select a Watchlist item", id="target-inspector-empty", markup=False)
+                yield Static("", id="target-inspector-title", markup=False)
+                yield Static("", id="target-inspector-status", markup=False)
+                yield Sparkline([], id="target-chart")
+                yield Static("", id="target-metrics", markup=False)
+                yield Button("Refresh metrics", id="target-refresh")
 
     def on_mount(self) -> None:
         self.query_one("#tg-filter").display = False
@@ -380,6 +407,69 @@ class Targets(RiggerScreen):
             self._sync_feed()
         self._paint_quotes()
         self._details()
+        self._select_instrument()
+
+    def _select_instrument(self, force: bool = False) -> None:
+        key = self._selected()
+        if key is None or key not in self.rows:
+            self._selected_instrument = None
+            self._render_metrics()
+            return
+        target_id, ident = self.rows[key]
+        target = self.specs.get(target_id)
+        instrument = (
+            next((item for item in self.rig.universe() if item.id == ident), None)
+            if ident
+            else None
+        )
+        if instrument is None and ident:
+            market, symbol = ident.split(":", 1)
+            instrument = Instrument(
+                id=ident,
+                market=market.lower(),
+                symbol=symbol,
+                currency="",
+                asset_class=getattr(target, "asset_class", "equity"),
+            )
+        self._selected_instrument = instrument
+        if instrument:
+            if force or instrument.id not in self._metrics:
+                self.fetch_metrics(instrument)
+            else:
+                self._render_metrics()
+
+    @work(exclusive=True, thread=False)
+    async def fetch_metrics(self, instrument: Instrument) -> None:
+        self.query_one("#target-inspector-status", Static).update("Loading live metrics…")
+        metric = await asyncio.to_thread(fetch_asset_metrics, instrument)
+        self._metrics[instrument.id] = metric
+        if self._selected_instrument and self._selected_instrument.id == instrument.id:
+            self._render_metrics()
+
+    def _render_metrics(self) -> None:
+        instrument = self._selected_instrument
+        metric = self._metrics.get(instrument.id) if instrument else None
+        empty = self.query_one("#target-inspector-empty", Static)
+        title = self.query_one("#target-inspector-title", Static)
+        status = self.query_one("#target-inspector-status", Static)
+        if not instrument:
+            empty.update("Select a Watchlist item")
+            title.update("")
+            status.update("")
+            self.query_one("#target-chart", Sparkline).data = []
+            self.query_one("#target-metrics", Static).update("")
+            return
+        empty.update("")
+        title.update(f"{instrument.symbol} · {instrument.id} · {instrument.asset_class}")
+        if metric is None:
+            status.update("Loading live metrics…")
+            return
+        status.update(metric.error or f"1 month: {metric.change_label or 'insufficient history'}")
+        self.query_one("#target-chart", Sparkline).data = chart_window(metric.series)
+        self.query_one("#target-metrics", Static).update(
+            "\n".join(f"{label:<24} {value}" for label, value in metric.values.items())
+            or "No additional metrics available"
+        )
 
     def _sync_feed(self) -> None:
         suffixes = DEFAULT_SUFFIXES | getattr(self.rig.cfg, "plugins", {}).get("yfinance", {}).get(
@@ -466,6 +556,7 @@ class Targets(RiggerScreen):
 
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
         self._details()
+        self._select_instrument()
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         self.action_expand()
@@ -476,6 +567,10 @@ class Targets(RiggerScreen):
             name = self.rows[key][0]
             self.expanded.symmetric_difference_update({name})
             self.refresh_view()
+
+    def action_inspect(self) -> None:
+        """Refresh live metrics for the highlighted instrument."""
+        self._select_instrument(force=True)
 
     def action_filter(self) -> None:
         self.query_one("#tg-filter").display = True
@@ -524,6 +619,9 @@ class Targets(RiggerScreen):
         self.notify(f"Removed {name} from the watchlist")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "target-refresh":
+            self._select_instrument(force=True)
+            return
         actions = {
             "tg-add": self.action_add,
             "tg-remove": self.action_remove,

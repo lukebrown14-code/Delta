@@ -144,7 +144,7 @@ async def build_report(rig: Any, target_id: str, *, since: str | None = None) ->
     )
 
 
-def render_markdown(report: Report) -> str:
+def render_markdown(report: Report, *, interactive: bool = False) -> str:
     """Markdown with every claim followed by the cite lines of its evidence."""
     lines = [
         f"# Report — {report.target_id}",
@@ -164,7 +164,12 @@ def render_markdown(report: Report) -> str:
             for claim in claims:
                 lines.append(f"- {claim.text}")
                 lines.extend(
-                    f"  - {report.citations.get(evidence_id, evidence_id)}"
+                    (
+                        f"  - [Inspect source](evidence:{evidence_id}) — "
+                        f"{report.citations.get(evidence_id, evidence_id)}"
+                        if interactive
+                        else f"  - {report.citations.get(evidence_id, evidence_id)}"
+                    )
                     for evidence_id in claim.evidence_ids
                 )
         else:
@@ -181,4 +186,5 @@ def write_report(report: Report, base_dir: str | Path) -> Path:
     target_dir.mkdir(parents=True, exist_ok=True)
     path = target_dir / f"{report.as_of:%Y-%m-%d}.md"
     path.write_text(render_markdown(report), encoding="utf-8")
+    path.with_suffix(".json").write_text(report.model_dump_json(indent=2), encoding="utf-8")
     return path
