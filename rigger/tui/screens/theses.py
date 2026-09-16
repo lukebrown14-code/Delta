@@ -293,9 +293,7 @@ class Theses(RiggerScreen):
         return widgets
 
     @staticmethod
-    def _line_widget(
-        row: theses.ThesisEvidence, cites: dict[str, str], side: str
-    ) -> Static:
+    def _line_widget(row: theses.ThesisEvidence, cites: dict[str, str], side: str) -> Static:
         citation = cites.get(row.evidence_id, row.evidence_id)
         return Static(f"{row.note} — {citation}", markup=False, classes=f"side-{side}")
 
@@ -314,6 +312,4 @@ class Theses(RiggerScreen):
         if not linked:
             return Pill("emerging · no accepted evidence", variant="dim", id="thesis-health")
         result = compute_health(thesis, linked, now=datetime.now(UTC))
-        return Pill(
-            badge_text(result), variant=health_variant(result.state), id="thesis-health"
-        )
+        return Pill(badge_text(result), variant=health_variant(result.state), id="thesis-health")

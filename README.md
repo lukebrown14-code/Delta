@@ -80,19 +80,23 @@ uv run rig
 
 | Key | Screen |
 |-----|--------|
-| `1`–`5` | Watchlist, Data, Reports, Theses, Chat |
-| `c` | Config |
+| `1` | Watchlist |
+| `2` / `3` | Research: Evidence / Report |
+| `4` / `5` | Theses / Ask |
+| `c` | Settings |
 | `h` | Home |
 | `m` | Model picker |
 | `?` / `q` | Help / quit |
 
 Everything happens inside the app. The watchlist is built on the Watchlist panel (**1**), which takes a name, kind, market, tickers and tags — and the command palette (ctrl+p) has a **Gather evidence** action that ingests prices, news, filings and fundamentals, then turns the news into structured events.
 
-Watchlist entries come in five kinds — `company`, `sector`, `industry`, `market` and `theme`. All but `market` name tickers in one market; a market entry names only the market. Older `[watchlists]` tables keep working, with their kind inferred from shape.
+Watchlist entries come in five kinds — `company`, `sector`, `industry`, `market` and `theme`. All but `market` name tickers in one market; a market entry names only the market. Set `asset_class` to `equity`, `etf`, `bond`, `commodity`, `fx`, `crypto`, `cash` or `other` when a ticker is not an equity. The Watchlist inspector uses that class to show relevant metrics: commodities such as gold get price and volatility measures, while bonds such as the US 10-year yield get yield and basis-point measures. Older `[watchlists]` tables keep working, with their kind inferred from shape.
 
 Theses are optional. Skip them entirely and you still get a watchlist, evidence and reports. On the Theses screen (**4**) write down something you believe, let the model propose candidate evidence, and accept or reject each piece yourself.
 
-To see what data has landed and what the model has cost you, press **2** for Data. To check your configuration, press **c** for Config.
+Press **2** for Research: choose a watch target and company, then search and filter its sources. **Gather all** collects evidence across configured targets. **Generate report** writes a report for the selected company; browsing filters do not change its inputs. Press **3** to read the latest report and follow its citations back to Evidence.
+
+Reports keep their Markdown export alongside a structured JSON sidecar for citation navigation. Older Markdown-only reports remain readable; regenerate them to enable interactive citations. Database counts, price timestamps and cumulative model spend are under **Settings → Diagnostics** (**c**).
 
 ## Project layout
 

@@ -47,18 +47,19 @@ Open the command palette (**ctrl+p**) and run **Gather evidence**.
 `ingest` pulls prices, news, filings and earnings dates into a local database,
 and `extract` turns the news into structured facts. Gather runs both.
 
-Press **2** for Data to see what landed — row counts, how fresh each feed is,
-and what the model has cost you so far.
+Press **2** for Research. Choose a watch target and company, then search and
+filter its evidence. Database counts and model spend are under Settings → Diagnostics.
 
 ## 3. Read what it found
 
-Press **3** for Reports.
+Press **3** for the Research report view.
 
-Pick a watchlist entry, press **Generate**, and wait. You get a written summary with a
+Pick a company, press **Generate report**, and wait. You get a written summary with a
 citation on every claim. If a sentence could not be traced back to something
 collected in step 2, it gets dropped rather than guessed.
 
-The contents panel on the left jumps between sections.
+The contents panel on the left jumps between sections. Select **Inspect source**
+to read a citation in Evidence, then switch back to Report to resume reading.
 
 ## 4. Ask it questions
 

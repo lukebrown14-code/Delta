@@ -130,6 +130,7 @@ def add_target(
     tags: list[str] | None = None,
     notes: str = "",
     label: str | None = None,
+    asset_class: str = "equity",
 ) -> None:
     import tomli_w
 
@@ -161,6 +162,9 @@ def add_target(
     if name in raw.get("targets", {}) or name in raw.get("watchlists", {}):
         raise ValueError(f"target {name!r} already exists")
     spec: dict[str, Any] = {"kind": kind, "market": market}
+    if asset_class not in {"equity", "etf", "bond", "commodity", "fx", "crypto", "cash", "other"}:
+        raise ValueError(f"unknown asset class {asset_class!r}")
+    spec["asset_class"] = asset_class
     if kind != "market":
         spec["tickers"] = tickers
     if tags:
