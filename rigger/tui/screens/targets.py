@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import suppress
+from datetime import datetime
 from typing import Any
 
 from rich.text import Text
@@ -33,6 +34,22 @@ class WatchlistList(OptionList):
 
 
 ASSET_CLASS_ORDER = ("equity", "etf", "bond", "commodity", "fx", "crypto", "cash", "other")
+
+
+def _friendly_date_range(start: str | None, end: str | None) -> str:
+    """Format provider timestamps as a compact date range for the inspector."""
+    if not start or not end:
+        return "no historical dates"
+    try:
+        first = datetime.fromisoformat(start.replace("Z", "+00:00"))
+        last = datetime.fromisoformat(end.replace("Z", "+00:00"))
+    except ValueError:
+        return f"{start} → {end}"
+    if first.date() == last.date():
+        return first.strftime("%-d %b %Y")
+    if first.year == last.year:
+        return f"{first.day} {first.strftime('%b')} – {last.day} {last.strftime('%b')} {last.year}"
+    return f"{first.day} {first.strftime('%b %Y')} – {last.day} {last.strftime('%b %Y')}"
 
 
 class TargetAddModal(Dialog):
@@ -357,11 +374,11 @@ class Targets(RiggerScreen):
                 yield Static("", id="tg-form")
                 with Horizontal(id="tg-actions"):
                     yield Button("enter refresh", id="tg-refresh-hint")
-                    yield Button("r range: month", id="tg-range-hint")
-                    yield Button("space groups", id="tg-space-hint")
-                    yield Button("/ filter", id="tg-search")
                     yield Button("a add", id="tg-add")
                     yield Button("d remove", id="tg-remove")
+                    yield Button("/ filter", id="tg-search")
+                    yield Button("r range: month", id="tg-range-hint")
+                    yield Button("space groups", id="tg-space-hint")
                     yield Button("esc close", id="tg-close")
                     yield Static("", id="tg-action-spacer")
             with Pane(title="metrics", icon="", id="target-inspector-pane"):
@@ -633,11 +650,7 @@ class Targets(RiggerScreen):
             status.update(f"Metrics unavailable: {metric.error} · press Enter to retry")
         else:
             quote_stamp = quote.timestamp.strftime("%H:%M:%S UTC") if quote else "—"
-            history_stamp = (
-                f"{metric.history_start} → {metric.history_end}"
-                if metric.history_start and metric.history_end
-                else "no historical timestamps"
-            )
+            history_stamp = _friendly_date_range(metric.history_start, metric.history_end)
             range_context = (
                 f"high {metric.period_high:,.2f} · low {metric.period_low:,.2f}"
                 if metric.period_high is not None and metric.period_low is not None
