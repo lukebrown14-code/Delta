@@ -10,6 +10,7 @@ import pytest
 from rigger import services
 from rigger.core.models import Instrument
 from rigger.tui.app import RiggerApp
+from rigger.tui.shell import ALL_ITEMS, OFF_BAR_ITEMS, ScreenFooter, StatusBar
 from tests.conftest import seed_bars
 
 AAPL = Instrument(id="US:AAPL", market="us", symbol="AAPL", currency="USD", sector="Tech")
@@ -61,10 +62,45 @@ def test_app_mounts_and_navigates(rig):
         app = RiggerApp(rig)
         async with app.run_test() as pilot:
             assert app.screen.name == "home"
+            for key, name, _label in ALL_ITEMS:
+                await pilot.press(key)
+                assert app.screen.name == name
+
+    asyncio.run(run())
+
+
+def test_status_bar_is_one_row(rig):
+    async def run():
+        app = RiggerApp(rig)
+        async with app.run_test(size=(120, 24)) as pilot:
+            # Home is a splash screen with no shell chrome; the bar lives on
+            # the panel screens.
             await pilot.press("2")
-            assert app.screen.name == "data"
-            await pilot.press("3")
+            bar = app.screen.query_one(StatusBar)
+            assert not app.screen.query("#nav-console")
+            # Off-bar screens stay reachable by key but earn no columns.
+            for _key, name, _label in OFF_BAR_ITEMS:
+                assert not app.screen.query(f"#nav-{name}")
+            # Panels, status cells and chrome all share the one row.
+            for sel in ("#nav-targets", "#nav-config", "#sl-dot", "#sl-keys"):
+                assert bar.query(sel), sel
+            assert app.screen.query_one(ScreenFooter).styles.height.value == 1
+            await pilot.press("c")
             assert app.screen.name == "config"
+
+    asyncio.run(run())
+
+
+def test_status_bar_sheds_cells_when_narrow(rig):
+    async def run():
+        app = RiggerApp(rig)
+        async with app.run_test(size=(70, 24)) as pilot:
+            await pilot.press("2")
+            bar = app.screen.query_one(StatusBar)
+            # Below MINIMAL_WIDTH the hint and provider give up their columns;
+            # freshness and spend are the cells worth keeping.
+            assert not bar.query_one("#sl-keys").display
+            assert bar.query_one("#sl-dot").display
 
     asyncio.run(run())
 
@@ -80,7 +116,7 @@ def test_targets_panel_adds_target(rig, monkeypatch, tmp_path):
     async def run():
         app = RiggerApp(rig)
         async with app.run_test() as pilot:
-            await pilot.press("w")
+            await pilot.press("1")
             assert app.screen.name == "targets"
             app.screen.query_one("#tg-name").value = "mining"
             app.screen.query_one("#tg-kind").value = "industry"
@@ -89,49 +125,6 @@ def test_targets_panel_adds_target(rig, monkeypatch, tmp_path):
             await pilot.click("#tg-add")
             assert "mining" in services.target_specs()
             assert app.screen.query_one("#target-table").row_count == 1
-
-    asyncio.run(run())
-
-
-def test_console_target_list(rig, monkeypatch, tmp_path):
-    monkeypatch.chdir(tmp_path)
-    (tmp_path / "config.toml").write_text(
-        '[targets.mining]\nkind = "industry"\nmarket = "asx"\ntickers = ["BHP"]\n',
-        encoding="utf-8",
-    )
-
-    async def run():
-        app = RiggerApp(rig)
-        async with app.run_test() as pilot:
-            await pilot.press("c")
-            assert app.screen.name == "console"
-            app.screen.query_one("#console-input").value = "target list"
-            await pilot.press("enter")
-            assert any("mining" in line.text for line in app.screen.query_one("#console-log").lines)
-
-    asyncio.run(run())
-
-
-def test_console_target_add(rig, monkeypatch, tmp_path):
-    monkeypatch.chdir(tmp_path)
-    (tmp_path / "config.toml").write_text("", encoding="utf-8")
-
-    async def run():
-        app = RiggerApp(rig)
-        async with app.run_test() as pilot:
-            await pilot.press("c")
-            app.screen.query_one(
-                "#console-input"
-            ).value = "target add gold --kind sector --market asx --tickers BHP,RIO --tags miners"
-            await pilot.press("enter")
-            target = services.target_specs()["gold"]
-            assert target.kind == "sector"
-            assert target.tickers == ("BHP", "RIO")
-            assert target.tags == frozenset({"miners"})
-            assert any(
-                "Added target gold" in line.text
-                for line in app.screen.query_one("#console-log").lines
-            )
 
     asyncio.run(run())
 
@@ -157,7 +150,7 @@ def test_targets_panel_remove_with_no_targets_notifies(rig, monkeypatch, tmp_pat
     async def run():
         app = RiggerApp(rig)
         async with app.run_test() as pilot:
-            await pilot.press("w")
+            await pilot.press("1")
             assert app.screen.query_one("#target-table").row_count == 0
             await pilot.click("#tg-remove")
             await pilot.pause()

@@ -14,7 +14,6 @@ from rigger.llm.catalog import ModelInfo, set_llm_route
 from rigger.runtime import Rigger
 from rigger.tui.screens.chat import Chat
 from rigger.tui.screens.config import Config
-from rigger.tui.screens.console import Console
 from rigger.tui.screens.data import Data
 from rigger.tui.screens.help import HelpScreen
 from rigger.tui.screens.home import Home
@@ -22,7 +21,7 @@ from rigger.tui.screens.model_picker import ModelPicker
 from rigger.tui.screens.reports import Reports
 from rigger.tui.screens.targets import Targets
 from rigger.tui.screens.theses import Theses
-from rigger.tui.shell import NAV_ITEMS
+from rigger.tui.shell import ALL_ITEMS
 from rigger.tui.theme import THEMES
 from rigger.tui.widgets import Dialog, KeyGrid, PaneRow
 
@@ -45,7 +44,7 @@ class RiggerCommands(Provider):
         matcher = self.matcher(query)
         app = self.app
         rig = getattr(self.screen, "rig", None)
-        for key, name, label in NAV_ITEMS:
+        for key, name, label in ALL_ITEMS:
             text = f"Go to {label}"
             score = matcher.match(text)
             if score > 0:
@@ -83,10 +82,10 @@ class GoPicker(Dialog):
     dialog_width = 48
 
     def compose_dialog(self) -> ComposeResult:
-        yield KeyGrid([(key, label) for key, _name, label in NAV_ITEMS])
+        yield KeyGrid([(key, label) for key, _name, label in ALL_ITEMS])
 
     def on_key(self, event: Any) -> None:
-        for key, name, _label in NAV_ITEMS:
+        for key, name, _label in ALL_ITEMS:
             if event.key == key:
                 event.stop()
                 self.dismiss(None)
@@ -98,14 +97,13 @@ class RiggerApp(App):
     TITLE = "Rigger"
     CSS_PATH = "rigger.tcss"
     BINDINGS = [
-        Binding("1", "switch_screen('home')", "Home", tooltip="Watch list dashboard"),
+        Binding("1", "switch_screen('targets')", "Watchlist", tooltip="Manage what is watched"),
         Binding("2", "switch_screen('data')", "Data", tooltip="Stored evidence and spend"),
-        Binding("3", "switch_screen('config')", "Config", tooltip="Providers, routing, plugins"),
-        Binding("4", "switch_screen('reports')", "Reports", tooltip="Generate and read reports"),
-        Binding("5", "switch_screen('theses')", "Theses", tooltip="Track claims and evidence"),
-        Binding("6", "switch_screen('chat')", "Ask", tooltip="Grounded Q&A over evidence"),
-        Binding("c", "switch_screen('console')", "Console", tooltip="Type target/config commands"),
-        Binding("w", "switch_screen('targets')", "Targets", tooltip="Manage watch targets"),
+        Binding("3", "switch_screen('reports')", "Reports", tooltip="Generate and read reports"),
+        Binding("4", "switch_screen('theses')", "Theses", tooltip="Track claims and evidence"),
+        Binding("5", "switch_screen('chat')", "Ask", tooltip="Grounded Q&A over evidence"),
+        Binding("c", "switch_screen('config')", "Config", tooltip="Providers, routing, plugins"),
+        Binding("h", "switch_screen('home')", "Home", tooltip="The landing dashboard"),
         Binding("m", "show_model_picker", "Model", tooltip="Pick the model for this screen"),
         Binding(
             "p", "show_provider_picker", "Provider", tooltip="Connect or switch the AI provider"
@@ -140,7 +138,6 @@ class RiggerApp(App):
             "reports": Reports(self.rig),
             "theses": Theses(self.rig),
             "chat": Chat(self.rig),
-            "console": Console(self.rig),
             "targets": Targets(self.rig),
         }
         for screen in self._screens.values():
