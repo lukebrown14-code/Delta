@@ -1,4 +1,4 @@
-"""Runtime wiring shared by the CLI, services, and TUI."""
+"""Runtime wiring shared by the services and TUI."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from rigger.core.plugin import (
     discover_plugins,
     discover_targets,
 )
-from rigger.llm.client import build_client
+from rigger.llm.client import LLMClient, build_client
 from rigger.plugins.targets.tickers import (
     CompanyTarget,
     IndustryTarget,
@@ -51,13 +51,39 @@ class Rigger:
 
         self.targets = self._build_targets()
 
-        self.llm = build_client(
+        self.llm = self._build_llm()
+
+    def _build_llm(self) -> LLMClient:
+        """Compose the provider credentials map and build the LLM client.
+
+        Fixed providers read their Settings fields; the custom provider reads
+        its ``[llm] api_key_env`` variable straight from .env so any variable
+        name works without a Settings field.
+        """
+        keys = {
+            "OPENROUTER_API_KEY": self.settings.openrouter_api_key,
+            "OPENAI_API_KEY": self.settings.openai_api_key,
+            "ANTHROPIC_API_KEY": self.settings.anthropic_api_key,
+        }
+        custom_env = self.cfg.llm_api_key_env or "CUSTOM_API_KEY"
+        keys[custom_env] = config_mod.read_env_value(custom_env)
+        return build_client(
             provider=self.cfg.llm_provider,
             engine=self.engine,
-            openrouter_api_key=self.settings.openrouter_api_key,
-            litellm_proxy_key=self.settings.litellm_proxy_key,
-            proxy_base_url=self.cfg.llm_proxy_base_url,
+            api_keys=keys,
+            max_output_tokens=self.cfg.llm_max_output_tokens,
+            custom_base_url=self.cfg.llm_base_url,
+            custom_api_key_env=self.cfg.llm_api_key_env,
         )
+
+    def reload_llm(self) -> None:
+        """Re-read .env + config.toml and rebuild the LLM client in place.
+
+        Provider, keys, routes, and token caps hot-swap without a restart;
+        the plugin and target registries are untouched.
+        """
+        self.settings, self.cfg = config_mod.load_config()
+        self.llm = self._build_llm()
 
     def universe(self) -> list[Instrument]:
         merged: dict[str, Instrument] = {}

@@ -2,51 +2,53 @@
 
 from __future__ import annotations
 
+from typing import Any
+
+from rich.text import Text
 from textual.app import ComposeResult
-from textual.containers import Horizontal, VerticalScroll
-from textual.screen import Screen
-from textual.widgets import Button, DataTable, Input, Static
+from textual.containers import Horizontal
+from textual.widgets import Button, Input
 
 from rigger import services
+from rigger.tui.shell import RiggerScreen
+from rigger.tui.widgets import Card, RiggerTable
 
 
-class Targets(Screen):
+class Targets(RiggerScreen):
     name = "targets"
 
-    def __init__(self, rig) -> None:
-        super().__init__()
-        self.rig = rig
+    def __init__(self, rig: Any) -> None:
+        super().__init__(rig)
 
-    def compose(self) -> ComposeResult:
-        yield VerticalScroll(
-            Static("[bold]Targets[/bold]", classes="title"),
-            DataTable(id="target-table"),
-            Horizontal(
+    def compose_content(self) -> ComposeResult:
+        yield RiggerTable(id="target-table")
+        with Card(title="Add a target", classes="tg-card"):
+            yield Horizontal(
                 Input(placeholder="name", id="tg-name"),
                 Input(placeholder="kind (company|sector|industry|market|theme)", id="tg-kind"),
                 Input(placeholder="market (us|asx)", id="tg-market"),
                 Input(placeholder="tickers (BHP,RIO)", id="tg-tickers"),
                 Input(placeholder="tags (a,b)", id="tg-tags"),
-                Button("Add", id="tg-add"),
-                Button("Remove", id="tg-remove"),
-            ),
-        )
+                Button("Add", id="tg-add", variant="primary"),
+                Button("Remove", id="tg-remove", variant="error"),
+                classes="tg-form",
+            )
 
     def on_mount(self) -> None:
-        self.query_one("#target-table", DataTable).add_columns(
+        self.query_one("#target-table", RiggerTable).add_columns(
             "Name", "Kind", "Market", "Tickers", "Tags"
         )
         self.refresh_view()
 
     def refresh_view(self) -> None:
-        table = self.query_one("#target-table", DataTable)
+        table = self.query_one("#target-table", RiggerTable)
         table.clear()
         for target in sorted(services.target_specs().values(), key=lambda t: t.id):
             table.add_row(
                 target.id,
-                target.kind,
+                Text(target.kind, style="cyan"),
                 ",".join(target.markets),
-                ",".join(target.tickers),
+                ",".join(target.tickers) or "—",
                 ",".join(sorted(target.tags)),
                 key=target.id,
             )
@@ -77,7 +79,7 @@ class Targets(Screen):
             self.refresh_view()
             self.notify(f"Added target {name}")
         elif event.button.id == "tg-remove":
-            table = self.query_one("#target-table", DataTable)
+            table = self.query_one("#target-table", RiggerTable)
             # An empty DataTable still reports cursor_row == 0, so row_count is
             # the only reliable "nothing to select" test.
             if table.row_count == 0:

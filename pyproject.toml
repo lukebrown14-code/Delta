@@ -5,7 +5,6 @@ description = "AI-driven investment research assistant"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "typer>=0.12",
     "rich>=13.7",
     "pydantic>=2.7",
     "pydantic-settings>=2.3",
@@ -18,13 +17,12 @@ dependencies = [
     "pandas>=2.2",
     "numpy>=1.26",
     "tomli-w>=1.0",
-    "litellm>=1.100.1",
     "feedparser>=6.0",
     "textual>=8.2.8",
 ]
 
 [project.scripts]
-rig = "rigger.cli:app"
+rig = "rigger.tui.app:run_tui"
 
 [project.entry-points."rigger.plugins"]
 us_market = "rigger.plugins.markets.us:USMarket"

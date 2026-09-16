@@ -1,9 +1,9 @@
 """Provider-agnostic LLM client: caching, cost + latency logging, retry policy.
 
 The actual model call is delegated to a :class:`rigger.llm.providers.Provider`
-(OpenRouter, LiteLLM SDK, or LiteLLM Proxy). This client owns the cache keyed on
-``sha256(model + prompt_version + prompt)`` and persists every call to the
-``llmcall`` table for cost tracking and backtest replay.
+(OpenRouter, or any OpenAI-compatible endpoint). This client owns the cache
+keyed on ``sha256(model + prompt_version + prompt)`` and persists every call to
+the ``llmcall`` table for cost tracking and backtest replay.
 """
 
 from __future__ import annotations
@@ -20,10 +20,11 @@ from sqlmodel import Session, select
 from rigger.core.db import LLMCallTable
 from rigger.core.ids import stable_id
 from rigger.llm.providers import (
-    LiteLLMProxyProvider,
-    LiteLLMSDKProvider,
+    PROVIDERS,
+    OpenAICompatProvider,
     OpenRouterProvider,
     Provider,
+    ProviderSpec,
 )
 
 SYSTEM_PROMPT = "You are an investment analyst."
@@ -171,21 +172,59 @@ def build_client(
     *,
     provider: str,
     engine: Engine,
-    openrouter_api_key: str = "",
-    litellm_proxy_key: str = "",
-    proxy_base_url: str = "http://localhost:4000",
+    api_keys: dict[str, str] | None = None,
     timeout: float = 60.0,
+    max_output_tokens: int | None = None,
+    custom_base_url: str = "",
+    custom_api_key_env: str = "",
 ) -> LLMClient:
-    """Construct an :class:`LLMClient` from a provider name + credentials."""
-    if provider == "openrouter":
-        p: Provider = OpenRouterProvider(openrouter_api_key, timeout=timeout)
-    elif provider == "litellm-proxy":
-        p = LiteLLMProxyProvider(
-            base_url=proxy_base_url,
-            api_key=litellm_proxy_key,
-            timeout=timeout,
+    """Construct an :class:`LLMClient` from a provider name + credentials.
+
+    ``api_keys`` maps env-var names (see ``PROVIDERS``) to values, keeping
+    secrets out of config.toml. ``custom_*`` carry the custom provider's
+    ``[llm] base_url`` / ``api_key_env`` overrides. Unknown provider names
+    fail loudly with the valid options.
+    """
+    spec = PROVIDERS.get(provider)
+    if spec is None:
+        raise KeyError(
+            f"unknown llm provider {provider!r}; valid: {', '.join(sorted(PROVIDERS))}"
+        )
+    keys = api_keys or {}
+    p: Provider
+    if spec.kind == "openrouter":
+        p = OpenRouterProvider(
+            keys.get(spec.env_var, ""), timeout=timeout, max_tokens=max_output_tokens
         )
     else:
-        p = LiteLLMSDKProvider(timeout=timeout)
-
+        p = _compat_provider(
+            spec,
+            keys,
+            timeout=timeout,
+            max_output_tokens=max_output_tokens,
+            custom_base_url=custom_base_url,
+            custom_api_key_env=custom_api_key_env,
+        )
     return LLMClient(provider=p, engine=engine)
+
+
+def _compat_provider(
+    spec: ProviderSpec,
+    keys: dict[str, str],
+    *,
+    timeout: float,
+    max_output_tokens: int | None,
+    custom_base_url: str,
+    custom_api_key_env: str,
+) -> OpenAICompatProvider:
+    """An openai/anthropic/custom connection; custom overrides its spec."""
+    is_custom = spec.name == "custom"
+    base_url = custom_base_url if is_custom else ""
+    env_var = custom_api_key_env if is_custom and custom_api_key_env else spec.env_var
+    return OpenAICompatProvider(
+        spec,
+        keys.get(env_var, ""),
+        timeout=timeout,
+        max_tokens=max_output_tokens,
+        base_url=base_url,
+    )

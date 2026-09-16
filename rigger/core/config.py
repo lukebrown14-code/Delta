@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import re
 import tomllib
 from pathlib import Path
 from typing import Any
@@ -21,7 +23,8 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=ENV_PATH, env_file_encoding="utf-8", extra="ignore")
 
     openrouter_api_key: str = ""
-    litellm_proxy_key: str = ""
+    openai_api_key: str = ""
+    anthropic_api_key: str = ""
 
 
 class AppConfig(BaseModel):
@@ -33,9 +36,11 @@ class AppConfig(BaseModel):
 
     universe: dict[str, list[str]] = Field(default_factory=dict)
     targets: dict[str, dict[str, Any]] = Field(default_factory=dict)
-    llm_provider: str = "litellm"
-    llm_proxy_base_url: str = "http://localhost:4000"
+    llm_provider: str = "openrouter"
     llm_routing: dict[str, str] = Field(default_factory=dict)
+    llm_max_output_tokens: int = 4096
+    llm_base_url: str = ""
+    llm_api_key_env: str = ""
     plugins: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
 
@@ -79,8 +84,10 @@ def build_config(raw: dict[str, Any] | None = None) -> AppConfig:
 
     llm = raw.get("llm", {})
     cfg.llm_provider = llm.get("provider", cfg.llm_provider)
-    cfg.llm_proxy_base_url = llm.get("proxy_base_url", cfg.llm_proxy_base_url)
     cfg.llm_routing = llm.get("routing", {})
+    cfg.llm_max_output_tokens = llm.get("max_output_tokens", cfg.llm_max_output_tokens)
+    cfg.llm_base_url = llm.get("base_url", cfg.llm_base_url)
+    cfg.llm_api_key_env = llm.get("api_key_env", cfg.llm_api_key_env)
 
     cfg.plugins = raw.get("plugins", {})
     return cfg
@@ -89,3 +96,42 @@ def build_config(raw: dict[str, Any] | None = None) -> AppConfig:
 def load_config(path: Path = CONFIG_PATH) -> tuple[Settings, AppConfig]:
     settings = Settings()
     return settings, build_config(load_toml(path))
+
+
+def read_env_value(name: str) -> str:
+    """Value of ``name`` from .env or the environment; '' when unset.
+
+    Unlike :class:`Settings` this reads arbitrary variable names, so the
+    ``custom`` provider's ``[llm] api_key_env`` works without a Settings
+    field. Never raises.
+    """
+    if not name:
+        return ""
+    try:
+        for line in ENV_PATH.read_text(encoding="utf-8").splitlines():
+            stripped = line.strip()
+            if stripped.startswith(f"{name}="):
+                return stripped.split("=", 1)[1].strip().strip('"').strip("'")
+    except Exception:
+        pass
+    return os.environ.get(name, "")
+
+
+def set_env_value(name: str, value: str) -> None:
+    """Write ``name=value`` to .env, replacing an existing line or appending.
+
+    Unrelated lines (and their order) are preserved; the file is created when
+    absent. Secrets stay in .env (gitignored), never in config.toml.
+    """
+    try:
+        lines = ENV_PATH.read_text(encoding="utf-8").splitlines()
+    except Exception:
+        lines = []
+    pattern = re.compile(rf"^\s*{re.escape(name)}\s*=")
+    for index, line in enumerate(lines):
+        if pattern.match(line):
+            lines[index] = f"{name}={value}"
+            break
+    else:
+        lines.append(f"{name}={value}")
+    ENV_PATH.write_text("\n".join(lines) + "\n", encoding="utf-8")

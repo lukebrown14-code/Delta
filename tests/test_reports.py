@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import pytest
 from sqlmodel import Session
 from textual.app import App
-from textual.widgets import DataTable
+from textual.widgets import DataTable, MarkdownViewer
 
 from rigger.core.db import EventTable, NewsItemTable
 from rigger.core.json import to_json
@@ -250,10 +250,10 @@ def test_reports_screen_shows_newest_report_across_instruments(tmp_engine, tmp_p
     async def run():
         app = ReportsApp()
         async with app.run_test() as pilot:
-            app.screen.show_latest("pair")
+            await app.screen.show_latest("pair")
             await pilot.pause()
-            log = app.screen.query_one("#report-view")
-            assert "newest" in "".join(str(line) for line in log.lines)
+            viewer = app.screen.query_one("#report-view", MarkdownViewer)
+            assert "newest" in viewer.document.source
 
     asyncio.run(run())
 

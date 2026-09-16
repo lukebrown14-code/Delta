@@ -95,7 +95,7 @@ async def build_report(rig: Any, target_id: str, *, since: str | None = None) ->
 
     items = gather(target_id, rig.engine, since=since)
     if not items:
-        raise ValueError(f"no evidence gathered for target {target_id!r}; run rig ingest first")
+        raise ValueError(f"no evidence gathered for target {target_id!r}; gather evidence first")
 
     target = services.target_specs().get(target_id) or WatchTarget(
         id=target_id, kind="company", name=target_id

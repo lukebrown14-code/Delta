@@ -25,7 +25,7 @@ class FakeRig:
         self.engine = engine
         self.llm = llm
         self._universe = universe
-        self.settings = SimpleNamespace(openrouter_api_key="", litellm_proxy_key="")
+        self.settings = SimpleNamespace(openrouter_api_key="", openai_api_key="", anthropic_api_key="")
         self.cfg = SimpleNamespace(
             base_currency="AUD",
             llm_provider="openrouter",

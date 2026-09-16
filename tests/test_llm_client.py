@@ -4,29 +4,56 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
+
 from rigger.llm.client import build_client
 from rigger.llm.providers import (
-    LiteLLMProxyProvider,
-    LiteLLMSDKProvider,
+    OpenAICompatProvider,
     OpenRouterProvider,
     ProviderResult,
 )
 
+KEYS = {
+    "OPENROUTER_API_KEY": "k",
+    "OPENAI_API_KEY": "k",
+    "ANTHROPIC_API_KEY": "k",
+    "CUSTOM_API_KEY": "k",
+}
+
 
 def test_build_client_selects_provider(tmp_engine):
-    c = build_client(engine=tmp_engine, provider="litellm")
-    assert isinstance(c.provider, LiteLLMSDKProvider)
-
-    c = build_client(engine=tmp_engine, provider="openrouter", openrouter_api_key="k")
+    c = build_client(engine=tmp_engine, provider="openrouter", api_keys=KEYS)
     assert isinstance(c.provider, OpenRouterProvider)
 
+
+def test_build_client_resolves_compat_providers(tmp_engine):
+    c = build_client(engine=tmp_engine, provider="openai", api_keys=KEYS)
+    assert isinstance(c.provider, OpenAICompatProvider)
+    assert c.provider.base_url == "https://api.openai.com/v1"
+    assert c.provider.api_key == "k"
+
+    c = build_client(engine=tmp_engine, provider="anthropic", api_keys=KEYS)
+    assert isinstance(c.provider, OpenAICompatProvider)
+    assert c.provider.base_url == "https://api.anthropic.com/v1"
+
+
+def test_build_client_custom_uses_configured_url_and_env(tmp_engine):
+    keys = {**KEYS, "MY_KEY": "mine"}
     c = build_client(
         engine=tmp_engine,
-        provider="litellm-proxy",
-        litellm_proxy_key="k",
-        proxy_base_url="http://localhost:4000",
+        provider="custom",
+        api_keys=keys,
+        custom_base_url="http://localhost:11434/v1",
+        custom_api_key_env="MY_KEY",
     )
-    assert isinstance(c.provider, LiteLLMProxyProvider)
+    assert isinstance(c.provider, OpenAICompatProvider)
+    assert c.provider.base_url == "http://localhost:11434/v1"
+    assert c.provider.api_key == "mine"
+
+
+def test_build_client_unknown_provider_fails_loudly(tmp_engine):
+    with pytest.raises(KeyError, match="valid:"):
+        build_client(engine=tmp_engine, provider="nope")
 
 
 class _FakeProvider:

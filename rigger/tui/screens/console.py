@@ -1,30 +1,41 @@
-"""In-app command console: run the CLI's target commands without leaving the TUI."""
+"""In-app command console: manage targets and inspect config without leaving the TUI."""
 
 from __future__ import annotations
 
 import shlex
 
 from textual.app import ComposeResult
-from textual.screen import Screen
+from textual.containers import Horizontal
 from textual.widgets import Input, RichLog, Static
 
 from rigger import services
+from rigger.tui.shell import RiggerScreen
+from rigger.tui.widgets import Card
 
 
-class Console(Screen):
+class Console(RiggerScreen):
     name = "console"
+    AUTO_FOCUS = "#console-input"
 
     def __init__(self, rig) -> None:
-        super().__init__()
-        self.rig = rig
+        super().__init__(rig)
 
-    def compose(self) -> ComposeResult:
-        yield Static("[bold]Command console[/bold] — type [bold]help[/bold] for commands")
-        yield Input(
-            placeholder="target add mining --kind industry --market asx --tickers BHP,RIO",
-            id="console-input",
-        )
-        yield RichLog(id="console-log")
+    def compose_content(self) -> ComposeResult:
+        with Card(title="Command console", classes="console-card"):
+            yield Static(
+                "type help for commands — target add | remove | list | show, config show",
+                markup=False,
+                classes="muted",
+            )
+            yield Horizontal(
+                Static("❯", markup=False, classes="console-prompt"),
+                Input(
+                    placeholder="target add mining --kind industry --market asx --tickers BHP,RIO",
+                    id="console-input",
+                ),
+                classes="console-row",
+            )
+            yield RichLog(id="console-log")
 
     def on_mount(self) -> None:
         self.query_one("#console-log", RichLog).write("Ready. Enter a command.")

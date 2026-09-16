@@ -102,6 +102,35 @@ def set_llm_route(task: str, model: str) -> None:
     Path("config.toml").write_text(tomli_w.dumps(raw), encoding="utf-8")
 
 
+def set_llm_provider(name: str) -> None:
+    """Write ``[llm] provider = name`` to config.toml in the cwd."""
+    import tomli_w
+
+    from rigger.core import config as config_mod
+
+    raw = config_mod.load_toml()
+    raw.setdefault("llm", {})["provider"] = name
+    Path("config.toml").write_text(tomli_w.dumps(raw), encoding="utf-8")
+
+
+def set_llm_custom(*, base_url: str, api_key_env: str = "CUSTOM_API_KEY") -> None:
+    """Point the ``custom`` provider at a self-hosted or other endpoint.
+
+    Writes ``[llm] provider/base_url/api_key_env``; the key itself goes to
+    .env under ``api_key_env`` via :func:`rigger.core.config.set_env_value`.
+    """
+    import tomli_w
+
+    from rigger.core import config as config_mod
+
+    raw = config_mod.load_toml()
+    llm = raw.setdefault("llm", {})
+    llm["provider"] = "custom"
+    llm["base_url"] = base_url
+    llm["api_key_env"] = api_key_env
+    Path("config.toml").write_text(tomli_w.dumps(raw), encoding="utf-8")
+
+
 def set_plugin_model(plugin_name: str, model: str | None) -> None:
     """Write ``[plugins.<plugin_name>].model``; ``None`` removes the override.
 

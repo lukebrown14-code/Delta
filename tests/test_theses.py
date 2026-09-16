@@ -270,7 +270,7 @@ def test_theses_screen_smoke(tmp_engine):
 
 
 def test_get_thesis_accepts_the_truncated_id_the_ui_shows(tmp_engine):
-    """The CLI and TUI print ids at 12 chars, so a prefix must resolve."""
+    """The TUI prints ids at 12 chars, so a prefix must resolve."""
     thesis = theses.create_thesis(tmp_engine, CLAIM, scope=SCOPE)
 
     assert theses.get_thesis(tmp_engine, thesis.id[:12]) == thesis

@@ -26,7 +26,7 @@ class ASXMarket(MarketPlugin):
         self._tickers: list[str] = []
 
     def configure(self, cfg: dict[str, Any]) -> None:
-        # The CLI passes config.universe["asx"] as {"tickers": [...]}, mirroring USMarket.
+        # The runtime passes config.universe["asx"] as {"tickers": [...]}, mirroring USMarket.
         self._tickers = [str(t).upper() for t in cfg.get("tickers", [])]
 
     def universe(self) -> list[Instrument]:

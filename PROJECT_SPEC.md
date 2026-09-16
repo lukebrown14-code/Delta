@@ -89,7 +89,7 @@ rigger/
 │   └── events.py        in-process async event bus
 ├── llm/
 │   ├── client.py        provider-agnostic client: cache, cost + latency logging
-│   ├── providers.py     OpenRouter, LiteLLM SDK, LiteLLM Proxy
+│   ├── providers.py     OpenRouter, OpenAI-compat (OpenAI, Anthropic, custom)
 │   ├── catalog.py       model catalog, config writeback (routes, per-plugin models)
 │   ├── router.py        task -> model id, with per-plugin override
 │   ├── structured.py    JSON-schema enforced calls returning validated models
@@ -109,7 +109,6 @@ rigger/
 ├── runtime.py           shared Rigger wiring
 ├── services.py          pipeline operations and read-side queries
 ├── tui/                 Textual app, screens, widgets, styles
-└── cli.py               the `rig` command
 tests/                   pytest, fully offline (respx + FakeLLM)
 ```
 
@@ -264,8 +263,9 @@ inferred from shape when unstated. Do not migrate users' TOML.
 ## 6. LLM layer
 
 One provider-agnostic `LLMClient`. The call is delegated to a `Provider`:
-`openrouter` (one API, many models), `litellm` (SDK, calls vendors directly), or
-`litellm-proxy`. The client owns caching keyed on
+`openrouter` (one API, many models, credit auto-fit), or any OpenAI-compatible
+endpoint (`openai`, `anthropic`, `custom` for Ollama/Groq/Together). The client
+owns caching keyed on
 `sha256(model + prompt_version + prompt)`, persists every call to `llmcall`, and
 applies the retry policy.
 
@@ -291,11 +291,9 @@ validation failure.
 ## 7. Surfaces
 
 **TUI** (`uv run rig`) — `1`–`6` Home, Data, Config, Reports, Theses, Chat;
-`w` Targets; `c` Console; `m` model picker; `?` help; `q` quit.
-
-**CLI** (`rig`) — `target add/remove/list/show`, `ingest`, `extract`,
-`report <target>`, `thesis create/list/show/propose`, `llm costs`, `llm models`,
-`plugins list/enable/disable`, `config show/validate`, `tui`.
+`w` Targets; `c` Console; `m` model picker; `?` help; `q` quit. The console
+takes `target add/remove/list/show` and `config show`; the command palette
+has a **Gather evidence** action (ingest + extract).
 
 Reports are written to `reports/<target_id>/<YYYY-MM-DD>.md`.
 
@@ -305,7 +303,7 @@ Reports are written to `reports/<target_id>/<YYYY-MM-DD>.md`.
 
 - Python 3.12+, type hints everywhere. `ruff` (line length 100) and
   `mypy --strict` on `rigger/core` and `rigger/llm`.
-- Async for I/O (fetching, LLM calls); sync for CLI glue.
+- Async for I/O (fetching, LLM calls); sync for glue.
 - **No network in tests.** `respx` for HTTP, `FakeLLM` for the model provider.
 - Conventional commits (`feat:`, `fix:`, `docs:`, `chore:`).
 - Never commit `.env`, `data/*.db` or `reports/`.
