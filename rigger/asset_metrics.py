@@ -15,6 +15,7 @@ class AssetMetrics:
     instrument_id: str
     profile: str
     values: dict[str, str] = field(default_factory=dict)
+    groups: dict[str, dict[str, str]] = field(default_factory=dict)
     series: list[float] = field(default_factory=list)
     change_label: str = ""
     fetched_at: datetime | None = None
@@ -54,7 +55,14 @@ def fetch_asset_metrics(
                     result.change_label = f"{(closes[-1] - closes[0]) * 100:+.1f} bps"
                 else:
                     result.change_label = f"{(closes[-1] / closes[0] - 1) * 100:+.1f}%"
-        result.values.update(_values(result.profile, info))
+        result.groups = _group_values(result.profile, info)
+        current_label = "Current yield" if result.profile == "bond" else "Current price"
+        if current_label in result.values:
+            group = "Yield & Rate" if result.profile == "bond" else "Market Snapshot"
+            result.groups.setdefault(group, {})[current_label] = result.values[current_label]
+        result.values.update(
+            {label: value for group in result.groups.values() for label, value in group.items()}
+        )
         result.fetched_at = datetime.now(UTC)
     except Exception as exc:  # provider failures are displayed in the inspector
         result.error = str(exc)
@@ -74,7 +82,16 @@ def _fmt(value: Any, suffix: str = "") -> str | None:
 
 
 def _values(profile: str, info: dict[str, Any]) -> dict[str, str]:
+    return {
+        label: value
+        for group in _group_values(profile, info).values()
+        for label, value in group.items()
+    }
+
+
+def _group_values(profile: str, info: dict[str, Any]) -> dict[str, dict[str, str]]:
     keys: dict[str, tuple[str, str]]
+    groups: tuple[tuple[str, tuple[str, ...]], ...]
     if profile == "equity":
         keys = {
             "Revenue growth": ("revenueGrowth", "%"),
@@ -92,6 +109,15 @@ def _values(profile: str, info: dict[str, Any]) -> dict[str, str]:
             "Dividend yield": ("dividendYield", "%"),
             "Payout ratio": ("payoutRatio", "%"),
         }
+        groups = (
+            (
+                "Profitability",
+                ("Revenue growth", "EPS growth", "Operating margin", "Net margin", "ROIC", "ROE"),
+            ),
+            ("Valuation", ("P/E", "Forward P/E", "EV / EBITDA")),
+            ("Balance Sheet", ("Free cash flow", "Debt / EBITDA", "Interest coverage")),
+            ("Shareholder Returns", ("Dividend yield", "Payout ratio")),
+        )
     elif profile == "etf":
         keys = {
             "Expense ratio": ("annualReportExpenseRatio", "%"),
@@ -99,12 +125,22 @@ def _values(profile: str, info: dict[str, Any]) -> dict[str, str]:
             "Distribution yield": ("yield", "%"),
             "Holdings": ("holdingsCount", ""),
         }
+        groups = (
+            ("Fund Costs", ("Expense ratio",)),
+            ("Fund Scale", ("Assets under management",)),
+            ("Fund Structure", ("Holdings",)),
+            ("Income", ("Distribution yield",)),
+        )
     elif profile == "commodity":
         keys = {
             "Volume": ("volume", ""),
             "Open interest": ("openInterest", ""),
             "Contract": ("contractSize", ""),
         }
+        groups = (
+            ("Market Activity", ("Volume", "Open interest")),
+            ("Contract Details", ("Contract",)),
+        )
     elif profile == "bond":
         keys = {
             "Coupon": ("couponRate", "%"),
@@ -112,24 +148,44 @@ def _values(profile: str, info: dict[str, Any]) -> dict[str, str]:
             "Duration": ("duration", ""),
             "Credit rating": ("creditRating", ""),
         }
+        groups = (
+            ("Yield & Rate", ()),
+            ("Risk", ("Duration", "Credit rating")),
+            ("Bond Terms", ("Coupon", "Maturity")),
+        )
     elif profile == "fx":
         keys = {"Bid": ("bid", ""), "Ask": ("ask", ""), "Day range": ("dayRange", "")}
+        groups = (("Live Quote", ("Bid", "Ask")), ("Session Range", ("Day range",)))
     elif profile == "crypto":
         keys = {
             "Market cap": ("marketCap", ""),
             "Circulating supply": ("circulatingSupply", ""),
             "Volume": ("volume24Hr", ""),
         }
+        groups = (
+            ("Market Size", ("Market cap",)),
+            ("Activity", ("Volume",)),
+            ("Supply", ("Circulating supply",)),
+        )
     elif profile == "cash":
         keys = {"Yield": ("yield", "%")}
+        groups = (("Income", ("Yield",)), ("Liquidity", ()))
     else:
         keys = {}
+        groups = (("Market Snapshot", ()), ("Available Metrics", ()))
     values: dict[str, str] = {}
     for label, (key, suffix) in keys.items():
         formatted = _fmt(info.get(key), suffix)
         if formatted is not None:
             values[label] = formatted
-    return values
+    grouped: dict[str, dict[str, str]] = {}
+    for title, labels in groups:
+        selected = {label: values[label] for label in labels if label in values}
+        if selected:
+            grouped[title] = selected
+    if not grouped and values:
+        grouped["Available Metrics"] = values
+    return grouped
 
 
 def chart_window(series: list[float], days: int = 30) -> list[float]:

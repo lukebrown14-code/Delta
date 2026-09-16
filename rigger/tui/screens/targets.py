@@ -4,14 +4,13 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import suppress
-from datetime import UTC, datetime
 from typing import Any
 
 from rich.text import Text
 from textual import work
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
-from textual.widgets import Button, DataTable, Input, Label, OptionList, Sparkline, Static
+from textual.widgets import Button, Input, Label, OptionList, Sparkline, Static
 from textual.widgets.option_list import Option
 
 from rigger import services
@@ -20,7 +19,17 @@ from rigger.core.models import Instrument
 from rigger.plugins.data.yfinance import DEFAULT_SUFFIXES
 from rigger.quotes import SearchResult, YahooQuotes, canonical_symbol, yahoo_search
 from rigger.tui.shell import RiggerScreen
-from rigger.tui.widgets import Dialog, Pane, PaneRow, RiggerTable
+from rigger.tui.widgets import Dialog, Pane, PaneRow
+
+
+class WatchlistList(OptionList):
+    """Keyboard list with the old table row-count compatibility surface."""
+
+    @property
+    def row_count(self) -> int:
+        return sum(
+            1 for option in self.options if option.id and str(option.id).startswith("target:")
+        )
 
 
 class TargetAddModal(Dialog):
@@ -266,7 +275,9 @@ class Targets(RiggerScreen):
     ]
     CSS = """
     #target-list-pane { height: 1fr; }
-    #target-table { height: 1fr; margin: 0; }
+    #target-table { height: 1fr; margin: 0; border: none; }
+    #target-table > .option-list--option { padding: 0 1; }
+    #target-table .tg-group { color: $primary; text-style: bold; }
     #tg-filter { height: 3; }
     #tg-form { height: auto; max-height: 18; overflow-y: auto; }
     .tg-field { height: 3; }
@@ -282,11 +293,22 @@ class Targets(RiggerScreen):
     #tg-action-spacer { width: 1fr; height: 1; background: $panel; }
     #tg-empty, #tg-details, #tg-state { height: auto; color: $text-muted; }
     #tg-details { padding: 0 1; }
-    #target-inspector-pane { width: 2fr; }
-    #target-inspector-title, #target-inspector-status, #target-metrics { height: auto; }
+    #target-inspector-pane { width: 2fr; min-width: 0; padding: 0 1; }
+    #target-inspector-content { width: 1fr; height: 1fr; padding: 0 1; overflow-y: auto; }
+    #target-inspector-empty { width: 1fr; height: 1; content-align-vertical: middle; }
+    #target-inspector-title { width: 1fr; height: 2; content-align-vertical: middle; }
+    #target-inspector-hero { width: 1fr; height: 3; margin-bottom: 1; }
+    #target-chart-header { width: 1fr; height: 1; }
+    #target-chart-label { width: 1fr; color: $text-muted; text-style: bold; }
+    #target-chart-change { width: auto; color: $success; text-style: bold; }
+    #target-chart { width: 1fr; height: 7; margin-bottom: 1; padding: 0 1; background: $panel; }
+    #target-metric-grid { width: 1fr; height: auto; layout: grid; grid-size: 2; grid-columns: 1fr 1fr; grid-gutter: 1 1; }
+    .pane-row.-narrow #target-metric-grid { grid-size: 1; grid-columns: 1fr; }
+    .metric-card { width: 1fr; height: auto; min-height: 5; padding: 1; border: round $panel; background: $surface; }
+    .metric-card-title { width: 1fr; height: 1; color: $primary; text-style: bold; }
+    .metric-card-body { width: 1fr; height: auto; color: $foreground; }
     #target-inspector-title { color: $primary; text-style: bold; }
     #target-inspector-status, #target-inspector-empty { color: $text-muted; }
-    #target-chart { height: 5; width: 1fr; }
     """
 
     def __init__(self, rig: Any) -> None:
@@ -296,10 +318,11 @@ class Targets(RiggerScreen):
         self.feed_task: asyncio.Task | None = None
         self.active = False
         self.signature: tuple = ()
-        self.narrow = False
         self.specs = {}
         self._metrics: dict[str, AssetMetrics] = {}
         self._selected_instrument: Instrument | None = None
+        self._collapsed_groups: set[str] = set()
+        self._option_indices: dict[str, int] = {}
 
     def compose_content(self) -> ComposeResult:
         with PaneRow(id="target-split"):
@@ -308,7 +331,7 @@ class Targets(RiggerScreen):
                 yield Input(
                     placeholder="filter names, tickers, markets, kinds or tags", id="tg-filter"
                 )
-                yield RiggerTable(id="target-table")
+                yield WatchlistList(id="target-table")
                 yield Static("No targets yet — a add your first target.", id="tg-empty")
                 yield Static("", id="tg-details", markup=False)
                 yield Static("", id="tg-form")
@@ -320,60 +343,63 @@ class Targets(RiggerScreen):
                     yield Button("esc close", id="tg-close")
                     yield Static("", id="tg-action-spacer")
             with Pane(title="metrics", icon="", id="target-inspector-pane"):
-                yield Static("Select a Watchlist item", id="target-inspector-empty", markup=False)
-                yield Static("", id="target-inspector-title", markup=False)
-                yield Static("", id="target-inspector-status", markup=False)
-                yield Sparkline([], id="target-chart")
-                yield Static("", id="target-metrics", markup=False)
+                with Vertical(id="target-inspector-content"):
+                    yield Static(
+                        "Select a Watchlist item",
+                        id="target-inspector-empty",
+                        classes="muted",
+                        markup=False,
+                    )
+                    yield Static("", id="target-inspector-title", markup=False)
+                    yield Static("", id="target-inspector-hero", markup=False)
+                    yield Static("", id="target-inspector-status", classes="muted", markup=False)
+                    with Horizontal(id="target-chart-header"):
+                        yield Static(
+                            "PRICE PERFORMANCE · 1 MONTH", id="target-chart-label", markup=False
+                        )
+                        yield Static("", id="target-chart-change", markup=False)
+                    yield Sparkline([], id="target-chart")
+                    with Vertical(id="target-metric-grid"):
+                        for index in range(4):
+                            with Vertical(classes="metric-card", id=f"metric-card-{index}"):
+                                yield Static(
+                                    "",
+                                    classes="metric-card-title",
+                                    id=f"metric-card-title-{index}",
+                                    markup=False,
+                                )
+                                yield Static(
+                                    "",
+                                    classes="metric-card-body",
+                                    id=f"metric-card-body-{index}",
+                                    markup=False,
+                                )
 
     def on_mount(self) -> None:
         self.query_one("#tg-filter").display = False
         self.query_one("#tg-form").display = False
-        self.query_one("#target-table", RiggerTable).zebra_stripes = False
-        self._columns()
         self.refresh_view()
         self.query_one("#target-table").focus()
         self.set_interval(0.5, self._paint_quotes)
 
-    def _columns(self) -> None:
-        table = self.query_one("#target-table", RiggerTable)
-        table.clear(columns=True)
-        for key, label, width in [
-            ("name", "NAME / TICKER", 25 if not self.narrow else 20),
-            ("market", "MARKET", 7),
-            ("price", "PRICE", 12),
-            ("currency", "CCY", 4),
-            ("change", "DAY %", 11),
-        ]:
-            table.add_column(label, key=key, width=width)
-        if not self.narrow:
-            table.add_column("AGE", key="age", width=8)
-
-    def on_resize(self, event: Any) -> None:
-        narrow = event.size.width < 100
-        if narrow != self.narrow and self.is_mounted:
-            self.narrow = narrow
-            self._columns()
-            self.refresh_view()
-
     def _selected(self) -> str | None:
-        table = self.query_one("#target-table", RiggerTable)
-        if not table.row_count:
-            return None
-        return str(table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value)
+        option = self.query_one("#target-table", WatchlistList).highlighted_option
+        key = str(option.id) if option and option.id else ""
+        return key if key in self.rows else None
 
     def refresh_view(self) -> None:
-        table = self.query_one("#target-table", RiggerTable)
-        selected, cursor = self._selected(), table.cursor_row
-        scroll = table.scroll_offset
-        table.clear()
+        table = self.query_one("#target-table", WatchlistList)
+        selected = self._selected()
+        table.clear_options()
         self.rows.clear()
+        self._option_indices.clear()
         self.specs = services.target_specs()
         specs = sorted(self.specs.values(), key=lambda t: t.id)
         known = {inst.id: inst for inst in self.rig.universe()}
         self.query_one("#target-list-pane", Pane).set_badge(str(len(specs)))
         query = self.query_one("#tg-filter", Input).value.casefold().strip()
         instruments: dict[str, Instrument] = {}
+        grouped: dict[str, list[Any]] = {}
         for target in specs:
             members = []
             for market in target.markets:
@@ -403,27 +429,44 @@ class Targets(RiggerScreen):
                 ).casefold()
             ):
                 continue
-            key = f"target:{target.id}"
-            inst = members[0] if len(members) == 1 else None
-            self.rows[key] = (target.id, inst)
-            values = [
-                target.id,
-                ",".join(target.markets),
-                f"{len(members)} tickers" if len(members) > 1 else "—",
-                "",
-                "—",
-            ]
-            table.add_row(*(values + ([] if self.narrow else ["—"])), key=key)
+            grouped.setdefault(str(getattr(target, "asset_class", "equity")), []).append(
+                (target, members)
+            )
+        order = ("equity", "etf", "bond", "commodity", "fx", "crypto", "cash", "other")
+        for asset_class in order + tuple(sorted(set(grouped) - set(order))):
+            entries = grouped.get(asset_class)
+            if not entries:
+                continue
+            group_key = f"group:{asset_class}"
+            expanded = group_key not in self._collapsed_groups
+            header = (
+                f"▾ {asset_class.upper()}  ({len(entries)})"
+                if expanded
+                else f"▸ {asset_class.upper()}  ({len(entries)})"
+            )
+            table.add_option(Option(Text(header, style="bold"), id=group_key))
+            if not expanded:
+                continue
+            for target, members in entries:
+                key = f"target:{target.id}"
+                inst = members[0] if len(members) == 1 else None
+                self.rows[key] = (target.id, inst)
+                tickers = ",".join(target.tickers) or "market"
+                market = ",".join(target.markets)
+                tags = ", ".join(sorted(target.tags)) or "—"
+                table.add_option(
+                    Option(f"  {target.id}  ·  {tickers}  ·  {market}  ·  {tags}", id=key)
+                )
         empty = self.query_one("#tg-empty", Static)
         empty.display = not table.row_count
         empty.update(
             "No matching targets." if specs else "No targets yet — a add your first target."
         )
-        keys = list(self.rows)
-        table.move_cursor(
-            row=keys.index(selected) if selected in keys else min(cursor, max(0, len(keys) - 1))
-        )
-        table.scroll_to(scroll.x, scroll.y, animate=False, force=True)
+        if selected:
+            with suppress(Exception):
+                table.highlighted = table.get_option_index(selected)
+        elif self.rows:
+            table.highlighted = table.get_option_index(next(iter(self.rows)))
         self._instruments = list(instruments.values())
         if self.active:
             self._sync_feed()
@@ -476,24 +519,89 @@ class Targets(RiggerScreen):
         empty = self.query_one("#target-inspector-empty", Static)
         title = self.query_one("#target-inspector-title", Static)
         status = self.query_one("#target-inspector-status", Static)
+        hero = self.query_one("#target-inspector-hero", Static)
+        chart_change = self.query_one("#target-chart-change", Static)
+        cards = [
+            (
+                self.query_one(f"#metric-card-title-{i}", Static),
+                self.query_one(f"#metric-card-body-{i}", Static),
+                self.query_one(f"#metric-card-{i}", Vertical),
+            )
+            for i in range(4)
+        ]
+
+        def clear_cards() -> None:
+            for card_title, card_body, card in cards:
+                card.display = False
+                card_title.update("")
+                card_body.update("")
+
         if not instrument:
             empty.update("Select a Watchlist item")
             title.update("")
             status.update("")
+            hero.update("")
+            chart_change.update("")
             self.query_one("#target-chart", Sparkline).data = []
-            self.query_one("#target-metrics", Static).update("")
+            clear_cards()
             return
         empty.update("")
         title.update(f"{instrument.symbol} · {instrument.id} · {instrument.asset_class}")
         if metric is None:
             status.update("Loading live metrics…")
+            hero.update("")
+            chart_change.update("—")
+            self.query_one("#target-chart", Sparkline).data = []
+            clear_cards()
             return
-        status.update(metric.error or f"1 month: {metric.change_label or 'insufficient history'}")
-        self.query_one("#target-chart", Sparkline).data = chart_window(metric.series)
-        self.query_one("#target-metrics", Static).update(
-            "\n".join(f"{label:<24} {value}" for label, value in metric.values.items())
-            or "No additional metrics available"
+        current_label = "Current yield" if metric.profile == "bond" else "Current price"
+        current = metric.values.get(current_label, "—")
+        quote = self.feed.quotes.get(instrument.id) if self.feed else None
+        daily = (
+            "—" if quote is None or quote.change_pct is None else f"{quote.change_pct:+.1f}% today"
         )
+        hero_text = Text()
+        hero_text.append(current, style="bold bright_white")
+        hero_text.append("   ")
+        hero_text.append(
+            daily,
+            style="green"
+            if quote and quote.change_pct and quote.change_pct > 0
+            else "red"
+            if quote and quote.change_pct and quote.change_pct < 0
+            else "dim",
+        )
+        hero_text.append("   ")
+        hero_text.append(
+            f"{metric.change_label or '—'} 1 month",
+            style="green"
+            if metric.change_label.startswith("+")
+            else "red"
+            if metric.change_label.startswith("-")
+            else "dim",
+        )
+        hero.update(hero_text)
+        status.update(
+            metric.error
+            or (
+                f"Updated {metric.fetched_at:%H:%M:%S} UTC" if metric.fetched_at else "Live metrics"
+            )
+        )
+        chart_change.update(metric.change_label or "—")
+        self.query_one("#target-chart", Sparkline).data = chart_window(metric.series)
+        groups = metric.groups or ({"Available Metrics": metric.values} if metric.values else {})
+        clear_cards()
+        for index, (card_title, card_body, card) in enumerate(cards):
+            if index >= len(groups):
+                continue
+            card.display = True
+            card_title.display = True
+            card_body.display = True
+            group, values = list(groups.items())[index]
+            card_title.update(group.upper())
+            card_body.update(
+                "\n".join(f"{label:<22} {value:>12}" for label, value in values.items())
+            )
 
     def _sync_feed(self) -> None:
         suffixes = DEFAULT_SUFFIXES | getattr(self.rig.cfg, "plugins", {}).get("yfinance", {}).get(
@@ -531,33 +639,30 @@ class Targets(RiggerScreen):
     def _paint_quotes(self) -> None:
         if not self.is_mounted:
             return
-        table = self.query_one("#target-table", RiggerTable)
+        table = self.query_one("#target-table", WatchlistList)
         for key, (_, ident) in self.rows.items():
-            if ident is None:
+            target = self.specs.get(self.rows[key][0])
+            if target is None:
                 continue
-            quote = self.feed.quotes.get(ident) if self.feed else None
+            quote = self.feed.quotes.get(ident) if self.feed and ident else None
             if quote is None:
-                continue
-            pct = quote.change_pct
-            color = (
-                self.app.current_theme.success
-                if pct and pct > 0
-                else self.app.current_theme.error
-                if pct and pct < 0
-                else self.app.current_theme.foreground
-            )
-            label = (
-                "—" if pct is None else f"{'▲' if pct > 0 else '▼' if pct < 0 else '─'} {pct:+.2f}%"
-            )
-            table.update_cell(key, "price", Text(f"{quote.price:,.2f}", justify="right"))
-            table.update_cell(key, "currency", quote.currency)
-            table.update_cell(key, "change", Text(label, style=color, justify="right"))
-            if not self.narrow:
-                age = max(0, int((datetime.now(UTC) - quote.timestamp).total_seconds()))
-                label = (
-                    f"{age}s" if age < 60 else f"{age // 60}m" if age < 3600 else f"{age // 3600}h"
+                prompt = f"  {target.id}  ·  {','.join(target.tickers) or 'market'}  ·  {','.join(target.markets)}  ·  {', '.join(sorted(target.tags)) or '—'}"
+            else:
+                pct = quote.change_pct
+                trend = "─" if pct is None or pct == 0 else "▲" if pct > 0 else "▼"
+                color = (
+                    self.app.current_theme.success
+                    if pct and pct > 0
+                    else self.app.current_theme.error
+                    if pct and pct < 0
+                    else self.app.current_theme.foreground
                 )
-                table.update_cell(key, "age", label)
+                prompt = Text(
+                    f"  {target.id}  ·  {','.join(target.tickers) or 'market'}  ·  {','.join(target.markets)}  ·  {', '.join(sorted(target.tags)) or '—'}  {quote.price:,.2f} {trend}",
+                    style=color,
+                )
+            with suppress(Exception):
+                table.replace_option_prompt(key, prompt)
         self._details()
 
     def _details(self) -> None:
@@ -578,12 +683,25 @@ class Targets(RiggerScreen):
             + (f" · quote: {quote.timestamp:%Y-%m-%d %H:%M:%S} UTC" if quote else "")
         )
 
-    def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
+    def on_option_list_option_highlighted(self, event: Any) -> None:
         self._details()
         self._select_instrument()
 
-    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+    def on_option_list_option_selected(self, event: Any) -> None:
         self._select_instrument(force=True)
+
+    def on_key(self, event: Any) -> None:
+        if self.focused is not self.query_one("#target-table", WatchlistList):
+            return
+        option = self.query_one("#target-table", WatchlistList).highlighted_option
+        key = str(option.id) if option and option.id else ""
+        if key.startswith("group:") and event.key in {"left", "right", "enter"}:
+            event.stop()
+            if key in self._collapsed_groups:
+                self._collapsed_groups.remove(key)
+            else:
+                self._collapsed_groups.add(key)
+            self.refresh_view()
 
     def action_inspect(self) -> None:
         """Refresh live metrics for the highlighted instrument."""
@@ -618,7 +736,9 @@ class Targets(RiggerScreen):
         self.refresh_view()
         key = f"target:{name}"
         if key in self.rows:
-            self.query_one("#target-table", RiggerTable).move_cursor(row=list(self.rows).index(key))
+            with suppress(Exception):
+                table = self.query_one("#target-table", WatchlistList)
+                table.highlighted = table.get_option_index(key)
         self.notify(f"Added {name} to the watchlist")
 
     def action_remove(self) -> None:
