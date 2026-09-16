@@ -27,6 +27,14 @@ RIGGER_DARK = Theme(
     surface="#12161f",
     panel="#1a1f2b",
     dark=True,
+    variables={
+        # One new token per evidence kind; Ayu cyan itself is untouched.
+        "news": "#5ccfe6",
+        "filing": "#ffd580",
+        "price": "#7fd962",
+        "event": "#c39ac9",
+        "fundamental": "#cbccc6",
+    },
 )
 
 RIGGER_LIGHT = Theme(
@@ -42,6 +50,13 @@ RIGGER_LIGHT = Theme(
     surface="#e9e9e1",
     panel="#dddbcf",
     dark=False,
+    variables={
+        "news": "#0f7d93",
+        "filing": "#8f6a00",
+        "price": "#3f8f2b",
+        "event": "#7a4a86",
+        "fundamental": "#5a5c55",
+    },
 )
 
 THEMES = (RIGGER_DARK, RIGGER_LIGHT)

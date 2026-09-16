@@ -1,9 +1,8 @@
-"""Design-system widgets: panes, status dots, pills, key hints, dialogs.
+"""Design-system widgets: bordered panes, chips, key hints, dialogs.
 
-The layout grammar is borderless: panes carry an inline title row (a
-"winbar") instead of a border, and siblings are separated by a one-column
-gutter and a faint rule. Colour always comes from theme-token CSS, never
-hex literals.
+One visual language across every screen: square btop boxes with the title in
+the top border (hotkey accented) and hints in the bottom border, plus
+``[key] label`` action chips instead of stock Textual buttons.
 
 Layout lives in ``DEFAULT_CSS`` on these classes rather than in
 ``rigger.tcss`` so the screens that double as standalone panels (reports,
@@ -13,16 +12,49 @@ theses, chat) keep their shape when mounted under any App.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any
+from typing import Any, TypeVar
 
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
+from textual.message import Message
 from textual.screen import ModalScreen
 from textual.widgets import DataTable, Static
 
 #: Keys whose Textual name is not what a user would recognise on a keycap.
 KEY_DISPLAY = {"question_mark": "?", "escape": "esc", "slash": "/"}
+
+
+def key_chip(key: str) -> str:
+    """Render a key in the app-wide ``[ a ]`` notation."""
+    return f"[ {KEY_DISPLAY.get(key, key)} ]"
+
+
+#: One width for every dialog frame. Previously six (64/64/64/72/80/84).
+MODAL_WIDTH = 64
+
+#: The single responsive breakpoint for pane rows, in columns. Replaces the
+#: four scattered values (72 / 81 / 100 / 109) with one rule: below this row
+#: width the panes stack vertically.
+BREAKPOINT_NARROW = 100
+
+#: Evidence-kind colours. Names match ``evidence.py``'s kind axis; values are
+#: literal hexes only as a Python source of truth — styling still goes
+#: through theme tokens (``$news`` etc.), never hex in CSS.
+EVIDENCE_KIND_COLORS: dict[str, str] = {
+    "news": "#5ccfe6",
+    "filing": "#ffd580",
+    "bar": "#7fd962",
+    "fundamental": "#cbccc6",
+    "event": "#c39ac9",
+}
+
+#: Internal ``raw`` keys kept out of the evidence preview body.
+PREVIEW_META_KEYS = ("prompt_version", "extracted_by")
+
+#: Hash-looking values longer than this are truncated in the preview, with the
+#: head kept so the reader still gets a fingerprint to grep for.
+PREVIEW_HASH_WIDTH = 12
 
 DOT = "●"
 
@@ -55,7 +87,11 @@ def sentiment_variant(score: float) -> str:
 
 
 class PaneBar(Horizontal):
-    """A pane's inline title row: icon, title, right-aligned badge."""
+    """Legacy inline title row, kept for backwards compatibility.
+
+    New code uses ``Pane``'s native ``border_title`` / ``border_subtitle``
+    instead; this remains so older standalone mounts do not break.
+    """
 
     DEFAULT_CSS = """
     PaneBar {
@@ -88,14 +124,23 @@ class PaneBar(Horizontal):
         self._badge.update(text)
 
 
-class Pane(Vertical):
-    """Borderless panel with a winbar title. The workhorse container."""
+class Pane(Vertical, can_focus=True):
+    """Bordered btop box: title in the top border, hints in the bottom.
+
+    The hotkey is accented via console markup in ``border_title`` — no custom
+    rendering needed. Focus switches the frame to ``heavy $primary``. The
+    badge (counts, state) renders right-aligned in the bottom border.
+    """
 
     DEFAULT_CSS = """
     Pane {
         height: 1fr;
         background: transparent;
-        padding: 0;
+        border: solid $panel;
+        padding: 0 1;
+    }
+    Pane:focus-within {
+        border: heavy $primary;
     }
     Pane.-auto {
         height: auto;
@@ -104,24 +149,56 @@ class Pane(Vertical):
 
     def __init__(
         self,
-        *children,
+        *children: Any,
         title: str = "",
-        icon: str = "",
+        key: str = "",
+        hints: str = "",
         badge: str = "",
+        icon: str = "",
         id: str | None = None,
         classes: str = "",
     ) -> None:
-        self._bar = PaneBar(title, icon, badge)
-        # The bar is passed as the first child rather than composed, so the
-        # ``with Pane(...)`` context-manager form appends content after it.
-        super().__init__(self._bar, *children, id=id, classes=classes)
+        self._title_text = f"{icon} {title}".strip() if icon else title
+        self._key = key
+        self._hints = hints
+        self._badge_text = badge
+        # Passed as first children (not composed) so the ``with Pane(...)``
+        # context-manager form appends content after any explicit children.
+        super().__init__(*children, id=id, classes=classes)
+        self._refresh_borders()
+
+    def _refresh_borders(self) -> None:
+        if self._key and self._title_text:
+            title = self._title_text.removeprefix(f"{self._key} ").removeprefix(self._key)
+            title = title.strip()
+            self.border_title = f"[$accent]{self._key}[/] {title}"
+        elif self._title_text:
+            self.border_title = self._title_text
+        else:
+            self.border_title = ""
+        left = self._hints
+        right = self._badge_text
+        if left and right:
+            gap = "   "
+            self.border_subtitle = f"{left}{gap}{right}"
+        else:
+            self.border_subtitle = left or right
 
     def set_badge(self, text: str) -> None:
-        self._bar.set_badge(text)
+        self._badge_text = text
+        self._refresh_borders()
+
+    def set_hints(self, hints: str) -> None:
+        self._hints = hints
+        self._refresh_borders()
 
 
 class PaneRow(Horizontal):
-    """Horizontal split: panes separated by a gutter and a faint rule."""
+    """Two bordered panes side by side, sharing the row's height.
+
+    Below ``NARROW_WIDTH`` the panes stack; nested ``PaneStack`` children drop
+    their top border so stacked panes never double up.
+    """
 
     DEFAULT_CSS = """
     PaneRow {
@@ -130,54 +207,43 @@ class PaneRow(Horizontal):
     }
     PaneRow > Pane {
         margin: 0 1 0 0;
-        border-left: solid $panel;
-        padding-left: 1;
-    }
-    /* Textual CSS has no :not(), so every pane gets the rule and the
-       first one resets it. */
-    PaneRow > Pane:first-of-type {
-        border-left: none;
-        padding-left: 0;
     }
     PaneRow > Pane:last-of-type {
         margin: 0;
     }
-    /* Stacked: the separator becomes a horizontal rule, panes share the
-       height evenly and scroll their own overflow rather than clipping. */
+    /* Stacked: panes share the height evenly and scroll their own overflow
+       rather than clipping. */
     PaneRow.-narrow {
         layout: vertical;
     }
     PaneRow.-narrow > Pane {
         width: 1fr;
         height: 1fr;
-        margin: 0;
+        margin: 0 0 1 0;
         overflow-y: auto;
-        border-left: none;
-        padding-left: 0;
-        border-top: solid $panel;
-        padding-top: 1;
     }
-    PaneRow.-narrow > Pane:first-of-type {
-        border-top: none;
-        padding-top: 0;
+    PaneRow.-narrow > Pane:last-of-type {
+        margin: 0;
     }
     """
 
-    #: Below this *row* width (not terminal width — the screen's own padding
-    #: costs two columns) the row stacks its panes vertically. A side pane is
-    #: ~34 columns, so an 80-column terminal still reads fine in two columns;
-    #: stacking earlier costs more rows than it saves columns.
-    NARROW_WIDTH = 72
+    #: Below this *row* width the row stacks its panes vertically. Set above
+    #: the old 72 so an 80-column terminal stacks instead of squeezing two
+    #: bordered panes into unreadable slivers.
+    NARROW_WIDTH = BREAKPOINT_NARROW
 
-    def __init__(self, *children, id: str | None = None, classes: str = "") -> None:
+    def __init__(self, *children: Any, id: str | None = None, classes: str = "") -> None:
         super().__init__(*children, id=id, classes=f"{classes} pane-row".strip())
 
-    def on_resize(self, event) -> None:
+    def on_resize(self, event: Any) -> None:
         self.set_class(event.size.width < self.NARROW_WIDTH, "-narrow")
 
 
 class PaneStack(Vertical):
-    """Vertical stack of panes, separated by a rule instead of a gutter."""
+    """Vertical stack of bordered panes.
+
+    Children drop their top border edge so nested panes never double up.
+    """
 
     DEFAULT_CSS = """
     PaneStack {
@@ -186,12 +252,6 @@ class PaneStack(Vertical):
     }
     PaneStack > Pane {
         margin: 0 0 1 0;
-        border-top: solid $panel;
-        padding-top: 1;
-    }
-    PaneStack > Pane:first-of-type {
-        border-top: none;
-        padding-top: 0;
     }
     PaneStack > Pane:last-of-type {
         margin: 0;
@@ -242,8 +302,195 @@ class Pill(Static):
 class KeyHint(Static):
     """A ``[ key ]`` chip for empty states and prompts (markup disabled)."""
 
+    DEFAULT_CSS = """
+    KeyHint {
+        width: auto;
+        height: 1;
+        padding: 0 1;
+        background: $panel;
+        color: $primary;
+        text-style: bold;
+    }
+    """
+
     def __init__(self, key: str, id: str | None = None) -> None:
-        super().__init__(f"[ {key} ]", id=id, markup=False)
+        super().__init__(key_chip(key), id=id, markup=False)
+
+
+class ActionChip(Static, can_focus=True):
+    """A clickable one-row ``[key] label`` chip replacing every Button.
+
+    Posts ``Selected`` on click or enter, the way ``NavKey.on_click`` does,
+    so screens handle chips and keys through one path. Resting / active /
+    disabled states come from ``-active`` / ``-disabled`` classes; a disabled
+    chip keeps its reason in the label (``[n] generate — needs evidence``).
+    """
+
+    class Selected(Message):
+        """Posted when the chip is activated by click or key."""
+
+        def __init__(self, action: str) -> None:
+            super().__init__()
+            self.action = action
+
+    DEFAULT_CSS = """
+    ActionChip {
+        width: auto;
+        height: 1;
+        padding: 0 1;
+        margin: 0 1 0 0;
+        background: $panel;
+        color: $foreground;
+    }
+    ActionChip > .chip-inner {
+        width: auto;
+        height: 1;
+    }
+    ActionChip .chip-key {
+        color: $primary;
+        text-style: bold;
+    }
+    ActionChip.-active {
+        background: $primary;
+        color: $background;
+    }
+    ActionChip.-active .chip-key {
+        color: $background;
+    }
+    ActionChip.-disabled {
+        color: $text-muted;
+    }
+    ActionChip.-disabled .chip-key {
+        color: $text-muted;
+    }
+    ActionChip:focus {
+        text-style: underline;
+    }
+    """
+
+    BINDINGS = [("enter", "select", "Select")]
+
+    def __init__(
+        self,
+        key: str,
+        label: str,
+        action: str,
+        *,
+        active: bool = False,
+        disabled: bool = False,
+        reason: str = "",
+        id: str | None = None,
+    ) -> None:
+        self.chip_key = key
+        self.chip_label = label
+        self.action = action
+        self._active = active
+        self._disabled = disabled
+        self._reason = reason
+        super().__init__(self._text(), markup=False, id=id)
+
+    def _text(self) -> Any:
+        from rich.text import Text
+
+        text = Text()
+        text.append(key_chip(self.chip_key), style="bold")
+        text.append(f" {self.chip_label}")
+        if self._disabled and self._reason:
+            text.append(f" — {self._reason}")
+        return text
+
+    def _paint(self) -> None:
+        self.update(self._text())
+        self.set_class(self._active, "-active")
+        self.set_class(self._disabled, "-disabled")
+
+    @property
+    def is_disabled(self) -> bool:
+        return self._disabled
+
+    def set_active(self, active: bool) -> None:
+        self._active = active
+        self._paint()
+
+    def set_disabled(self, disabled: bool, reason: str = "") -> None:
+        self._disabled = disabled
+        if reason:
+            self._reason = reason
+        self._paint()
+
+    def on_click(self) -> None:
+        if not self._disabled:
+            self.post_message(ActionChip.Selected(self.action))
+
+    def action_select(self) -> None:
+        self.on_click()
+
+
+class ChipRow(Horizontal):
+    """One row of screen-wide action chips."""
+
+    DEFAULT_CSS = """
+    ChipRow {
+        height: 1;
+        width: 1fr;
+        layout: horizontal;
+        overflow: hidden hidden;
+    }
+    ChipRow > * {
+        width: auto;
+        height: 1;
+    }
+    """
+
+
+class TabStrip(Horizontal):
+    """Two-tab switcher for Evidence / Report.
+
+    Active tab is filled ``$primary``; inactive is muted. Replaces the
+    hand-toggled ``-tab-active`` Button hack, which collided with the
+    permanently-primary generate button so two controls read as primary.
+    """
+
+    class Selected(Message):
+        """Posted when a tab is picked."""
+
+        def __init__(self, tab: str) -> None:
+            super().__init__()
+            self.tab = tab
+
+    DEFAULT_CSS = """
+    TabStrip {
+        height: 1;
+        width: auto;
+    }
+    TabStrip > ActionChip {
+        width: auto;
+        height: 1;
+    }
+    """
+
+    def __init__(self, tabs: Sequence[tuple[str, str, str]], active: str = "") -> None:
+        """``tabs`` is ``(tab_id, key, label)`` triples."""
+        super().__init__()
+        self._tabs = list(tabs)
+        self._active = active
+
+    def compose(self) -> ComposeResult:
+        for tab_id, key, label in self._tabs:
+            yield ActionChip(key, label, f"tab-{tab_id}", active=tab_id == self._active)
+
+    def set_active(self, tab: str) -> None:
+        self._active = tab
+        for chip, (tab_id, _key, _label) in zip(
+            self.query(ActionChip), self._tabs, strict=True
+        ):
+            chip.set_active(tab_id == tab)
+
+    def on_action_chip_selected(self, event: ActionChip.Selected) -> None:
+        tab = event.action.removeprefix("tab-")
+        if tab != event.action:
+            self.set_active(tab)
+            self.post_message(TabStrip.Selected(tab))
 
 
 def shown_bindings(bindings: Sequence[Any]) -> list[Binding]:
@@ -309,7 +556,7 @@ class KeyStrip(Horizontal):
             yield Static(key, classes="ks-key", markup=False)
             yield Static(description, markup=False)
 
-    def on_resize(self, event) -> None:
+    def on_resize(self, event: Any) -> None:
         """Hide the chips that would not fit rather than wrapping the strip.
 
         Every chip is re-evaluated on every resize: an early "they all fit"
@@ -369,18 +616,22 @@ class KeyGrid(Vertical):
                 yield Static("", classes="kg-desc", markup=False)
 
 
-class Dialog(ModalScreen):
+_D = TypeVar("_D")
+
+
+class Dialog(ModalScreen[_D]):
     """Centred floating dialog over a dimmed backdrop.
 
     Subclasses implement ``compose_dialog`` and set ``dialog_title`` /
-    ``dialog_hint``; ``dialog_width`` sizes the frame.
+    ``dialog_hint``. The frame is always ``MODAL_WIDTH`` — one source of
+    truth for every modal.
     """
 
     BINDINGS = [("escape", "dismiss_dialog", "Close")]
 
     dialog_title: str = ""
-    dialog_hint: str = "<Esc>: close"
-    dialog_width: int = 64
+    dialog_hint: str = "[ esc ] close"
+    dialog_width: int = MODAL_WIDTH
 
     DEFAULT_CSS = """
     Dialog {
@@ -393,7 +644,7 @@ class Dialog(ModalScreen):
         max-height: 90%;
         padding: 1 2;
         background: $surface;
-        border: round $panel;
+        border: solid $panel;
     }
     Dialog #dialog-title {
         height: 1;
@@ -407,6 +658,21 @@ class Dialog(ModalScreen):
         margin: 1 0 0 0;
         color: $text-muted;
         content-align-horizontal: center;
+    }
+    Dialog Input, Dialog Select {
+        height: 1;
+        border: none;
+        border-left: thick $panel;
+        background: $panel;
+        padding: 0 1;
+        margin: 0 0 1 0;
+    }
+    Dialog Input:focus, Dialog Select:focus {
+        border-left: thick $primary;
+    }
+    Dialog SelectCurrent {
+        border: none;
+        padding: 0;
     }
     """
 
@@ -427,7 +693,7 @@ class Dialog(ModalScreen):
         self.dismiss(None)
 
 
-class RiggerTable(DataTable):
+class RiggerTable(DataTable[Any]):
     """DataTable with the desk defaults: zebra stripes and a row cursor."""
 
     def on_mount(self) -> None:

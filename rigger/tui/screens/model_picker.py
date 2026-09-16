@@ -7,12 +7,12 @@ from collections.abc import Callable
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical
-from textual.screen import ModalScreen
-from textual.widgets import Button, DataTable, Input, Static
+from textual.containers import Horizontal
+from textual.widgets import Input, Static
 
 from rigger.llm.catalog import ModelInfo, cached_catalog, catalog
 from rigger.llm.providers import Provider
+from rigger.tui.widgets import ActionChip, Dialog, RiggerTable
 
 
 def _per_million(price: float) -> str:
@@ -28,7 +28,7 @@ def _price_style(price_per_million: float) -> str:
     return "error"
 
 
-class ModelPicker(ModalScreen[ModelInfo | None]):
+class ModelPicker(Dialog[ModelInfo | None]):
     """Browse and pick a model; enter selects, escape cancels, refresh refetches.
 
     Loads from the on-disk catalog cache so it opens instantly. An empty
@@ -37,15 +37,11 @@ class ModelPicker(ModalScreen[ModelInfo | None]):
 
     BINDINGS = [
         Binding("escape", "cancel", "Cancel"),
-        Binding("ctrl+r", "refresh", "Refresh catalog"),
+        Binding("r", "refresh", "Refresh catalog"),
     ]
 
-    DEFAULT_CSS = """
-    ModelPicker > Vertical {
-        width: 80;
-    }
-    ModelPicker #mp-table { max-height: 20; }
-    """
+    dialog_title = "select a model"
+    dialog_hint = "[ enter ] select   [ r ] refresh   [ esc ] cancel"
 
     def __init__(
         self,
@@ -61,20 +57,22 @@ class ModelPicker(ModalScreen[ModelInfo | None]):
         self._models: list[ModelInfo] = []
         self._visible: list[ModelInfo] = []
 
-    def compose(self) -> ComposeResult:
-        yield Vertical(
-            Static(f"[bold]Select a model ({self.provider_name or 'any'})[/bold]", id="mp-title"),
-            Input(placeholder="filter by id or name", id="mp-filter"),
-            DataTable(id="mp-table"),
-            Horizontal(
-                Button("Refresh", id="mp-refresh"),
-                Static("", id="mp-status"),
-            ),
+    def compose_dialog(self) -> ComposeResult:
+        yield Static(
+            f"{self.provider_name or 'any'} · keys are never shown",
+            id="mp-sub",
+            markup=False,
+            classes="muted",
         )
+        yield Input(placeholder="filter by id or name", id="mp-filter")
+        yield RiggerTable(id="mp-table")
+        yield Static("", id="mp-status", markup=False, classes="muted")
+        yield Horizontal(ActionChip("r", "refresh", "mp-refresh", id="mp-refresh"))
 
     def on_mount(self) -> None:
-        table = self.query_one("#mp-table", DataTable)
+        table = self.query_one("#mp-table", RiggerTable)
         table.add_columns("Model", "Context", "$/1M in", "$/1M out")
+        self.query_one("#mp-filter", Input).focus()
         self._load(cached_catalog(self.provider_name))
 
     def _load(self, models: list[ModelInfo]) -> None:
@@ -82,7 +80,7 @@ class ModelPicker(ModalScreen[ModelInfo | None]):
         self._update_rows()
 
     def _update_rows(self) -> None:
-        table = self.query_one("#mp-table", DataTable)
+        table = self.query_one("#mp-table", RiggerTable)
         filter_input = self.query_one("#mp-filter", Input)
         status = self.query_one("#mp-status", Static)
         table.clear()
@@ -136,15 +134,15 @@ class ModelPicker(ModalScreen[ModelInfo | None]):
         else:
             self.notify("no models match the filter", severity="warning")
 
-    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+    def on_data_table_row_selected(self, event: RiggerTable.RowSelected) -> None:
         for m in self._visible:
             if m.id == event.row_key.value:
                 self._select(m)
                 return
 
-    async def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "mp-refresh":
-            await self._refresh()
+    def on_action_chip_selected(self, event: ActionChip.Selected) -> None:
+        if event.action == "mp-refresh":
+            self.run_worker(self._refresh(), exclusive=True)
 
     async def action_refresh(self) -> None:
         await self._refresh()

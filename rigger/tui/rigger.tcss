@@ -27,6 +27,13 @@ Pill.-warn { color: $warning; }
 Pill.-error { color: $error; }
 Pill.-dim { color: $text-muted; }
 
+/* Evidence-kind rows: colour by kind the way theses colours status cells. */
+.-kind-news { color: $news; }
+.-kind-filing { color: $filing; }
+.-kind-bar { color: $price; }
+.-kind-event { color: $event; }
+.-kind-fundamental { color: $fundamental; }
+
 StatusDot {
     width: auto;
     margin: 0 1 0 0;
@@ -35,15 +42,6 @@ StatusDot {
 StatusDot.-ok { color: $success; }
 StatusDot.-warn { color: $warning; }
 StatusDot.-error { color: $error; }
-
-KeyHint {
-    width: auto;
-    margin: 0 1 0 0;
-    padding: 0 1;
-    background: $panel;
-    color: $primary;
-    text-style: bold;
-}
 
 .empty-hint {
     color: $text-muted;
@@ -99,19 +97,47 @@ DataTable {
     grid-rows: 1;
 }
 
+/* Inverted header: the table header is the one filled row, body stays flat. */
+DataTable > .datatable--header {
+    background: $panel;
+    color: $foreground;
+    text-style: bold;
+}
+
 /* ---------- forms ---------- */
 
+/* One-row left-bar inputs — the ThesisForm treatment, app-wide. */
 Input {
-    border: round $panel;
-    background: transparent;
+    height: 1;
+    border: none;
+    border-left: thick $panel;
+    background: $panel;
+    padding: 0 1;
+    margin: 0 0 1 0;
 }
 
 Input:focus {
-    border: round $primary;
+    border-left: thick $primary;
 }
 
+Select {
+    height: 1;
+    border: none;
+    background: $panel;
+    padding: 0 1;
+}
+
+Select:focus {
+    background: $panel;
+}
+
+/* Stock buttons are de-chromed to one row: ActionChip owns the look. */
 Button {
     margin: 0 1 0 0;
+    border: none;
+    height: 1;
+    min-width: 0;
+    padding: 0 1;
 }
 
 /* ---------- panes ---------- */
