@@ -18,7 +18,7 @@ from rigger import services
 from rigger.asset_metrics import AssetMetrics, chart_window, fetch_asset_metrics
 from rigger.core.models import Instrument
 from rigger.plugins.data.yfinance import DEFAULT_SUFFIXES
-from rigger.quotes import SearchResult, YahooQuotes, yahoo_search
+from rigger.quotes import SearchResult, YahooQuotes, canonical_symbol, yahoo_search
 from rigger.tui.shell import RiggerScreen
 from rigger.tui.widgets import Dialog, Pane, PaneRow, RiggerTable
 
@@ -47,8 +47,13 @@ class TargetAddModal(Dialog):
         super().__init__()
         self.rig = rig
         self._search_task: asyncio.Task | None = None
+        self._search_debounce_task: asyncio.Task | None = None
         self._search_generation = 0
         self._results_by_symbol: dict[str, SearchResult] = {}
+        self._suppress_name_search = False
+        self._suffixes = DEFAULT_SUFFIXES | getattr(self.rig.cfg, "plugins", {}).get(
+            "yfinance", {}
+        ).get("suffixes", {})
 
     def compose_dialog(self) -> ComposeResult:
         fields = []
@@ -90,10 +95,26 @@ class TargetAddModal(Dialog):
 
     def _local_results(self, query: str) -> list[SearchResult]:
         needle = query.casefold()
-        results = []
-        for inst in self.rig.universe():
+        results: list[SearchResult] = []
+        seen: set[tuple[str, str]] = set()
+        instruments = list(self.rig.universe())
+        with suppress(Exception):
+            for target in services.target_specs().values():
+                for market in target.markets:
+                    for symbol in target.tickers:
+                        instruments.append(
+                            Instrument(
+                                id=f"{market.upper()}:{symbol}",
+                                market=market,
+                                symbol=symbol,
+                                currency={"us": "USD", "asx": "AUD"}.get(market, ""),
+                            )
+                        )
+        for inst in instruments:
             haystack = " ".join((inst.symbol, inst.name or "", inst.market)).casefold()
-            if needle in haystack:
+            key = (inst.market.casefold(), inst.symbol.casefold())
+            if needle in haystack and key not in seen:
+                seen.add(key)
                 results.append(
                     SearchResult(inst.symbol, inst.name or inst.symbol, inst.market, inst.currency)
                 )
@@ -129,7 +150,12 @@ class TargetAddModal(Dialog):
     def on_input_changed(self, event: Input.Changed) -> None:
         if event.input.id != "tg-name":
             return
+        if self._suppress_name_search:
+            self._suppress_name_search = False
+            return
         self._search_generation += 1
+        if self._search_debounce_task:
+            self._search_debounce_task.cancel()
         if self._search_task:
             self._search_task.cancel()
         query = event.value.strip()
@@ -137,6 +163,13 @@ class TargetAddModal(Dialog):
             self.query_one("#tg-suggestions", OptionList).display = False
             self._set_network("◌ Yahoo lookup ready", "pending")
             return
+        if len(query) < 2:
+            self.query_one("#tg-suggestions", OptionList).display = False
+            self._set_network("◌ type 2+ characters", "pending")
+            return
+        # Show local matches immediately while the debounced Yahoo lookup runs.
+        self._show_results(self._local_results(query))
+        self._set_network("◌ searching Yahoo…", "pending")
         self._search_task = asyncio.create_task(self._search(query, self._search_generation))
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
@@ -150,6 +183,7 @@ class TargetAddModal(Dialog):
             self.query_one("#tg-tickers", Input).value = str(symbol)
             self.query_one("#tg-market", Input).value = "us"
         else:
+            self._suppress_name_search = True
             self.query_one("#tg-name", Input).value = selected.name
             self.query_one("#tg-tickers", Input).value = selected.symbol
             self.query_one("#tg-market", Input).value = selected.market
@@ -169,6 +203,8 @@ class TargetAddModal(Dialog):
             options.focus()
 
     async def on_unmount(self) -> None:
+        if self._search_debounce_task:
+            self._search_debounce_task.cancel()
         if self._search_task:
             self._search_task.cancel()
 
@@ -179,11 +215,16 @@ class TargetAddModal(Dialog):
             self.notify("name and market are required", severity="error")
             return
         try:
+            tickers = [
+                canonical_symbol(s.strip(), market, self._suffixes)
+                for s in self._value("tickers").split(",")
+                if s.strip()
+            ]
             services.add_target(
                 name,
                 kind=self._value("kind") or "company",
                 market=market,
-                tickers=[s.strip() for s in self._value("tickers").split(",") if s.strip()],
+                tickers=tickers,
                 tags=[s.strip() for s in self._value("tags").split(",") if s.strip()],
             )
         except (ValueError, KeyError) as exc:
@@ -221,7 +262,7 @@ class TargetAddModal(Dialog):
 class Targets(RiggerScreen):
     name = "targets"
     BINDINGS = [
-        ("space", "inspect", "Inspect metrics"),
+        ("enter", "inspect", "Refresh metrics"),
         ("a", "add", "Add"),
         ("d", "remove", "Remove"),
         ("slash", "filter", "Filter"),
@@ -254,7 +295,6 @@ class Targets(RiggerScreen):
 
     def __init__(self, rig: Any) -> None:
         super().__init__(rig)
-        self.expanded: set[str] = set()
         self.rows: dict[str, tuple[str, str | None]] = {}
         self.feed: YahooQuotes | None = None
         self.feed_task: asyncio.Task | None = None
@@ -278,7 +318,6 @@ class Targets(RiggerScreen):
                 yield Static("", id="tg-form")
                 with Horizontal(id="tg-actions"):
                     yield Button("/ filter", id="tg-search")
-                    yield Button("enter expand", id="tg-expand")
                     yield Button("a add", id="tg-add")
                     yield Button("d remove", id="tg-remove")
                     yield Button("esc close", id="tg-close")
@@ -289,7 +328,6 @@ class Targets(RiggerScreen):
                 yield Static("", id="target-inspector-status", markup=False)
                 yield Sparkline([], id="target-chart")
                 yield Static("", id="target-metrics", markup=False)
-                yield Button("Refresh metrics", id="target-refresh")
 
     def on_mount(self) -> None:
         self.query_one("#tg-filter").display = False
@@ -368,30 +406,17 @@ class Targets(RiggerScreen):
                 ).casefold()
             ):
                 continue
-            expanded = target.id in self.expanded or bool(query)
             key = f"target:{target.id}"
             inst = members[0] if len(members) == 1 else None
             self.rows[key] = (target.id, inst)
             values = [
-                f"{'▾' if expanded else '▸'} {target.id}",
+                target.id,
                 ",".join(target.markets),
                 f"{len(members)} tickers" if len(members) > 1 else "—",
                 "",
                 "—",
             ]
             table.add_row(*(values + ([] if self.narrow else ["—"])), key=key)
-            if expanded and len(members) > 1:
-                for ident in members:
-                    child = f"child:{target.id}:{ident}"
-                    self.rows[child] = (target.id, ident)
-                    values = [
-                        f"    {instruments[ident].symbol}",
-                        instruments[ident].market,
-                        "—",
-                        "",
-                        "—",
-                    ]
-                    table.add_row(*(values + ([] if self.narrow else ["—"])), key=child)
         empty = self.query_one("#tg-empty", Static)
         empty.display = not table.row_count
         empty.update(
@@ -417,6 +442,8 @@ class Targets(RiggerScreen):
             return
         target_id, ident = self.rows[key]
         target = self.specs.get(target_id)
+        if ident is None and target is not None and target.tickers and target.markets:
+            ident = f"{target.markets[0].upper()}:{target.tickers[0]}"
         instrument = (
             next((item for item in self.rig.universe() if item.id == ident), None)
             if ident
@@ -544,7 +571,7 @@ class Targets(RiggerScreen):
             return
         name, ident = self.rows[selected]
         target = self.specs.get(name)
-        if target is None or (name not in self.expanded and not selected.startswith("child:")):
+        if target is None:
             detail.update("")
             return
         quote = self.feed.quotes.get(ident) if self.feed and ident else None
@@ -559,14 +586,7 @@ class Targets(RiggerScreen):
         self._select_instrument()
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
-        self.action_expand()
-
-    def action_expand(self) -> None:
-        key = self._selected()
-        if key in self.rows:
-            name = self.rows[key][0]
-            self.expanded.symmetric_difference_update({name})
-            self.refresh_view()
+        self._select_instrument(force=True)
 
     def action_inspect(self) -> None:
         """Refresh live metrics for the highlighted instrument."""
@@ -619,14 +639,10 @@ class Targets(RiggerScreen):
         self.notify(f"Removed {name} from the watchlist")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "target-refresh":
-            self._select_instrument(force=True)
-            return
         actions = {
             "tg-add": self.action_add,
             "tg-remove": self.action_remove,
             "tg-search": self.action_filter,
-            "tg-expand": self.action_expand,
             "tg-close": self.action_cancel,
         }
         if event.button.id in actions:

@@ -224,7 +224,9 @@ def test_ledger_groups_quotes_and_focus(rig, monkeypatch, tmp_path, size, theme)
             assert not screen.query_one("#tg-form").display
             assert table.row_count == 2
             await pilot.press("enter")
-            assert table.row_count == 4
+            # Enter refreshes the always-open inspector; grouped assets are
+            # no longer expanded into child rows.
+            assert table.row_count == 2
             assert len(screen.feed.symbols) == 2
             screen.feed.quotes["ASX:BHP"] = parse_quote(
                 {"price": 42.18, "time": 1789516800000, "change_percent": -0.4}, "AUD"
@@ -232,13 +234,13 @@ def test_ledger_groups_quotes_and_focus(rig, monkeypatch, tmp_path, size, theme)
             selected = screen._selected()
             screen._paint_quotes()
             assert screen._selected() == selected
-            assert "▼" in str(table.get_cell("child:mining:ASX:BHP", "change"))
-            await pilot.press("down", "d")
-            assert "mining" in services.target_specs()
+            assert "child:mining:ASX:BHP" not in screen.rows
+            await pilot.press("d")
+            assert "mining" not in services.target_specs()
             await pilot.press("/", "r", "e", "s")
-            assert table.row_count == 3
+            assert table.row_count == 0
             await pilot.press("escape")
-            assert table.row_count == 4
+            assert table.row_count == 1
             assert table.region.right <= size[0]
             task = screen.feed_task
             await pilot.press("2")

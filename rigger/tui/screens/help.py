@@ -34,9 +34,9 @@ A watchlist entry is anything you want watched — one company, a whole
 sector, or a theme. Press **a** to open the entry form, fill in the fields,
 and click **save**. Press **Escape** to close the form.
 
-Use **/** to filter, **↑/↓** to select, and **Enter** to expand a target.
-Grouped targets reveal individual ticker prices. Press **d** to remove a
-selected target; ticker child rows are informational.
+Use **/** to filter, **↑/↓** to select, and **Enter** to refresh metrics for
+the selected target. The metrics inspector stays open beside the watchlist.
+Press **d** to remove a selected target.
 
 Prices stream from Yahoo while Watchlist is open. **DAY %** is Yahoo’s
 daily percentage change: **▲** up, **▼** down, **─** unchanged. Quote age
