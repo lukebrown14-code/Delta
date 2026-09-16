@@ -95,9 +95,10 @@ Target shape — verified working on Textual 8.2.8, no custom rendering needed:
   lives in `DEFAULT_CSS` on the widget class, not in `rigger.tcss` — see the
   docstrings in `widgets.py:1-11` and `shell.py:1-11`.
 - **80×24 must not clip.** A border costs 2 rows where the winbar cost 1, so every
-  pane gets **+1 row**. `theses.py:59-63` already documents a 24-row squeeze. Check
-  at 80×24 before this lands, and drop `PaneStack` children's top border so nested
-  panes never double up.
+  pane gets **+1 row**. Against that, retiring the `KeyStrip` row (§2.3) and the
+  three-row `Button` bars gives rows back — a screen like Research nets *out* ahead.
+  `theses.py:59-63` already documents a 24-row squeeze. Check at 80×24 before this
+  lands, and drop `PaneStack` children's top border so nested panes never double up.
 - **255 tests currently pass.** They stay passing.
 
 ---
@@ -147,8 +148,13 @@ Same pattern per screen — repetitive, not novel:
    (`targets.py:298-300` vs `:47-49`), the duplicate `#target-inspector-title`
    (`:314` and `:325`), the belt-and-braces `Pane.-auto` in `config.py`.
 2. Replace `Button` with `ActionChip`; give every `Pane` its `key` and `hints`.
-3. Add a `KeyStrip` wherever it is missing — generated from `BINDINGS`, so a binding
-   can never go unadvertised again.
+3. **Advertise keys in the pane borders, not in a strip.** `Pane(hints=…)` is the
+   primary mechanism, and it is contextual: the keys sit on the pane they act on,
+   which one bottom strip cannot express. A separate `KeyStrip` row then says
+   everything twice — **do not add one to a screen whose panes carry hints**, and
+   retire the one Theses has once its panes do. `KeyStrip` survives only as the
+   fallback for a screen with no bordered pane to hang hints on. Every `show=True`
+   binding must appear in *some* border, `escape` included.
 4. Add the missing `BINDINGS`: **`chat.py`** (focus input, toggle web search, clear
    transcript), **`config.py`** (toggle diagnostics, refresh), **`research.py`**
    (`Refresh company`, `Load more`), **`targets.py`** (group collapse/expand),
@@ -208,8 +214,8 @@ Small, independent, worth landing regardless of the rest:
    and the `theses.py` 24-row concern will bite.
 3. **New regression tests, the part that stops this recurring:**
    - no screen ships a `Button`;
-   - every screen declaring `BINDINGS` mounts a `KeyStrip`;
-   - every `BINDINGS` entry with `show=True` appears in that strip;
+   - every `show=True` binding is advertised somewhere on its screen — a pane's
+     `hints` or, failing that, a `KeyStrip` — and no screen does both;
    - every modal subclasses `Dialog`;
    - every `DataTable` in a screen is a `RiggerTable`.
 4. **Live run** — `uv run rig`, then walk it: `1` watchlist → `2` evidence → `3`
