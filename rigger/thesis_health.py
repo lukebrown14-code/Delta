@@ -131,7 +131,10 @@ def state_style(state: HealthState) -> str:
 
 
 def badge_text(result: HealthResult) -> str:
-    return (
-        f"{result.state} · tilt {result.tilt:+.2f} · "
-        f"{result.support} for / {result.against} against"
-    )
+    """The health badge as the desk shows it.
+
+    State and tilt only: the per-side counts sit beside the evidence ledger as
+    its legend, and repeating them in the badge said the same thing twice on
+    one screen.
+    """
+    return f"{result.state} · tilt {result.tilt:+.2f}"

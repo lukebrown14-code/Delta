@@ -219,6 +219,81 @@ def set_status(engine: Engine, id: str, status: str) -> Thesis:
         return _thesis_from_row(row)
 
 
+def update_thesis(
+    engine: Engine,
+    id: str,
+    *,
+    claim: str,
+    targets: Sequence[str],
+    time_horizon: str,
+    status: str,
+    scope: str | None = None,
+    assumptions: Sequence[str] | None = None,
+    falsifiers: Sequence[str] | None = None,
+) -> Thesis:
+    """Update a thesis and retain its linked evidence if its identity changes.
+
+    A thesis id is derived from its claim and scope. Editing either therefore
+    changes the id; evidence rows are moved in the same transaction so editing
+    does not silently discard a review history.
+
+    ``scope``, ``assumptions`` and ``falsifiers`` default to ``None``, meaning
+    "leave as stored" — a caller that does not collect a field cannot erase it.
+    """
+    claim = claim.strip()
+    if not claim:
+        raise ValueError("claim is required")
+    if status not in STATUSES:
+        raise ValueError(f"status must be one of {', '.join(STATUSES)}; got {status!r}")
+    _ensure_tables(engine)
+    with Session(engine) as session:
+        row = session.get(ThesisTable, id)
+        if row is None:
+            raise KeyError(f"unknown thesis: {id}")
+        new_scope = row.scope if scope is None else scope.strip()
+        new_assumptions = (
+            row.assumptions if assumptions is None else to_json(list(assumptions))
+        )
+        new_falsifiers = row.falsifiers if falsifiers is None else to_json(list(falsifiers))
+        # One spelling of the column set, so a new field cannot be added to the
+        # rename branch and forgotten in the in-place one.
+        values = {
+            "claim": claim,
+            "scope": new_scope,
+            "assumptions": new_assumptions,
+            "falsifiers": new_falsifiers,
+            "targets": to_json(list(targets)),
+            "time_horizon": time_horizon,
+            "status": status,
+        }
+        new_id = thesis_id(claim, new_scope)
+        if new_id != row.id:
+            if session.get(ThesisTable, new_id) is not None:
+                raise ValueError(f"thesis {new_id} already exists")
+            evidence_rows = session.exec(
+                select(ThesisEvidenceTable).where(ThesisEvidenceTable.thesis_id == row.id)
+            ).all()
+            for evidence_row in evidence_rows:
+                session.delete(evidence_row)
+                session.add(
+                    ThesisEvidenceTable(
+                        thesis_id=new_id,
+                        evidence_id=evidence_row.evidence_id,
+                        side=evidence_row.side,
+                        note=evidence_row.note,
+                        accepted=evidence_row.accepted,
+                    )
+                )
+            session.delete(row)
+            row = ThesisTable(id=new_id, created_at=row.created_at, **values)
+            session.add(row)
+        else:
+            for column, value in values.items():
+                setattr(row, column, value)
+        session.commit()
+        return _thesis_from_row(row)
+
+
 def add_evidence(
     engine: Engine,
     thesis_id: str,

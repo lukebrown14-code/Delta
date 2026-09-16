@@ -12,10 +12,17 @@ theses, chat) keep their shape when mounted under any App.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+from typing import Any
+
 from textual.app import ComposeResult
+from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import DataTable, Static
+
+#: Keys whose Textual name is not what a user would recognise on a keycap.
+KEY_DISPLAY = {"question_mark": "?", "escape": "esc", "slash": "/"}
 
 DOT = "●"
 
@@ -32,6 +39,19 @@ _HEALTH_VARIANTS: dict[str, str] = {
 def health_variant(state: str) -> str:
     """Map a thesis-health state to a Pill variant class."""
     return _HEALTH_VARIANTS.get(state, "dim")
+
+
+def sentiment_variant(score: float) -> str:
+    """Map a report sentiment (-1..1) to a Pill variant class.
+
+    The bands match how the number is read on the desk: clearly negative, mixed
+    (the honest default when evidence cuts both ways), clearly positive.
+    """
+    if score <= -0.3:
+        return "error"
+    if score >= 0.3:
+        return "ok"
+    return "warn"
 
 
 class PaneBar(Horizontal):
@@ -224,6 +244,84 @@ class KeyHint(Static):
 
     def __init__(self, key: str, id: str | None = None) -> None:
         super().__init__(f"[ {key} ]", id=id, markup=False)
+
+
+def shown_bindings(bindings: Sequence[Any]) -> list[Binding]:
+    """Normalise a ``BINDINGS`` list to the ``Binding`` objects worth showing.
+
+    ``BINDINGS`` entries may be 3-tuples or ``Binding`` instances; this hides
+    the difference so a caller can render a keymap from either form without
+    reaching into Textual's private binding registry.
+    """
+    shown: list[Binding] = []
+    for entry in bindings:
+        binding = entry if isinstance(entry, Binding) else Binding(*entry)
+        if binding.show:
+            shown.append(binding)
+    return shown
+
+
+def binding_key(binding: Binding) -> str:
+    """The key as a user would recognise it on a keycap."""
+    return KEY_DISPLAY.get(binding.key) or binding.key_display or binding.key
+
+
+class KeyStrip(Horizontal):
+    """One-line key hint strip generated from a ``BINDINGS`` list.
+
+    Generated rather than written out, so a screen's hints cannot drift from
+    the keys it actually binds. Chips are dropped from the right when the strip
+    would not fit, because a wrapped strip costs a row of pane height.
+    """
+
+    DEFAULT_CSS = """
+    KeyStrip {
+        height: 1;
+        width: 1fr;
+        color: $text-muted;
+    }
+    KeyStrip Static {
+        width: auto;
+        height: 1;
+        margin: 0 2 0 0;
+        color: $text-muted;
+    }
+    KeyStrip .ks-key {
+        color: $primary;
+        text-style: bold;
+        margin: 0 1 0 0;
+    }
+    """
+
+    #: Margin columns a chip costs on top of its text: one between the key and
+    #: its description, two after the pair. Mirrors the margins in DEFAULT_CSS.
+    CHIP_GAP = 3
+
+    def __init__(self, bindings: Sequence[Any], id: str | None = None) -> None:
+        super().__init__(id=id)
+        self._pairs = [
+            (binding_key(binding), binding.description)
+            for binding in shown_bindings(bindings)
+        ]
+
+    def compose(self) -> ComposeResult:
+        for key, description in self._pairs:
+            yield Static(key, classes="ks-key", markup=False)
+            yield Static(description, markup=False)
+
+    def on_resize(self, event) -> None:
+        """Hide the chips that would not fit rather than wrapping the strip.
+
+        Every chip is re-evaluated on every resize: an early "they all fit"
+        return would never restore chips hidden at a narrower width.
+        """
+        chips = list(self.query(Static))
+        used = 0
+        for index, (key, description) in enumerate(self._pairs):
+            used += len(key) + len(description) + self.CHIP_GAP
+            fits = used <= event.size.width
+            chips[index * 2].display = fits
+            chips[index * 2 + 1].display = fits
 
 
 class KeyGrid(Vertical):

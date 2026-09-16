@@ -52,10 +52,10 @@ class MenuItem:
 
 MENU: list[MenuItem] = [
     MenuItem("1", "Add to the watchlist", "watchlist", "do", screen="targets"),
-    MenuItem("3", "Read a report", "report", "do", screen="reports"),
+    MenuItem("3", "Research · Report", "report", "do", screen="reports"),
     MenuItem("5", "Ask a question", "ask", "do", screen="chat"),
     MenuItem("4", "Track a thesis", "thesis", "do", screen="theses"),
-    MenuItem("2", "Evidence & spend", "evidence", "look", screen="data"),
+    MenuItem("2", "Research · Evidence", "evidence", "look", screen="data"),
     MenuItem("c", "Settings", "settings", "look", screen="config"),
     MenuItem("?", "Help", "help", "app", action="show_help"),
     MenuItem("q", "Quit", "quit", "app", action="quit"),

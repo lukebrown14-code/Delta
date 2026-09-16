@@ -21,7 +21,7 @@ Return a JSON object with exactly these fields:
 - bull: a list of claims supporting a positive view of the target
 - bear: a list of claims supporting a negative view of the target
 - risks: a list of claims about what could go wrong for the target
-- catalysts: a list of claims about events or changes already visible in the evidence
+- catalysts: a list of claims about dated, forward-looking events visible in the evidence that could move the target's value; routine administrative filings (proxy forms, meeting notices, director interest notices, registry changes) are not catalysts
 - unknowns: a list of questions the evidence does not answer
 - sentiment: a number between -1 (clearly negative) and 1 (clearly positive); 0 when mixed or neutral
 - sentiment_reasons: a list of claims that explain the sentiment
@@ -35,6 +35,11 @@ Rules:
 
 - Every claim must cite at least one evidence id from the items above.
 - Omit anything the evidence does not support. An empty list is better than an unsupported claim.
+- Cite each distinct source once. When a claim rests on a price series, cite only the
+  endpoints that establish it, not every datapoint in between; a long list of near-identical
+  cites makes a claim look better supported than it is.
+- Prefer a claim that is material to the target's value over one that is merely true. A fact
+  that would not change a reader's understanding does not belong in bull, bear or catalysts.
 - Argue both sides from the evidence; the bull and bear cases are equally welcome.
 - Do not recommend buying, selling or holding. This report is a synthesis of facts, not investment advice.
 - Unknowns are questions, not claims; they carry no evidence ids.

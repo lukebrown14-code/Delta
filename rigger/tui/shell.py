@@ -27,8 +27,7 @@ from rigger.tui.widgets import StatusDot
 
 NAV_ITEMS: list[tuple[str, str, str]] = [
     ("1", "targets", "Watchlist"),
-    ("2", "data", "Evidence"),
-    ("3", "reports", "Reports"),
+    ("2", "data", "Research"),
     ("4", "theses", "Theses"),
     ("5", "chat", "Ask"),
 ]
@@ -36,7 +35,7 @@ NAV_ITEMS: list[tuple[str, str, str]] = [
 # Chrome actions, rendered flush-right on the status bar. Same 3-tuple shape as
 # NAV_ITEMS so GoPicker / the command palette can iterate NAV_ITEMS + CHROME_ITEMS.
 CHROME_ITEMS: list[tuple[str, str, str]] = [
-    ("c", "config", "Config"),
+    ("c", "config", "Settings"),
 ]
 
 # Reachable by hotkey, ``g`` and the palette, but not shown on the bar: Home is
@@ -44,6 +43,7 @@ CHROME_ITEMS: list[tuple[str, str, str]] = [
 # Same 3-tuple shape again — ALL_ITEMS is what navigation should iterate.
 OFF_BAR_ITEMS: list[tuple[str, str, str]] = [
     ("h", "home", "Home"),
+    ("3", "reports", "Research · Report"),
 ]
 
 ALL_ITEMS: list[tuple[str, str, str]] = NAV_ITEMS + CHROME_ITEMS + OFF_BAR_ITEMS
@@ -215,7 +215,7 @@ class StatusBar(Horizontal):
     def _render_items(self) -> None:
         chrome = {name for _key, name, _label in CHROME_ITEMS}
         for name, item in self._items.items():
-            active = name == self._active
+            active = name == ("data" if self._active == "reports" else self._active)
             item.set_class(active, "-active")
             # The chrome group keeps its labels at every width.
             item.render_label(compact=self._compact and name not in chrome, active=active)
