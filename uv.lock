@@ -1481,7 +1481,7 @@ requires-dist = [
     { name = "sqlmodel", specifier = ">=0.0.21" },
     { name = "textual", specifier = ">=8.2.8" },
     { name = "tomli-w", specifier = ">=1.0" },
-    { name = "yfinance", specifier = ">=0.2.40" },
+    { name = "yfinance", specifier = ">=1.7.0" },
 ]
 
 [package.metadata.requires-dev]
