@@ -23,7 +23,7 @@ from rigger.tui.screens.research import ResearchState
 from rigger.tui.screens.targets import Targets
 from rigger.tui.screens.theses import Theses
 from rigger.tui.shell import ALL_ITEMS
-from rigger.tui.theme import THEMES
+from rigger.tui.theme import RIGGER_DARK, THEMES
 from rigger.tui.widgets import Dialog, KeyGrid, PaneRow
 
 
@@ -128,6 +128,13 @@ class RiggerApp(App):
     ]
     COMMANDS = App.COMMANDS | {RiggerCommands}
 
+    def get_theme_variable_defaults(self) -> dict[str, str]:
+        # ``rigger.tcss`` references the evidence-kind tokens, but the app
+        # stylesheet parses before ``on_mount`` activates a Rigger theme.
+        # The dark values are the fallback for that first parse; each theme's
+        # own ``variables`` still win once it is active.
+        return dict(RIGGER_DARK.variables)
+
     def __init__(self, rig: Rigger | None = None) -> None:
         super().__init__()
         self.rig = rig if rig is not None else Rigger()
@@ -167,6 +174,10 @@ class RiggerApp(App):
         self.narrow = event.size.width < PaneRow.NARROW_WIDTH
 
     def action_switch_screen(self, name: str) -> None:
+        if self.screen is not None and self.screen.name == name:
+            # switch_screen no-ops on the current screen; rewriting ``tab``
+            # anyway would desync the visible tab from the pane shown.
+            return
         if name in ("data", "reports"):
             self._screens[name].tab = "evidence" if name == "data" else "report"
         self.switch_screen(name)
