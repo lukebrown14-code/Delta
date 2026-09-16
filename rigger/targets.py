@@ -12,6 +12,8 @@ from typing import Any, Literal, cast
 
 from pydantic import BaseModel
 
+from rigger.core.models import AssetClass
+
 TargetKind = Literal["company", "sector", "industry", "market", "theme"]
 
 #: Sorted for stable "known kinds are ..." error messages.
@@ -34,6 +36,7 @@ class WatchTarget(BaseModel):
     tickers: tuple[str, ...] = ()
     tags: frozenset[str] = frozenset()
     notes: str = ""
+    asset_class: AssetClass = "equity"
 
 
 def _kind_of(name: str, spec: dict[str, Any], *, legacy: bool = False) -> TargetKind:
@@ -64,4 +67,5 @@ def target_from_spec(name: str, spec: dict[str, Any], *, legacy: bool = False) -
         tickers=tuple(str(t).upper() for t in spec.get("tickers", []) if t),
         tags=frozenset(str(tag) for tag in spec.get("tags", []) if tag),
         notes=str(spec.get("notes", "")),
+        asset_class=spec.get("asset_class", "equity"),
     )

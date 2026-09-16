@@ -21,7 +21,9 @@ class FakeRig:
         self.engine = engine
         self.llm = None
         self._universe = universe
-        self.settings = SimpleNamespace(openrouter_api_key="", openai_api_key="", anthropic_api_key="")
+        self.settings = SimpleNamespace(
+            openrouter_api_key="", openai_api_key="", anthropic_api_key=""
+        )
         self.cfg = SimpleNamespace(
             base_currency="AUD",
             llm_provider="openrouter",
@@ -118,11 +120,13 @@ def test_targets_panel_adds_target(rig, monkeypatch, tmp_path):
         async with app.run_test() as pilot:
             await pilot.press("1")
             assert app.screen.name == "targets"
+            await pilot.press("a")
+            assert app.screen.query_one("#tg-form").display
             app.screen.query_one("#tg-name").value = "mining"
             app.screen.query_one("#tg-kind").value = "industry"
             app.screen.query_one("#tg-market").value = "asx"
             app.screen.query_one("#tg-tickers").value = "BHP,RIO"
-            await pilot.click("#tg-add")
+            await pilot.press("enter")
             assert "mining" in services.target_specs()
             assert app.screen.query_one("#target-table").row_count == 1
 
@@ -171,5 +175,158 @@ def test_home_pulse_reference_point_is_stable_across_refreshes(rig):
             await home.refresh_view()
             await pilot.pause()
             assert home.last_seen == captured
+
+    asyncio.run(run())
+
+
+@pytest.fixture(autouse=True)
+def offline_quotes(monkeypatch):
+    from rigger.quotes import YahooQuotes
+
+    async def run(self):
+        self.on_state("offline test")
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(YahooQuotes, "run", run)
+
+
+@pytest.mark.parametrize("size", [(80, 24), (120, 40)])
+@pytest.mark.parametrize("theme", ["rigger-dark", "rigger-light"])
+def test_ledger_groups_quotes_and_focus(rig, monkeypatch, tmp_path, size, theme):
+    import tomli_w
+
+    from rigger.quotes import parse_quote
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "config.toml").write_text(
+        tomli_w.dumps(
+            {
+                "targets": {
+                    "mining": {
+                        "kind": "sector",
+                        "market": "asx",
+                        "tickers": ["BHP", "RIO"],
+                        "tags": ["resources"],
+                    },
+                    "whole-market": {"kind": "market", "market": "us"},
+                }
+            }
+        )
+    )
+
+    async def run():
+        app = RiggerApp(rig)
+        async with app.run_test(size=size) as pilot:
+            app.theme = theme
+            await pilot.press("1")
+            screen = app.screen
+            table = screen.query_one("#target-table")
+            assert not screen.query_one("#tg-form").display
+            assert table.row_count == 2
+            await pilot.press("enter")
+            # Enter refreshes the always-open inspector; grouped assets are
+            # no longer expanded into child rows.
+            assert table.row_count == 2
+            members = screen.query_one("#target-members")
+            assert members.display
+            assert len(members.options) == 2
+            assert len(screen.feed.symbols) == 2
+            screen.feed.quotes["ASX:BHP"] = parse_quote(
+                {"price": 42.18, "time": 1789516800000, "change_percent": -0.4}, "AUD"
+            )
+            selected = screen._selected()
+            screen._paint_quotes()
+            assert screen._selected() == selected
+            assert "child:mining:ASX:BHP" not in screen.rows
+            await pilot.press("d")
+            assert "mining" not in services.target_specs()
+            await pilot.press("/", "r", "e", "s")
+            assert table.row_count == 0
+            await pilot.press("escape")
+            assert table.row_count == 1
+            assert table.region.right <= size[0]
+            task = screen.feed_task
+            await pilot.press("2")
+            assert task.done()
+            assert screen.feed_task is None
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("field", ["name", "kind", "market", "tickers", "tags"])
+def test_company_form_enter_submits(rig, monkeypatch, tmp_path, field):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "config.toml").write_text("", encoding="utf-8")
+
+    async def run():
+        app = RiggerApp(rig)
+        async with app.run_test() as pilot:
+            await pilot.press("1", "a")
+            screen = app.screen
+            screen.query_one("#tg-name").value = "apple"
+            screen.query_one("#tg-market").value = "us"
+            screen.query_one("#tg-tickers").value = "AAPL"
+            screen.query_one(f"#tg-{field}").focus()
+            await pilot.press("enter")
+            assert services.target_specs()["apple"].tickers == ("AAPL",)
+            assert app.screen.name == "targets"
+            assert not app.screen.query_one("#tg-form").display
+            assert app.screen.query_one("#target-table").has_focus
+
+    asyncio.run(run())
+
+
+def test_company_form_enter_keeps_invalid_form_open(rig, monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "config.toml").write_text("", encoding="utf-8")
+
+    async def run():
+        app = RiggerApp(rig)
+        async with app.run_test() as pilot:
+            await pilot.press("1", "a")
+            app.screen.query_one("#tg-name").value = "apple"
+            await pilot.press("enter")
+            assert not services.target_specs()
+            assert app.screen.query_one("#tg-form").display
+            assert app.screen.query_one("#tg-name").value == "apple"
+
+    asyncio.run(run())
+
+
+def test_add_modal_yahoo_dropdown_keyboard_and_online_state(rig, monkeypatch, tmp_path):
+    from rigger import tui
+    from rigger.quotes import SearchResult
+    from rigger.tui.screens.targets import TargetAddModal
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "config.toml").write_text("", encoding="utf-8")
+
+    async def yahoo(query):
+        assert query == "bhp"
+        return [SearchResult("BHP.AX", "BHP Group Limited", "asx", "AUD", "ASX")]
+
+    monkeypatch.setattr(tui.screens.targets, "yahoo_search", yahoo)
+
+    async def run():
+        app = RiggerApp(rig)
+        async with app.run_test() as pilot:
+            await pilot.press("1", "a")
+            assert isinstance(app.screen, TargetAddModal)
+            app.screen.query_one("#tg-name").value = "bhp"
+            await pilot.pause()
+            suggestions = app.screen.query_one("#tg-suggestions")
+            assert suggestions.display
+            assert app.screen.query_one("#tg-network").has_class("-online")
+            await pilot.press("down")
+            assert suggestions.has_focus
+            await pilot.press("enter")
+            assert app.screen.query_one("#tg-tickers").value == "BHP.AX"
+            assert app.screen.query_one("#tg-market").value == "asx"
+            app.screen.query_one("#tg-name").value = "manual"
+            app.screen.query_one("#tg-name").focus()
+            await pilot.pause(0.2)
+            await pilot.press("escape")
+            assert isinstance(app.screen, TargetAddModal)
+            assert not app.screen.query_one("#tg-suggestions").display
 
     asyncio.run(run())

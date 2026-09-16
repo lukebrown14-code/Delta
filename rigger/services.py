@@ -54,11 +54,12 @@ async def ingest(
     *,
     market: str | None = None,
     tickers: str | None = None,
+    instruments: Sequence[Any] | None = None,
     since: str | None = None,
     log: Log = _noop_log,
 ) -> IngestResult:
     since = since or (datetime.now(UTC) - timedelta(days=365)).strftime("%Y-%m-%d")
-    instruments = rig.universe()
+    instruments = list(instruments) if instruments is not None else rig.universe()
     if market:
         instruments = [i for i in instruments if i.market == market]
     if tickers:
@@ -81,11 +82,24 @@ async def ingest(
     return IngestResult(total)
 
 
-async def extract(rig: Any, *, since: str | None = None, log: Log = _noop_log) -> ExtractResult:
+async def extract(
+    rig: Any,
+    *,
+    since: str | None = None,
+    instruments: list[Any] | None = None,
+    log: Log = _noop_log,
+) -> ExtractResult:
+    """Extract events from stored evidence.
+
+    ``instruments`` narrows the run to a subset of the universe, so a caller
+    refreshing one company does not pay for extraction across every target.
+    """
     from rigger.extract import extract_events
 
     since = since or (datetime.now(UTC) - timedelta(days=14)).strftime("%Y-%m-%d")
-    events = await extract_events(rig.context(rig.universe()), parse_date(since))
+    events = await extract_events(
+        rig.context(rig.universe() if instruments is None else instruments), parse_date(since)
+    )
     instruments = len({event.instrument_id for event in events})
     log(
         f"[green]Extracted {len(events)} events across {instruments} instruments since {since}.[/green]"
@@ -130,6 +144,7 @@ def add_target(
     tags: list[str] | None = None,
     notes: str = "",
     label: str | None = None,
+    asset_class: str = "equity",
 ) -> None:
     import tomli_w
 
@@ -161,6 +176,9 @@ def add_target(
     if name in raw.get("targets", {}) or name in raw.get("watchlists", {}):
         raise ValueError(f"target {name!r} already exists")
     spec: dict[str, Any] = {"kind": kind, "market": market}
+    if asset_class not in {"equity", "etf", "bond", "commodity", "fx", "crypto", "cash", "other"}:
+        raise ValueError(f"unknown asset class {asset_class!r}")
+    spec["asset_class"] = asset_class
     if kind != "market":
         spec["tickers"] = tickers
     if tags:

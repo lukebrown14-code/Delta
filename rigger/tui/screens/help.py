@@ -8,9 +8,7 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import Screen
 from textual.widgets import Markdown, Static, TabbedContent, TabPane
 
-from rigger.tui.widgets import KeyHint
-
-KEY_DISPLAY = {"question_mark": "?"}
+from rigger.tui.widgets import KeyHint, binding_key, shown_bindings
 
 # Plain-language tour. Kept as a module constant so the README can
 # reuse the exact same words the TUI shows.
@@ -31,7 +29,18 @@ to buy or sell. The point is clarity, not tips.
 Press **1** for Watchlist.
 
 A watchlist entry is anything you want watched — one company, a whole
-sector, or a theme. Fill in the row at the bottom and press **Add**:
+sector, or a theme. Press **a** to open the entry form, fill in the fields,
+and click **save**. Press **Escape** to close the form.
+
+Use **/** to filter, **↑/↓** to select, and **Enter** to refresh metrics for
+the selected target. The metrics inspector stays open beside the watchlist.
+Press **Space** on an asset-class header to expand or collapse its targets, and
+press **r** to cycle the chart range. Press **d** to remove a selected target.
+
+Prices stream from Yahoo while Watchlist is open. **DAY %** is Yahoo’s
+daily percentage change: **▲** up, **▼** down, **─** unchanged. Quote age
+and connection state are separate; delivery may vary by market. Missing
+quotes show **—**. Streaming quotes do not replace gathered historical bars.
 
 | Field | Example |
 | --- | --- |
@@ -47,18 +56,19 @@ Open the command palette (**ctrl+p**) and run **Gather evidence**.
 `ingest` pulls prices, news, filings and earnings dates into a local database,
 and `extract` turns the news into structured facts. Gather runs both.
 
-Press **2** for Data to see what landed — row counts, how fresh each feed is,
-and what the model has cost you so far.
+Press **2** for Research. Choose a watch target and company, then search and
+filter its evidence. Database counts and model spend are under Settings → Diagnostics.
 
 ## 3. Read what it found
 
-Press **3** for Reports.
+Press **3** for the Research report view.
 
-Pick a watchlist entry, press **Generate**, and wait. You get a written summary with a
+Pick a company, press **Generate report**, and wait. You get a written summary with a
 citation on every claim. If a sentence could not be traced back to something
 collected in step 2, it gets dropped rather than guessed.
 
-The contents panel on the left jumps between sections.
+The contents panel on the left jumps between sections. Select **Inspect source**
+to read a citation in Evidence, then switch back to Report to resume reading.
 
 ## 4. Ask it questions
 
@@ -144,14 +154,11 @@ class HelpScreen(Screen):
     def _key_rows(self) -> list[Horizontal]:
         """One row per visible binding, generated so it cannot drift from the footer."""
         rows: list[Horizontal] = []
-        for binding in self.app.BINDINGS:
-            if not binding.show:
-                continue
-            key = KEY_DISPLAY.get(binding.key) or binding.key_display or binding.key
+        for binding in shown_bindings(self.app.BINDINGS):
             description = binding.description + (f" — {binding.tooltip}" if binding.tooltip else "")
             rows.append(
                 Horizontal(
-                    KeyHint(key),
+                    KeyHint(binding_key(binding)),
                     Static(description, markup=False),
                     classes="help-row",
                 )

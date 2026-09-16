@@ -8,6 +8,8 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from sqlmodel import Session
 from textual.app import App
+from textual.containers import VerticalScroll
+from textual.widgets import Input
 
 from rigger import theses
 from rigger.core.db import NewsItemTable
@@ -90,6 +92,28 @@ def test_status_transitions(tmp_engine):
         theses.set_status(tmp_engine, thesis.id, "nonsense")
     with pytest.raises(KeyError):
         theses.set_status(tmp_engine, "nope", "paused")
+
+
+def test_update_thesis_changes_claim_and_preserves_evidence(tmp_engine):
+    thesis = theses.create_thesis(tmp_engine, CLAIM, targets=(INST,), time_horizon="5y")
+    theses.add_evidence(tmp_engine, thesis.id, "news:n1", "support", "Evidence", accepted=True)
+
+    updated = theses.update_thesis(
+        tmp_engine,
+        thesis.id,
+        claim="Solar generation keeps growing.",
+        targets=(INST, OTHER),
+        time_horizon="10y",
+        status="paused",
+    )
+
+    assert updated.id != thesis.id
+    assert updated.targets == (INST, OTHER)
+    assert updated.time_horizon == "10y"
+    assert updated.status == "paused"
+    assert theses.evidence_for(tmp_engine, updated.id)[0].note == "Evidence"
+    with pytest.raises(KeyError):
+        theses.get_thesis(tmp_engine, thesis.id)
 
 
 def test_candidates_are_invisible_until_accepted(tmp_engine):
@@ -242,26 +266,31 @@ def test_theses_screen_smoke(tmp_engine):
             assert screen.name == "theses"
             assert screen.query_one("#thesis-table").row_count == 1
 
-            screen.query_one("#th-claim").value = "Microsoft gains cloud share."
-            screen.query_one("#th-targets").value = f"{OTHER},{INST}"
-            screen.query_one("#th-horizon").value = "5y"
-            await pilot.click("#th-add")
+            await pilot.press("n")
+            app.screen.query_one("#th-claim").value = "Microsoft gains cloud share."
+            app.screen.query_one("#th-targets").value = f"{OTHER},{INST}"
+            app.screen.query_one("#th-horizon").value = "5y"
+            await pilot.click("#th-save")
             await pilot.pause()
             assert screen.query_one("#thesis-table").row_count == 2
             assert screen.selected is not None
             assert theses.get_thesis(tmp_engine, screen.selected).targets == (OTHER, INST)
 
             screen.query_one("#thesis-table").focus()
-            await pilot.press("enter")
+            await pilot.press("up", "enter")
             await pilot.pause()
             assert screen.selected == thesis.id
 
-            assert len(screen.query("#th-accept-0")) == 1
-            await pilot.click("#th-accept-0")
+            await pilot.press("e")
+            # The action line offers what applies to the highlighted row.
+            assert "a accept" in str(screen.query_one("#thesis-actions").render())
+            await pilot.press("a")
             await pilot.pause()
             accepted = theses.evidence_for(tmp_engine, thesis.id)
             assert [row.evidence_id for row in accepted] == ["news:n1"]
-            assert len(screen.query("#th-accept-0")) == 0
+            actions = str(screen.query_one("#thesis-actions").render())
+            assert "a accept" not in actions
+            assert "u un-accept" in actions
             detail_text = "\n".join(str(widget.render()) for widget in screen.query("Static"))
             assert "Cloud deal reported." in detail_text
             assert "Supporting" in detail_text
@@ -320,5 +349,380 @@ def test_screen_keeps_accepted_evidence_that_aged_out_of_the_pool(tmp_engine):
             detail_text = "\n".join(str(widget.render()) for widget in app.screen.query("Static"))
             assert "no accepted evidence" not in detail_text
             assert "Title n1 <https://example.com/n1>" in detail_text
+
+    asyncio.run(run())
+
+
+def test_research_desk_resize_and_keyboard_review(tmp_engine):
+    _seed_news(tmp_engine)
+    thesis = theses.create_thesis(tmp_engine, CLAIM, targets=(INST,))
+    theses.add_evidence(tmp_engine, thesis.id, "news:n1", "against", "Counter evidence")
+    theses.add_evidence(
+        tmp_engine, thesis.id, "news:n2", "support", "Accepted evidence", accepted=True
+    )
+
+    async def run():
+        app = App()
+        async with app.run_test(size=(130, 32)) as pilot:
+            screen = Theses(FakeRig(tmp_engine))
+            await app.push_screen(screen)
+            await pilot.pause()
+            assert screen.query_one("#thesis-detail-pane").display
+            assert screen.query_one("#thesis-evidence-pane").display
+            screen.query_one("#thesis-ledger").focus()
+            await pilot.press("x")
+            assert [
+                row.evidence_id
+                for row in theses.evidence_for(tmp_engine, thesis.id, accepted_only=False)
+            ] == ["news:n2"]
+            await pilot.press("x")
+            assert len(theses.evidence_for(tmp_engine, thesis.id)) == 1
+            await pilot.resize_terminal(80, 24)
+            assert not screen.query_one("#thesis-evidence-pane").display
+            await pilot.press("e")
+            assert screen.query_one("#thesis-evidence-pane").display
+            assert not screen.query_one("#thesis-detail-pane").display
+            await pilot.resize_terminal(130, 32)
+            assert screen.query_one("#thesis-detail-pane").display
+            assert screen.query_one("#thesis-evidence-pane").display
+
+    asyncio.run(run())
+
+
+def test_empty_desk_and_cancel_creation(tmp_engine):
+    async def run():
+        app = App()
+        async with app.run_test() as pilot:
+            screen = Theses(FakeRig(tmp_engine))
+            await app.push_screen(screen)
+            await pilot.pause()
+            assert screen.selected is None
+            await pilot.press("n")
+            app.screen.query_one("#th-claim").value = "Unsaved claim"
+            await pilot.press("escape")
+            assert app.screen is screen
+            assert theses.list_theses(tmp_engine) == []
+            await pilot.press("e", "a", "x")
+            assert screen.query_one("#thesis-ledger").row_count == 0
+
+    asyncio.run(run())
+
+
+def test_screen_edit_button_updates_selected_thesis(tmp_engine):
+    theses.create_thesis(tmp_engine, CLAIM, targets=(INST,), time_horizon="5y")
+
+    async def run():
+        app = App()
+        async with app.run_test() as pilot:
+            screen = Theses(FakeRig(tmp_engine))
+            await app.push_screen(screen)
+            await pilot.pause()
+
+            await pilot.press("d")
+            assert app.screen.query_one("#th-claim", Input).value == CLAIM
+            app.screen.query_one("#th-claim", Input).value = "Solar demand keeps rising."
+            app.screen.query_one("#th-targets", Input).value = f"{INST}, {OTHER}"
+            app.screen.query_one("#th-horizon", Input).value = "10y"
+            await pilot.click("#th-save")
+            await pilot.pause()
+
+            assert app.screen is screen
+            assert screen.selected is not None
+            updated = theses.get_thesis(tmp_engine, screen.selected)
+            assert updated.claim == "Solar demand keeps rising."
+            assert updated.targets == (INST, OTHER)
+            assert updated.time_horizon == "10y"
+
+    asyncio.run(run())
+
+
+def test_update_thesis_edits_scope_and_framing_keeping_evidence(tmp_engine):
+    """Scope is part of the id, so editing it must migrate evidence like a claim edit."""
+    thesis = theses.create_thesis(tmp_engine, CLAIM, targets=(INST,), scope=SCOPE)
+    theses.add_evidence(tmp_engine, thesis.id, "news:n1", "support", "Kept", accepted=True)
+
+    updated = theses.update_thesis(
+        tmp_engine,
+        thesis.id,
+        claim=CLAIM,
+        targets=(INST,),
+        time_horizon="5y",
+        status="active",
+        scope="Australian electricity generation",
+        assumptions=("Panel costs keep falling",),
+        falsifiers=("subsidy repeal",),
+    )
+
+    assert updated.id != thesis.id
+    assert updated.scope == "Australian electricity generation"
+    assert updated.assumptions == ["Panel costs keep falling"]
+    assert updated.falsifiers == ["subsidy repeal"]
+    rows = theses.evidence_for(tmp_engine, updated.id)
+    assert [row.evidence_id for row in rows] == ["news:n1"]
+    assert theses.list_theses(tmp_engine) == [updated]
+
+
+def test_update_thesis_leaves_framing_alone_when_not_given(tmp_engine):
+    """A caller that does not collect a field must not be able to erase it."""
+    thesis = theses.create_thesis(
+        tmp_engine, CLAIM, scope=SCOPE, assumptions=("a",), falsifiers=("b",)
+    )
+
+    updated = theses.update_thesis(
+        tmp_engine, thesis.id, claim=CLAIM, targets=(), time_horizon="", status="paused"
+    )
+
+    assert updated.id == thesis.id
+    assert updated.scope == SCOPE
+    assert updated.assumptions == ["a"]
+    assert updated.falsifiers == ["b"]
+
+
+def test_screen_find_evidence_fills_the_review_queue(tmp_engine):
+    """`f` is the only way the review queue can fill from the TUI."""
+    _seed_news(tmp_engine)
+    thesis = theses.create_thesis(tmp_engine, CLAIM, targets=(INST,))
+    llm = FakeLLM(
+        {
+            "thesis": {
+                "candidates": [
+                    {"evidence_id": "news:n1", "side": "support", "note": "Deal reported."},
+                    {"evidence_id": "news:n2", "side": "against", "note": "Rival gains."},
+                ]
+            }
+        }
+    )
+    rig = FakeRig(tmp_engine, llm, FakeConfig({"thesis": "fake/thesis-model"}))
+
+    async def run():
+        app = App()
+        async with app.run_test(size=(130, 32)) as pilot:
+            screen = Theses(rig)
+            await app.push_screen(screen)
+            await pilot.pause()
+            assert screen.query_one("#thesis-ledger").row_count == 0
+
+            await pilot.press("f")
+            await pilot.pause()
+            await pilot.pause()
+
+            assert screen.query_one("#thesis-ledger").row_count == 2
+            stored = theses.evidence_for(tmp_engine, thesis.id, accepted_only=False)
+            assert all(row.accepted is False for row in stored)
+            assert theses.evidence_for(tmp_engine, thesis.id) == []
+
+    asyncio.run(run())
+
+
+def test_screen_unaccept_returns_evidence_to_pending(tmp_engine):
+    """Accepted evidence is removed in two steps, so `x` alone cannot delete it."""
+    _seed_news(tmp_engine)
+    thesis = theses.create_thesis(tmp_engine, CLAIM, targets=(INST,))
+    theses.add_evidence(tmp_engine, thesis.id, "news:n1", "support", "Kept", accepted=True)
+
+    async def run():
+        app = App()
+        async with app.run_test(size=(130, 32)) as pilot:
+            screen = Theses(FakeRig(tmp_engine))
+            await app.push_screen(screen)
+            await pilot.pause()
+            screen.query_one("#thesis-ledger").focus()
+
+            # x on an accepted row is refused, so the evidence survives.
+            await pilot.press("x")
+            await pilot.pause()
+            assert len(theses.evidence_for(tmp_engine, thesis.id)) == 1
+
+            await pilot.press("u")
+            await pilot.pause()
+            assert theses.evidence_for(tmp_engine, thesis.id) == []
+            pending = theses.evidence_for(tmp_engine, thesis.id, accepted_only=False)
+            assert [row.evidence_id for row in pending] == ["news:n1"]
+
+            # Now pending, it can be dropped.
+            await pilot.press("x")
+            await pilot.pause()
+            assert theses.evidence_for(tmp_engine, thesis.id, accepted_only=False) == []
+
+    asyncio.run(run())
+
+
+def test_screen_filter_and_escape_return_to_the_claims_table(tmp_engine):
+    theses.create_thesis(tmp_engine, CLAIM, targets=(INST,))
+    theses.create_thesis(tmp_engine, "Microsoft gains cloud share.", targets=(OTHER,))
+
+    async def run():
+        app = App()
+        async with app.run_test(size=(130, 32)) as pilot:
+            screen = Theses(FakeRig(tmp_engine))
+            await app.push_screen(screen)
+            await pilot.pause()
+            assert screen.query_one("#thesis-table").row_count == 2
+
+            await pilot.press("slash")
+            await pilot.pause()
+            assert screen.query_one("#thesis-filter").display
+            screen.query_one("#thesis-filter", Input).value = "microsoft"
+            await pilot.pause()
+            assert screen.query_one("#thesis-table").row_count == 1
+
+            await pilot.press("escape")
+            await pilot.pause()
+            assert not screen.query_one("#thesis-filter").display
+            assert screen.query_one("#thesis-table").row_count == 2
+            assert screen.query_one("#thesis-table").has_focus
+
+    asyncio.run(run())
+
+
+def test_screen_e_alternates_focus_when_wide(tmp_engine):
+    """Wide has nothing to toggle, so `e` moves between detail and evidence."""
+    _seed_news(tmp_engine)
+    thesis = theses.create_thesis(tmp_engine, CLAIM, targets=(INST,))
+    theses.add_evidence(tmp_engine, thesis.id, "news:n1", "support", "A note")
+
+    async def run():
+        app = App()
+        async with app.run_test(size=(130, 32)) as pilot:
+            screen = Theses(FakeRig(tmp_engine))
+            await app.push_screen(screen)
+            await pilot.pause()
+
+            await pilot.press("e")
+            assert screen.query_one("#thesis-ledger").has_focus
+            await pilot.press("e")
+            assert screen.query_one("#thesis-detail").has_focus
+            await pilot.press("e")
+            assert screen.query_one("#thesis-ledger").has_focus
+
+    asyncio.run(run())
+
+
+def test_tab_cycles_exactly_the_three_panes(tmp_engine):
+    """Tab means "next pane": nothing in the chain that is not a pane."""
+    _seed_news(tmp_engine)
+    thesis = theses.create_thesis(tmp_engine, CLAIM, targets=(INST,))
+    theses.add_evidence(tmp_engine, thesis.id, "news:n1", "support", "A note")
+
+    async def run():
+        app = App()
+        async with app.run_test(size=(130, 32)) as pilot:
+            screen = Theses(FakeRig(tmp_engine))
+            await app.push_screen(screen)
+            await pilot.pause()
+
+            assert [w.id for w in screen.focus_chain] == [
+                "thesis-table",
+                "thesis-detail",
+                "thesis-ledger",
+            ]
+            visited = []
+            for _ in range(4):
+                visited.append(app.focused.id)
+                await pilot.press("tab")
+                await pilot.pause()
+            assert visited == ["thesis-table", "thesis-detail", "thesis-ledger", "thesis-table"]
+
+    asyncio.run(run())
+
+
+def test_action_line_tracks_the_highlighted_row(tmp_engine):
+    _seed_news(tmp_engine)
+    thesis = theses.create_thesis(tmp_engine, CLAIM, targets=(INST,))
+    theses.add_evidence(tmp_engine, thesis.id, "news:n1", "support", "Pending one")
+    theses.add_evidence(tmp_engine, thesis.id, "news:n2", "against", "Kept", accepted=True)
+
+    async def run():
+        app = App()
+        async with app.run_test(size=(130, 32)) as pilot:
+            screen = Theses(FakeRig(tmp_engine))
+            await app.push_screen(screen)
+            await pilot.pause()
+            actions = screen.query_one("#thesis-actions")
+            ledger = screen.query_one("#thesis-ledger")
+            ledger.focus()
+
+            # Pending rows sort first, so the cursor starts on one.
+            assert "a accept" in str(actions.render())
+            assert "x reject" in str(actions.render())
+
+            await pilot.press("down")
+            await pilot.pause()
+            assert "u un-accept" in str(actions.render())
+            assert "a accept" not in str(actions.render())
+
+    asyncio.run(run())
+
+
+def test_shift_arrows_scroll_the_note_only_from_the_ledger(tmp_engine):
+    _seed_news(tmp_engine)
+    thesis = theses.create_thesis(tmp_engine, CLAIM, targets=(INST,))
+    theses.add_evidence(tmp_engine, thesis.id, "news:n1", "support", "A long note. " * 20)
+
+    async def run():
+        app = App()
+        async with app.run_test(size=(130, 32)) as pilot:
+            screen = Theses(FakeRig(tmp_engine))
+            await app.push_screen(screen)
+            await pilot.pause()
+            preview = screen.query_one("#thesis-preview", VerticalScroll)
+            assert preview.max_scroll_y > 0
+            assert "scroll note" in str(screen.query_one("#thesis-actions").render())
+
+            screen.query_one("#thesis-ledger").focus()
+            await pilot.press("shift+down")
+            await pilot.pause()
+            assert preview.scroll_y == 1
+            # Scrolling the note must not cost the ledger its focus.
+            assert screen.query_one("#thesis-ledger").has_focus
+
+            screen.query_one("#thesis-table").focus()
+            await pilot.press("shift+down")
+            await pilot.pause()
+            assert preview.scroll_y == 1
+
+    asyncio.run(run())
+
+
+def test_pane_width_constants_match_the_stylesheet():
+    """The breakpoint is derived from the pane widths, so the CSS must agree.
+
+    Textual CSS cannot read a Python constant, so the numbers are written twice.
+    This is the mechanism that keeps the two copies honest.
+    """
+    from rigger.tui.screens import theses as screen
+
+    assert f"min-width: {screen.CLAIMS_MIN_WIDTH};" in screen.Theses.CSS
+    assert f"width: {screen.EVIDENCE_WIDTH};" in screen.Theses.CSS
+    assert f"min-width: {screen.DETAIL_MIN_WIDTH};" in screen.Theses.CSS
+    assert screen.Theses.WIDE_WIDTH == (
+        screen.CLAIMS_MIN_WIDTH + screen.EVIDENCE_WIDTH + screen.DETAIL_MIN_WIDTH + 4
+    )
+
+
+def test_key_strip_restores_chips_when_the_terminal_widens(tmp_engine):
+    """Hidden chips must come back: a narrow width must not be a one-way door."""
+    theses.create_thesis(tmp_engine, CLAIM, targets=(INST,))
+
+    async def run():
+        app = App()
+        async with app.run_test(size=(130, 32)) as pilot:
+            screen = Theses(FakeRig(tmp_engine))
+            await app.push_screen(screen)
+            await pilot.pause()
+            strip = screen.query_one("#thesis-keys")
+
+            def shown() -> int:
+                return sum(1 for child in strip.children if child.display)
+
+            wide = shown()
+
+            await pilot.resize_terminal(70, 20)
+            await pilot.pause()
+            assert shown() < wide
+
+            await pilot.resize_terminal(130, 32)
+            await pilot.pause()
+            assert shown() == wide
 
     asyncio.run(run())

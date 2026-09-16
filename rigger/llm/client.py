@@ -187,9 +187,7 @@ def build_client(
     """
     spec = PROVIDERS.get(provider)
     if spec is None:
-        raise KeyError(
-            f"unknown llm provider {provider!r}; valid: {', '.join(sorted(PROVIDERS))}"
-        )
+        raise KeyError(f"unknown llm provider {provider!r}; valid: {', '.join(sorted(PROVIDERS))}")
     keys = api_keys or {}
     p: Provider
     if spec.kind == "openrouter":
