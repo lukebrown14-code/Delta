@@ -8,6 +8,7 @@ from typing import Any
 
 from rigger.core.db import BarTable
 from rigger.core.models import Instrument
+from rigger.core.time import to_utc
 from rigger.plugins.data.yfinance import DEFAULT_SUFFIXES, yf_symbol
 
 
@@ -61,21 +62,43 @@ def fetch_asset_metrics(
         if range_name == "day" and (history is None or history.empty):
             history = ticker.history(period="5d", interval="1d", auto_adjust=True)
         closes: list[float] = []
+        timestamps: list[Any] = []
+        if history is not None and not history.empty:
+            close_series = history["Close"].dropna()
+            closes = [float(value) for value in close_series.tolist()]
+            timestamps = list(close_series.index)
         if range_name == "all" and engine is not None:
             from sqlmodel import Session, select
 
             with Session(engine) as session:
                 local = session.exec(
-                    select(BarTable.close)
+                    select(BarTable.ts, BarTable.close)
                     .where(BarTable.instrument_id == instrument.id)
                     .order_by(BarTable.ts)
                 ).all()
-            closes.extend(float(value) for value in local if value is not None)
+            # The provider's weekly "max" history already covers the local
+            # bars' recent year. Merge on timestamp — local wins exact
+            # collisions and provider points inside the local window drop
+            # out — so the series stays ascending and unduplicated instead
+            # of concatenating the overlap twice.
+            local_points = [
+                (to_utc(ts), float(close))
+                for ts, close in local
+                if close is not None and ts is not None
+            ]
+            if local_points:
+                local_map = dict(local_points)
+                first, last = local_points[0][0], local_points[-1][0]
+                merged = {
+                    to_utc(ts): close
+                    for ts, close in zip(timestamps, closes, strict=False)
+                    if ts < first or ts > last or ts in local_map
+                }
+                merged.update(local_map)
+                timestamps = sorted(merged)
+                closes = [merged[ts] for ts in timestamps]
         result.series = closes
-        if history is not None and not history.empty:
-            closes.extend(float(value) for value in history["Close"].dropna().tolist())
-            result.series = closes
-            result.series = closes
+        if closes:
             if len(closes) > 1:
                 returns = [
                     current / previous - 1
@@ -89,7 +112,7 @@ def fetch_asset_metrics(
                     ) ** 0.5
             result.period_high = max(closes) if closes else None
             result.period_low = min(closes) if closes else None
-            if len(history.index):
+            if history is not None and not history.empty and len(history.index):
                 result.history_start = str(history.index[0])
                 result.history_end = str(history.index[-1])
             if closes:
