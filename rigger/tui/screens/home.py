@@ -134,4 +134,4 @@ class Home(RiggerScreen):
         age = datetime.now(UTC) - mtime
         hours = int(age.total_seconds() // 3600)
         when = "just now" if hours < 1 else f"{hours}h ago" if hours < 24 else f"{hours // 24}d ago"
-        label.update(f"{newest.stem} · {when} · {citations} citations", markup=False)
+        label.update(f"{newest.stem} · {when} · {citations} citations")

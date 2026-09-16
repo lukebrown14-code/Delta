@@ -86,6 +86,21 @@ PROVIDERS: dict[str, ProviderSpec] = {
 }
 
 
+def _auth_headers(spec: ProviderSpec, api_key: str) -> dict[str, str]:
+    """Auth headers for ``spec``'s endpoints; empty when unauthenticated.
+
+    Anthropic's native API authenticates with ``x-api-key``, not Bearer;
+    local servers (Ollama) need no header at all.
+    """
+    if not api_key:
+        return {}
+    headers = {"Authorization": f"Bearer {api_key}"}
+    if spec.name == "anthropic":
+        headers["x-api-key"] = api_key
+        headers["anthropic-version"] = "2023-06-01"
+    return headers
+
+
 class OpenAICompatProvider(Provider):
     """One connection to any OpenAI chat-completions compatible endpoint.
 
@@ -150,9 +165,9 @@ class OpenAICompatProvider(Provider):
         if response_format:
             kwargs["response_format"] = response_format
         resp = await client.chat.completions.create(**kwargs)
-        return self._result(resp, model)
+        return await self._result(resp, model)
 
-    def _result(self, resp: Any, model: str) -> ProviderResult:
+    async def _result(self, resp: Any, model: str) -> ProviderResult:
         """Normalize a chat-completion response into text/tokens/cost."""
         text = resp.choices[0].message.content or ""
         usage = resp.usage
@@ -162,10 +177,10 @@ class OpenAICompatProvider(Provider):
             text=text,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
-            cost_usd=self._compute_cost(model, input_tokens, output_tokens),
+            cost_usd=await self._compute_cost(model, input_tokens, output_tokens),
         )
 
-    def _compute_cost(self, model: str, input_tokens: int, output_tokens: int) -> float:
+    async def _compute_cost(self, model: str, input_tokens: int, output_tokens: int) -> float:
         return 0.0  # no pricing table for generic compat providers
 
     async def models(self, *, force: bool = False) -> list[ModelInfo]:
@@ -175,7 +190,11 @@ class OpenAICompatProvider(Provider):
         try:
             import httpx
 
-            r = httpx.get(f"{self.base_url.rstrip('/')}/models", timeout=15.0)
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                r = await client.get(
+                    f"{self.base_url.rstrip('/')}/models",
+                    headers=_auth_headers(self.spec, self.api_key),
+                )
             r.raise_for_status()
             return [
                 ModelInfo(
@@ -237,7 +256,7 @@ class OpenRouterProvider(OpenAICompatProvider):
     ) -> ProviderResult:
         client = self._get_client()
         kwargs: dict[str, Any] = {"model": model, "messages": messages}
-        cap = self._request_cap(model, messages)
+        cap = await self._request_cap(model, messages)
         if cap is not None:
             kwargs["max_tokens"] = cap
         if response_format:
@@ -248,14 +267,14 @@ class OpenRouterProvider(OpenAICompatProvider):
             if not _is_status_402(exc):
                 raise
             previous = kwargs.get("max_tokens")
-            retry_cap = self._request_cap(model, messages, force_credits=True)
+            retry_cap = await self._request_cap(model, messages, force_credits=True)
             if retry_cap is None or (previous is not None and retry_cap >= previous):
                 raise self._budget_error(model, messages) from exc
             kwargs["max_tokens"] = retry_cap
             resp = await client.chat.completions.create(**kwargs)
-        return self._result(resp, model)
+        return await self._result(resp, model)
 
-    def _request_cap(
+    async def _request_cap(
         self,
         model: str,
         messages: list[dict[str, str]],
@@ -270,10 +289,10 @@ class OpenRouterProvider(OpenAICompatProvider):
         skipped (the configured cap is returned unchanged) when the balance or
         the model's pricing is unknown or the model is free.
         """
-        credits = self._fetch_credits(force=force_credits)
+        credits = await self._fetch_credits(force=force_credits)
         if credits is None:
             return self._max_tokens
-        self._maybe_load_pricing()
+        await self._maybe_load_pricing()
         pricing = self._pricing.get(model)
         if pricing is None or pricing["completion"] <= 0.0:
             return self._max_tokens
@@ -286,7 +305,7 @@ class OpenRouterProvider(OpenAICompatProvider):
             return affordable
         return min(self._max_tokens, affordable)
 
-    def _fetch_credits(self, *, force: bool = False) -> float | None:
+    async def _fetch_credits(self, *, force: bool = False) -> float | None:
         """Remaining OpenRouter credits (``total_credits - total_usage``), cached.
 
         Never raises: on failure the last known balance is returned so a
@@ -303,11 +322,11 @@ class OpenRouterProvider(OpenAICompatProvider):
         try:
             import httpx
 
-            r = httpx.get(
-                f"{OPENROUTER_BASE_URL}/credits",
-                headers={"Authorization": f"Bearer {self.api_key}"},
-                timeout=10.0,
-            )
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                r = await client.get(
+                    f"{OPENROUTER_BASE_URL}/credits",
+                    headers={"Authorization": f"Bearer {self.api_key}"},
+                )
             r.raise_for_status()
             data = r.json().get("data", {})
             total = float(data.get("total_credits") or 0.0)
@@ -343,18 +362,18 @@ class OpenRouterProvider(OpenAICompatProvider):
             "in [llm.routing]."
         )
 
-    def _compute_cost(self, model: str, input_tokens: int, output_tokens: int) -> float:
-        self._maybe_load_pricing()
+    async def _compute_cost(self, model: str, input_tokens: int, output_tokens: int) -> float:
+        await self._maybe_load_pricing()
         pricing = self._pricing.get(model)
         if pricing is None:
             return 0.0
         return input_tokens * pricing["prompt"] + output_tokens * pricing["completion"]
 
     async def models(self, *, force: bool = False) -> list[ModelInfo]:
-        self._maybe_load_pricing(force=force)
+        await self._maybe_load_pricing(force=force)
         return list(self._models)
 
-    def _maybe_load_pricing(self, force: bool = False) -> None:
+    async def _maybe_load_pricing(self, force: bool = False) -> None:
         if (
             not force
             and self._pricing_loaded_at
@@ -366,11 +385,11 @@ class OpenRouterProvider(OpenAICompatProvider):
         try:
             import httpx
 
-            r = httpx.get(
-                f"{OPENROUTER_BASE_URL}/models",
-                headers={"Authorization": f"Bearer {self.api_key}"},
-                timeout=15.0,
-            )
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                r = await client.get(
+                    f"{OPENROUTER_BASE_URL}/models",
+                    headers={"Authorization": f"Bearer {self.api_key}"},
+                )
             r.raise_for_status()
             pricing: dict[str, dict[str, float]] = {}
             models: list[ModelInfo] = []
@@ -423,11 +442,7 @@ async def verify_key(spec: ProviderSpec, api_key: str, *, base_url: str = "") ->
     base = (base_url or spec.base_url).rstrip("/")
     if not base:
         return False
-    headers = {"Authorization": f"Bearer {api_key}"}
-    if spec.name == "anthropic":
-        # Anthropic's native API authenticates with x-api-key, not Bearer.
-        headers["x-api-key"] = api_key
-        headers["anthropic-version"] = "2023-06-01"
+    headers = _auth_headers(spec, api_key)
     try:
         import httpx
 
