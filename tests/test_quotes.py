@@ -70,6 +70,24 @@ def test_yahoo_search_normalizes_exchange_and_currency(monkeypatch):
     assert results[2].asset_class == "crypto"
 
 
+def test_yahoo_search_deduplicates_repeated_symbols(monkeypatch):
+    import yfinance
+
+    class Search:
+        def __init__(self, query, max_results):
+            self.quotes = [
+                {"symbol": "BHP.AX", "longname": "BHP Group Limited", "exchange": "ASX", "currency": "AUD"},
+                {"symbol": "bhp.ax", "shortname": "BHP", "exchange": "ASX", "currency": "AUD"},
+                {"symbol": "BHP.AX", "shortname": "BHP Group", "exchange": "ASX", "currency": "AUD"},
+            ]
+
+    monkeypatch.setattr(yfinance, "Search", Search)
+    results = asyncio.run(yahoo_search("BHP"))
+    # The TUI keys suggestion options by symbol; a repeat would raise
+    # DuplicateID and kill the search worker.
+    assert [result.symbol for result in results] == ["BHP.AX"]
+
+
 def instrument():
     return Instrument(id="ASX:BHP", market="asx", symbol="BHP", currency="AUD")
 

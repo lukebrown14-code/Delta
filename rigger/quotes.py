@@ -57,12 +57,16 @@ async def yahoo_search(query: str, max_results: int = 8) -> list[SearchResult]:
 
     response = await asyncio.to_thread(yf.Search, query, max_results=max_results)
     results: list[SearchResult] = []
+    # Yahoo's directory can repeat a symbol; the TUI suggestion list keys
+    # options by symbol, so a repeat would raise DuplicateID downstream.
+    seen: set[str] = set()
     for item in response.quotes:
         symbol = str(item.get("symbol", "")).strip().upper()
         name = str(item.get("longname") or item.get("shortname") or symbol).strip()
         exchange = str(item.get("exchange") or item.get("fullExchangeName") or "").strip()
-        if not symbol:
+        if not symbol or symbol in seen:
             continue
+        seen.add(symbol)
         exchange_code = exchange.upper()
         if "ASX" in exchange_code:
             market = "asx"
