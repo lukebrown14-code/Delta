@@ -8,9 +8,7 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import Screen
 from textual.widgets import Markdown, Static, TabbedContent, TabPane
 
-from rigger.tui.widgets import KeyHint
-
-KEY_DISPLAY = {"question_mark": "?"}
+from rigger.tui.widgets import KeyHint, binding_key, shown_bindings
 
 # Plain-language tour. Kept as a module constant so the README can
 # reuse the exact same words the TUI shows.
@@ -36,7 +34,8 @@ and click **save**. Press **Escape** to close the form.
 
 Use **/** to filter, **↑/↓** to select, and **Enter** to refresh metrics for
 the selected target. The metrics inspector stays open beside the watchlist.
-Press **d** to remove a selected target.
+Press **Space** on an asset-class header to expand or collapse its targets, and
+press **r** to cycle the chart range. Press **d** to remove a selected target.
 
 Prices stream from Yahoo while Watchlist is open. **DAY %** is Yahoo’s
 daily percentage change: **▲** up, **▼** down, **─** unchanged. Quote age
@@ -155,14 +154,11 @@ class HelpScreen(Screen):
     def _key_rows(self) -> list[Horizontal]:
         """One row per visible binding, generated so it cannot drift from the footer."""
         rows: list[Horizontal] = []
-        for binding in self.app.BINDINGS:
-            if not binding.show:
-                continue
-            key = KEY_DISPLAY.get(binding.key) or binding.key_display or binding.key
+        for binding in shown_bindings(self.app.BINDINGS):
             description = binding.description + (f" — {binding.tooltip}" if binding.tooltip else "")
             rows.append(
                 Horizontal(
-                    KeyHint(key),
+                    KeyHint(binding_key(binding)),
                     Static(description, markup=False),
                     classes="help-row",
                 )

@@ -227,6 +227,9 @@ def test_ledger_groups_quotes_and_focus(rig, monkeypatch, tmp_path, size, theme)
             # Enter refreshes the always-open inspector; grouped assets are
             # no longer expanded into child rows.
             assert table.row_count == 2
+            members = screen.query_one("#target-members")
+            assert members.display
+            assert len(members.options) == 2
             assert len(screen.feed.symbols) == 2
             screen.feed.quotes["ASX:BHP"] = parse_quote(
                 {"price": 42.18, "time": 1789516800000, "change_percent": -0.4}, "AUD"

@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
+from rigger.core.db import BarTable
 from rigger.core.models import Instrument
 from rigger.plugins.data.yfinance import DEFAULT_SUFFIXES, yf_symbol
 
@@ -19,6 +20,12 @@ class AssetMetrics:
     series: list[float] = field(default_factory=list)
     change_label: str = ""
     fetched_at: datetime | None = None
+    source: str = "Yahoo Finance"
+    history_start: str | None = None
+    history_end: str | None = None
+    period_high: float | None = None
+    period_low: float | None = None
+    volatility: float | None = None
     error: str | None = None
 
 
@@ -33,7 +40,10 @@ def profile_for(instrument: Instrument) -> str:
 
 
 def fetch_asset_metrics(
-    instrument: Instrument, suffixes: dict[str, str] | None = None
+    instrument: Instrument,
+    range_name: str = "month",
+    engine: Any = None,
+    suffixes: dict[str, str] | None = None,
 ) -> AssetMetrics:
     """Fetch provider data and normalize it; intended to run off the UI thread."""
     result = AssetMetrics(instrument.id, profile_for(instrument))
@@ -42,10 +52,46 @@ def fetch_asset_metrics(
 
         ticker = yf.Ticker(yf_symbol(instrument, suffixes or DEFAULT_SUFFIXES))
         info: dict[str, Any] = ticker.info or {}
-        history = ticker.history(period="1mo", interval="1d", auto_adjust=True)
+        period, interval = {
+            "day": ("1d", "5m"),
+            "month": ("1mo", "1d"),
+            "all": ("max", "1wk"),
+        }.get(range_name, ("1mo", "1d"))
+        history = ticker.history(period=period, interval=interval, auto_adjust=True)
+        if range_name == "day" and (history is None or history.empty):
+            history = ticker.history(period="5d", interval="1d", auto_adjust=True)
+        closes: list[float] = []
+        if range_name == "all" and engine is not None:
+            from sqlmodel import Session, select
+
+            with Session(engine) as session:
+                local = session.exec(
+                    select(BarTable.close)
+                    .where(BarTable.instrument_id == instrument.id)
+                    .order_by(BarTable.ts)
+                ).all()
+            closes.extend(float(value) for value in local if value is not None)
+        result.series = closes
         if history is not None and not history.empty:
-            closes = [float(value) for value in history["Close"].dropna().tolist()]
+            closes.extend(float(value) for value in history["Close"].dropna().tolist())
             result.series = closes
+            result.series = closes
+            if len(closes) > 1:
+                returns = [
+                    current / previous - 1
+                    for previous, current in zip(closes, closes[1:], strict=False)
+                    if previous
+                ]
+                if returns:
+                    mean = sum(returns) / len(returns)
+                    result.volatility = (
+                        sum((value - mean) ** 2 for value in returns) / len(returns)
+                    ) ** 0.5
+            result.period_high = max(closes) if closes else None
+            result.period_low = min(closes) if closes else None
+            if len(history.index):
+                result.history_start = str(history.index[0])
+                result.history_end = str(history.index[-1])
             if closes:
                 result.values["Current yield" if result.profile == "bond" else "Current price"] = (
                     f"{closes[-1]:,.2f}"
@@ -66,6 +112,8 @@ def fetch_asset_metrics(
         result.fetched_at = datetime.now(UTC)
     except Exception as exc:  # provider failures are displayed in the inspector
         result.error = str(exc)
+        if result.series:
+            result.values["Current price"] = f"{result.series[-1]:,.2f}"
     return result
 
 
@@ -188,5 +236,5 @@ def _group_values(profile: str, info: dict[str, Any]) -> dict[str, dict[str, str
     return grouped
 
 
-def chart_window(series: list[float], days: int = 30) -> list[float]:
-    return series[-days:]
+def chart_window(series: list[float], days: int | None = 30) -> list[float]:
+    return series if days is None else series[-days:]
