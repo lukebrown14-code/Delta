@@ -74,22 +74,9 @@ class ProviderPicker(ModalScreen[str | None]):
     BINDINGS = [Binding("escape", "cancel", "Cancel")]
 
     DEFAULT_CSS = """
-    ProviderPicker {
-        align: center middle;
-        background: $background 60%;
-    }
     ProviderPicker > Vertical {
-        border: round $primary;
-        background: $surface;
-        padding: 0 1;
         width: 64;
-        max-height: 90%;
     }
-    ProviderPicker #pp-title {
-        color: $primary;
-        text-style: bold;
-    }
-    ProviderPicker #pp-status { color: $text-muted; }
     """
 
     def __init__(self, on_select: Callable[[str], None], *, key_status: dict[str, bool]) -> None:
@@ -136,21 +123,9 @@ class KeyEntryModal(ModalScreen[str | None]):
     BINDINGS = [Binding("escape", "cancel", "Cancel")]
 
     DEFAULT_CSS = """
-    KeyEntryModal {
-        align: center middle;
-        background: $background 60%;
-    }
     KeyEntryModal > Vertical {
-        border: round $primary;
-        background: $surface;
-        padding: 0 1;
         width: 64;
     }
-    KeyEntryModal #ke-title {
-        color: $primary;
-        text-style: bold;
-    }
-    KeyEntryModal #ke-hint { color: $text-muted; }
     """
 
     def __init__(self, spec: ProviderSpec, *, existing: str = "") -> None:
@@ -204,19 +179,8 @@ class CustomFormModal(ModalScreen[tuple[str, str, str] | None]):
     BINDINGS = [Binding("escape", "cancel", "Cancel")]
 
     DEFAULT_CSS = """
-    CustomFormModal {
-        align: center middle;
-        background: $background 60%;
-    }
     CustomFormModal > Vertical {
-        border: round $primary;
-        background: $surface;
-        padding: 0 1;
         width: 72;
-    }
-    CustomFormModal #cf-title {
-        color: $primary;
-        text-style: bold;
     }
     """
 

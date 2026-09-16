@@ -41,23 +41,10 @@ class ModelPicker(ModalScreen[ModelInfo | None]):
     ]
 
     DEFAULT_CSS = """
-    ModelPicker {
-        align: center middle;
-        background: $background 60%;
-    }
     ModelPicker > Vertical {
-        border: round $primary;
-        background: $surface;
-        padding: 0 1;
         width: 80;
-        max-height: 90%;
-    }
-    ModelPicker #mp-title {
-        color: $primary;
-        text-style: bold;
     }
     ModelPicker #mp-table { max-height: 20; }
-    ModelPicker #mp-status { color: $text-muted; }
     """
 
     def __init__(

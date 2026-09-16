@@ -1,64 +1,15 @@
 /* Rigger app stylesheet.
    Colours never appear as hex here: every rule uses theme tokens
-   (see theme.py: rigger-dark / rigger-light). */
+   (see theme.py: rigger-dark / rigger-light).
+
+   Layout for the shell and the pane primitives lives in DEFAULT_CSS on
+   those widget classes, so reports/theses/chat still mount standalone.
+   This file holds app-level tokens and per-screen trim only. */
 
 /* ---------- shell ---------- */
 
 Screen {
     layout: vertical;
-}
-
-#screen-body {
-    height: 1fr;
-}
-
-#screen-content {
-    padding: 0 1;
-}
-
-/* ---------- cards ---------- */
-
-Card {
-    height: auto;
-    min-height: 5;
-    margin: 0 1 1 0;
-    padding: 1 2;
-    background: $surface;
-    border: round $panel;
-}
-
-Card.-highlight {
-    border: round $primary;
-}
-
-CardTitle {
-    color: $primary;
-    text-style: bold;
-    background: transparent;
-}
-
-/* ---------- stat tiles ---------- */
-
-StatTile {
-    height: 5;
-    min-width: 18;
-    margin: 0 1 1 0;
-    padding: 1 1;
-    background: $surface;
-    border: round $panel;
-}
-
-StatTile Digits {
-    color: $primary;
-}
-
-StatTile .stat-label {
-    color: $text-muted;
-}
-
-.stat-row {
-    height: auto;
-    margin-bottom: 1;
 }
 
 /* ---------- pills, dots, hints ---------- */
@@ -138,11 +89,13 @@ KeyHint {
 
 /* ---------- tables ---------- */
 
+/* Borderless to match the panes: the winbar above is the only header.
+   Height is deliberately absent — the app stylesheet outranks every screen's
+   DEFAULT_CSS regardless of specificity, so setting it here would override
+   each screen's own #id sizing. */
 DataTable {
-    height: auto;
-    max-height: 20;
-    margin: 1 0;
-    background: $surface;
+    margin: 0;
+    background: transparent;
     grid-rows: 1;
 }
 
@@ -150,6 +103,7 @@ DataTable {
 
 Input {
     border: round $panel;
+    background: transparent;
 }
 
 Input:focus {
@@ -160,56 +114,40 @@ Button {
     margin: 0 1 0 0;
 }
 
-.tg-form {
-    height: auto;
-    margin-top: 1;
-}
+/* ---------- panes ---------- */
 
-#target-table {
-    height: 1fr;
-    margin: 1 0;
-}
-
-#tg-name, #tg-kind, #tg-market, #tg-tickers, #tg-tags {
-    width: 1fr;
-    margin: 1;
-}
-
-/* ---------- console ---------- */
-
-.console-card {
-    height: 1fr;
-}
-
-.console-row {
-    height: auto;
-    margin: 1 0 0 0;
-}
-
-.console-row #console-input {
-    margin: 0;
-    width: 1fr;
-}
-
-#console-log {
-    height: 1fr;
-    margin: 1 0 0 0;
-    background: $surface;
-    border: round $panel;
-}
-
-.console-prompt {
-    width: 2;
-    color: $primary;
-    text-style: bold;
-    content-align: center middle;
+/* Stacked panes must lose the fixed side-pane widths the screens set. Those
+   are #id rules, which outrank any class selector, so !important is the only
+   way to reclaim the full width when a row stacks. */
+.pane-row.-narrow > Pane {
+    width: 1fr !important;
 }
 
 /* ---------- modals ---------- */
 
-/* ---------- kept from the old skin ---------- */
+/* Every modal is a centred dialog over a dimmed backdrop, with a quiet
+   border: the dim is what separates it, not a bright outline. */
+ModalScreen {
+    align: center middle;
+    background: $background 60%;
+}
 
-.diagram {
+ModalScreen > Vertical {
     padding: 1 2;
+    max-height: 90%;
+    background: $surface;
+    border: round $panel;
+}
+
+#mp-title, #pp-title, #ke-title, #cf-title {
+    color: $primary;
+    text-style: bold;
+}
+
+#mp-status, #pp-status, #ke-hint {
     color: $text-muted;
+}
+
+#mp-table {
+    max-height: 20;
 }

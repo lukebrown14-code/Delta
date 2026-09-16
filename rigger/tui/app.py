@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from textual.app import App
+from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.command import Hit, Hits, Provider
 
@@ -24,6 +24,7 @@ from rigger.tui.screens.targets import Targets
 from rigger.tui.screens.theses import Theses
 from rigger.tui.shell import NAV_ITEMS
 from rigger.tui.theme import THEMES
+from rigger.tui.widgets import Dialog, KeyGrid, PaneRow
 
 
 async def _gather(rig: Any, app: App) -> None:
@@ -74,6 +75,25 @@ class RiggerCommands(Provider):
             )
 
 
+class GoPicker(Dialog):
+    """Centred keymap of every panel: the replacement for the nav rail."""
+
+    dialog_title = " go"
+    dialog_hint = "<key>: open   <Esc>: exit"
+    dialog_width = 48
+
+    def compose_dialog(self) -> ComposeResult:
+        yield KeyGrid([(key, label) for key, _name, label in NAV_ITEMS])
+
+    def on_key(self, event: Any) -> None:
+        for key, name, _label in NAV_ITEMS:
+            if event.key == key:
+                event.stop()
+                self.dismiss(None)
+                self.app.action_switch_screen(name)
+                return
+
+
 class RiggerApp(App):
     TITLE = "Rigger"
     CSS_PATH = "rigger.tcss"
@@ -90,6 +110,7 @@ class RiggerApp(App):
         Binding(
             "p", "show_provider_picker", "Provider", tooltip="Connect or switch the AI provider"
         ),
+        Binding("g", "show_go", "Go", tooltip="Jump to a panel"),
         Binding("question_mark", "show_help", "Help", tooltip="Show the keymap"),
         Binding("q", "quit", "Quit", tooltip="Leave Rigger"),
         Binding("f2", "toggle_theme", "Theme", tooltip="Switch light/dark palette"),
@@ -127,12 +148,8 @@ class RiggerApp(App):
         self.push_screen("home")
 
     def on_resize(self, event: Any) -> None:
-        """Collapse the nav rail in narrow terminals so nothing clips."""
-        narrow = event.size.width < 100
-        if narrow != self.narrow:
-            self.narrow = narrow
-            for rail in self.query("RiggerScreen NavRail"):
-                rail.set_class(narrow, "-collapsed")
+        """Track the narrow breakpoint; each PaneRow stacks itself on resize."""
+        self.narrow = event.size.width < PaneRow.NARROW_WIDTH
 
     def action_switch_screen(self, name: str) -> None:
         self.switch_screen(name)
@@ -140,6 +157,9 @@ class RiggerApp(App):
     def action_toggle_theme(self) -> None:
         self.theme = "rigger-light" if self.theme == "rigger-dark" else "rigger-dark"
         self.notify(f"Theme: {self.theme}")
+
+    def action_show_go(self) -> None:
+        self.push_screen(GoPicker())
 
     def action_show_help(self) -> None:
         if self.screen.name == "help":

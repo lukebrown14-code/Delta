@@ -7,6 +7,7 @@ navigation, and every row shows the key that triggers it.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
@@ -34,18 +35,34 @@ LOGO = "\n".join(
     line.ljust(max(len(row) for row in LOGO.splitlines())) for line in LOGO.splitlines()
 )
 
-# (icon, label, key, screen name or None, app action or None)
-MENU: list[tuple[str, str, str, str | None, str | None]] = [
-    ("✦", "Add a watch target", "w", "targets", None),
-    ("▤", "Read a report", "4", "reports", None),
-    ("✎", "Ask a question", "6", "chat", None),
-    ("◆", "Track a thesis", "5", "theses", None),
-    ("▦", "Evidence & spend", "2", "data", None),
-    ("❯", "Command console", "c", "console", None),
-    ("≡", "Settings", "3", "config", None),
-    ("?", "Help", "?", None, "show_help"),
-    ("×", "Quit", "q", None, "quit"),
+#: One glyph per category, not one per row: the marker says what kind of thing
+#: this is. All three are verified single-cell so the columns stay aligned.
+GROUP_GLYPH = {"do": "▸", "look": "◦", "app": "·"}
+
+
+@dataclass(frozen=True)
+class MenuItem:
+    key: str
+    label: str  # full phrase, what the prompt matches on
+    hint: str  # short form for the hint grid
+    group: str
+    screen: str | None = None
+    action: str | None = None
+
+
+MENU: list[MenuItem] = [
+    MenuItem("w", "Add a watch target", "add target", "do", screen="targets"),
+    MenuItem("4", "Read a report", "report", "do", screen="reports"),
+    MenuItem("6", "Ask a question", "ask", "do", screen="chat"),
+    MenuItem("5", "Track a thesis", "thesis", "do", screen="theses"),
+    MenuItem("2", "Evidence & spend", "evidence", "look", screen="data"),
+    MenuItem("c", "Command console", "console", "look", screen="console"),
+    MenuItem("3", "Settings", "settings", "look", screen="config"),
+    MenuItem("?", "Help", "help", "app", action="show_help"),
+    MenuItem("q", "Quit", "quit", "app", action="quit"),
 ]
+
+HINT_COLUMNS = 3
 
 PULSE_DAYS = 30
 
@@ -77,35 +94,42 @@ def _symbol(watched: list[Any], instrument_id: str) -> str:
     return instrument_id
 
 
-class MenuRow(Horizontal):
-    """One menu entry: icon, label, right-aligned hotkey. Clickable."""
+class HintCell(Horizontal):
+    """One key hint: category glyph, key, short label. Clickable."""
 
-    def __init__(self, icon: str, label: str, key: str, screen: str | None, action: str | None):
-        super().__init__(classes="menu-row")
-        self.screen_name = screen
-        self.app_action = action
-        self._icon = Static(icon, classes="menu-icon", markup=False)
-        self._label = Static(label, classes="menu-label", markup=False)
-        self._key = Static(key, classes="menu-key", markup=False)
+    def __init__(self, item: MenuItem) -> None:
+        super().__init__(classes=f"hint-cell -{item.group}")
+        self.item = item
+        self.tooltip = item.label
 
     def compose(self) -> ComposeResult:
-        yield self._icon
-        yield self._label
-        yield self._key
+        yield Static(GROUP_GLYPH[self.item.group], classes="hint-glyph", markup=False)
+        yield Static(self.item.key, classes="hint-key", markup=False)
+        yield Static(self.item.hint, classes="hint-label", markup=False)
 
     def on_click(self) -> None:
-        if self.screen_name:
-            switch = getattr(self.app, "action_switch_screen", None)
-            if callable(switch):
-                switch(self.screen_name)
-        elif self.app_action:
-            handler = getattr(self.app, f"action_{self.app_action}", None)
-            if callable(handler):
-                handler()
+        run_menu_item(self.app, self.item)
+
+
+def run_menu_item(app: Any, item: MenuItem) -> None:
+    """Dispatch a menu item, whether it names a screen or an app action."""
+    if item.screen:
+        switch = getattr(app, "action_switch_screen", None)
+        if callable(switch):
+            switch(item.screen)
+        return
+    if item.action:
+        handler = getattr(app, f"action_{item.action}", None)
+        if callable(handler):
+            handler()
 
 
 class Home(Screen):
     name = "home"
+    # Nothing is focused on arrival: #home-prompt is the first focusable
+    # widget, and while it holds focus it swallows the single-letter nav
+    # keys (1..6, w, c, ?) before they reach the app bindings.
+    AUTO_FOCUS = ""  # "" disables; None would inherit the app default of "*"
 
     DEFAULT_CSS = """
     Home {
@@ -216,12 +240,15 @@ class Home(Screen):
     }
 
     /* right column */
-    Home .menu-row { height: 1; }
-    Home .menu-icon { width: 3; color: $secondary; }
-    Home .menu-label { width: 1fr; color: $foreground; }
-    Home .menu-key { width: 4; text-align: right; color: $primary; }
-    Home .menu-row:hover { background: $surface; }
-    Home .menu-row:hover .menu-label { color: $primary; }
+    Home .hint-row { height: 1; }
+    Home .hint-cell { width: 1fr; height: 1; }
+    Home .hint-glyph { width: 2; }
+    Home .hint-key { width: 2; color: $primary; text-style: bold; }
+    Home .hint-label { width: 1fr; color: $text-muted; }
+    Home .hint-cell.-do .hint-glyph { color: $primary; }
+    Home .hint-cell.-look .hint-glyph { color: $secondary; }
+    Home .hint-cell.-app .hint-glyph { color: $text-muted; }
+    Home .hint-cell:hover .hint-label { color: $foreground; }
     Home .sec-head {
         height: 1;
         margin: 1 0 0 0;
@@ -253,8 +280,11 @@ class Home(Screen):
                 with Vertical(id="dash-left"):
                     yield Vertical(id="statbox")
                     with Vertical(id="menu-block"):
-                        for icon, label, key, screen, action in MENU:
-                            yield MenuRow(icon, label, key, screen, action)
+                        for row in range(0, len(MENU), HINT_COLUMNS):
+                            yield Horizontal(
+                                *(HintCell(item) for item in MENU[row : row + HINT_COLUMNS]),
+                                classes="hint-row",
+                            )
                 with Vertical(id="dash-right"):
                     yield Static("MARKET", classes="sec-head", markup=False)
                     yield Vertical(id="tickers")

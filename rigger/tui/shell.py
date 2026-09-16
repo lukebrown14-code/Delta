@@ -1,8 +1,12 @@
-"""Persistent shell: top status bar, left nav rail, shared screen base.
+"""Persistent shell: the footer nav strip, statusline and shared screen base.
 
-All shell styling lives in ``DEFAULT_CSS`` on these classes so the screens
-that double as standalone panels (reports, theses, chat) keep the shell when
-mounted under any App, and inherit theme tokens when a Rigger theme is active.
+There is no nav rail and no top bar. Navigation is keyboard-driven (number
+keys, ``g``, the command palette) and the chrome is two docked rows: a
+footer listing every panel with its hotkey, the current one highlighted,
+and a statusline. Shell styling lives in ``DEFAULT_CSS`` so the screens
+that double as standalone panels (reports, theses, chat) keep the shell
+when mounted under any App, and inherit theme tokens when a Rigger theme
+is active.
 """
 
 from __future__ import annotations
@@ -12,10 +16,10 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from textual.app import ComposeResult
-from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.containers import Horizontal, Vertical
 from textual.message import Message
 from textual.screen import Screen
-from textual.widgets import Footer, Static
+from textual.widgets import Static
 
 from rigger import services
 from rigger.tui.widgets import StatusDot
@@ -46,63 +50,156 @@ def age_text(age: timedelta) -> tuple[str, str]:
     return f"{int(seconds // 86400)}d", "error"
 
 
-class TopBar(Horizontal):
-    """Brand plus live status cells: data freshness, model, spend."""
+class NavKey(Static):
+    """One footer entry: hotkey plus panel name, clickable."""
+
+    class Selected(Message):
+        """Posted when a footer entry is clicked."""
+
+        def __init__(self, screen_name: str) -> None:
+            super().__init__()
+            self.screen_name = screen_name
 
     DEFAULT_CSS = """
-    TopBar {
-        height: 3;
-        background: $panel;
-        border-top: outer $primary;
-        align: center middle;
-    }
-    TopBar #tb-brand {
+    NavKey {
         width: auto;
         height: 1;
-        padding: 0 2;
-        color: $primary;
-        text-style: bold;
-    }
-    TopBar #tb-stats {
-        align-horizontal: right;
-        height: 1;
-    }
-    TopBar .tb-cell {
-        height: 1;
-        padding: 0 2;
-        border-left: inner $panel;
+        padding: 0 1;
         color: $text-muted;
     }
-    TopBar .tb-cell .tb-value { color: $foreground; width: auto; }
+    NavKey.-active {
+        background: $primary;
+        color: $background;
+        text-style: bold;
+    }
+    NavKey:hover {
+        background: $surface;
+    }
     """
 
-    def __init__(self, rig: Any) -> None:
+    def __init__(self, key: str, screen_name: str, label: str) -> None:
+        super().__init__(id=f"nav-{screen_name}")
+        self.screen_name = screen_name
+        self._key = key
+        self._label = label
+        self.render_label(compact=False, active=False)
+
+    def render_label(self, *, compact: bool, active: bool) -> None:
+        """Show the label unless the strip is too narrow to fit every name.
+
+        The active entry always keeps its label: it is the only thing naming
+        the panel you are on.
+        """
+        show_label = active or not compact
+        self.update(f"[b]{self._key}[/b] {self._label}" if show_label else f"[b]{self._key}[/b]")
+
+    def on_click(self) -> None:
+        self.post_message(NavKey.Selected(self.screen_name))
+
+
+class NavStrip(Horizontal):
+    """Footer listing every panel and its hotkey, current one highlighted."""
+
+    #: The eight labelled entries need 81 columns. Below that every entry
+    #: but the active one drops to its hotkey alone.
+    COMPACT_WIDTH = 81
+
+    DEFAULT_CSS = """
+    NavStrip {
+        height: 1;
+        background: $panel;
+    }
+    """
+
+    def __init__(self, active: str = "") -> None:
         super().__init__()
-        self.rig = rig
-        self._dot = StatusDot("warn", id="tb-dot")
-        self._freshness = Static("data —", markup=False, classes="tb-value")
-        self._model = Static("", markup=False, classes="tb-value")
-        self._spend = Static("", markup=False, classes="tb-value")
+        self._items = {name: NavKey(key, name, label) for key, name, label in NAV_ITEMS}
+        self._active = active
+        self._compact = False
 
     def compose(self) -> ComposeResult:
-        yield Static("RIGGER", id="tb-brand", markup=False)
-        with Horizontal(id="tb-stats"):
-            with Horizontal(classes="tb-cell"):
-                yield self._dot
-                yield self._freshness
-            with Horizontal(classes="tb-cell"):
-                yield Static("model", markup=False)
-                yield self._model
-            with Horizontal(classes="tb-cell"):
-                yield Static("spend", markup=False)
-                yield self._spend
+        yield from self._items.values()
+
+    def on_mount(self) -> None:
+        self.set_active(self._active)
+
+    def on_resize(self, event: Any) -> None:
+        self._compact = event.size.width < self.COMPACT_WIDTH
+        self._render_items()
+
+    def set_active(self, screen_name: str) -> None:
+        self._active = screen_name
+        self._render_items()
+
+    def _render_items(self) -> None:
+        for name, item in self._items.items():
+            active = name == self._active
+            item.set_class(active, "-active")
+            item.render_label(compact=self._compact, active=active)
+
+
+class StatusLine(Horizontal):
+    """One-row bottom chrome: screen context and live status cells.
+
+    The panel name is not repeated here — the nav strip above highlights it.
+    """
+
+    DEFAULT_CSS = """
+    StatusLine {
+        height: 1;
+        background: $panel;
+    }
+    StatusLine #sl-context {
+        width: 1fr;
+        padding: 0 1;
+        color: $text-muted;
+    }
+    StatusLine .sl-value {
+        width: auto;
+        padding: 0 1;
+        color: $foreground;
+    }
+    StatusLine #sl-dot {
+        width: 2;
+        padding: 0 0 0 1;
+    }
+    StatusLine #sl-keys {
+        width: auto;
+        padding: 0 1;
+        color: $text-muted;
+    }
+    """
+
+    def __init__(self, rig: Any, context: str = "") -> None:
+        super().__init__()
+        self.rig = rig
+        # NB: not ``self._context`` — that name shadows a Textual MessagePump
+        # attribute and silently deadlocks the widget's message loop.
+        self._ctx = Static(context, id="sl-context", markup=False)
+        self._dot = StatusDot("warn", id="sl-dot")
+        self._freshness = Static("data —", markup=False, classes="sl-value")
+        self._model = Static("", markup=False, classes="sl-value")
+        self._spend = Static("", markup=False, classes="sl-value")
+
+    def compose(self) -> ComposeResult:
+        # Flat children only: auto-width Horizontals nested inside a docked
+        # auto row deadlock Textual's layout pass.
+        yield self._ctx
+        yield self._dot
+        yield self._freshness
+        yield self._model
+        yield self._spend
+        yield Static("? help · ^p go", id="sl-keys", markup=False)
 
     def on_mount(self) -> None:
         self._refresh()
         self.set_interval(30, self._refresh)
 
+    def set_context(self, text: str) -> None:
+        self._ctx.update(text)
+
     def _refresh(self) -> None:
-        """Update status cells; the bar must never take a screen down."""
+        """Update status cells; the statusline must never take a screen down."""
         try:
             health = services.data_health(self.rig)
             if health.latest_bar:
@@ -123,110 +220,44 @@ class TopBar(Horizontal):
             self._dot.set_state("warn")
 
 
-class NavItem(Horizontal):
-    """One clickable rail entry: key hint plus label."""
+class ScreenFooter(Vertical):
+    """The two docked chrome rows: nav strip above, statusline below.
 
-    class Selected(Message):
-        """Posted when a nav item is clicked."""
-
-        def __init__(self, screen_name: str) -> None:
-            super().__init__()
-            self.screen_name = screen_name
-
-    DEFAULT_CSS = """
-    NavItem {
-        height: 3;
-        padding: 0 1;
-        align-vertical: middle;
-        background: transparent;
-    }
-    NavItem .rail-key {
-        width: 3;
-        height: 1;
-        color: $text-muted;
-        text-style: bold;
-    }
-    NavItem .rail-label {
-        height: 1;
-        padding-left: 1;
-        color: $foreground;
-    }
-    NavItem.-active {
-        background: $surface;
-        border-left: thick $primary;
-    }
-    NavItem.-active .rail-key { color: $primary; }
-    NavItem:hover { background: $surface; }
+    They share one docked container because two widgets docked to the same
+    edge independently resolve to the same row rather than stacking.
     """
 
-    def __init__(self, key: str, screen_name: str, label: str) -> None:
-        super().__init__(id=f"nav-{screen_name}")
-        self.screen_name = screen_name
-        self._key = Static(key, classes="rail-key", markup=False)
-        self._label = Static(label.upper(), classes="rail-label", markup=False)
-
-    def compose(self) -> ComposeResult:
-        yield self._key
-        yield self._label
-
-    def on_click(self) -> None:
-        self.post_message(NavItem.Selected(self.screen_name))
-
-
-class NavRail(Vertical):
-    """Persistent left navigation column, one NavItem per screen."""
-
     DEFAULT_CSS = """
-    NavRail {
-        width: 18;
-        background: $panel;
-        padding: 1 0;
-    }
-    NavRail.-collapsed {
-        width: 6;
-    }
-    NavRail.-collapsed .rail-label {
-        display: none;
-    }
-    NavRail.-collapsed .rail-key {
-        width: 4;
-        color: $primary;
-        text-style: bold;
+    ScreenFooter {
+        dock: bottom;
+        height: 2;
     }
     """
 
-    def __init__(self) -> None:
+    def __init__(self, rig: Any, *, active: str = "") -> None:
         super().__init__()
-        self._items = {name: NavItem(key, name, label) for key, name, label in NAV_ITEMS}
+        self.rig = rig
+        self._active = active
 
     def compose(self) -> ComposeResult:
-        yield from self._items.values()
-
-    def on_mount(self) -> None:
-        self.set_active(self.screen.name or "")
-        self.set_class(bool(getattr(self.app, "narrow", False)), "-collapsed")
-
-    def set_active(self, screen_name: str) -> None:
-        for name, item in self._items.items():
-            item.set_class(name == screen_name, "-active")
+        yield NavStrip(active=self._active)
+        yield StatusLine(self.rig)
 
 
 class RiggerScreen(Screen):
-    """Base screen: TopBar, NavRail + content, Footer.
+    """Base screen: pane content above a docked nav footer and statusline.
 
     Screens implement ``compose_content`` and keep their ``name`` class
-    attribute. ``on_screen_resume`` re-runs ``refresh_view`` when defined,
-    fixing data frozen at launch (screens are constructed eagerly).
+    attribute. Content is *not* wrapped in a scroller — a screen that needs
+    scrolling puts a ``VerticalScroll`` inside its own ``Pane``, so there is
+    never more than one scroll region. ``on_screen_resume`` re-runs
+    ``refresh_view`` when defined, fixing data frozen at launch (screens are
+    constructed eagerly).
     """
 
     DEFAULT_CSS = """
     RiggerScreen {
         layout: vertical;
-    }
-    RiggerScreen #screen-body {
-        height: 1fr;
-    }
-    RiggerScreen #screen-content {
         padding: 0 1;
     }
     """
@@ -236,26 +267,29 @@ class RiggerScreen(Screen):
         self.rig = rig
 
     def compose(self) -> ComposeResult:
-        yield TopBar(self.rig)
-        with Horizontal(id="screen-body"):
-            yield NavRail()
-            with VerticalScroll(id="screen-content"):
-                yield from self.compose_content()
-        yield Footer()
+        yield from self.compose_content()
+        yield ScreenFooter(self.rig, active=self.name or "")
 
     def compose_content(self) -> ComposeResult:
         raise NotImplementedError
         yield  # pragma: no cover
 
+    def set_context(self, text: str) -> None:
+        """Update the statusline's middle cell, if it is mounted."""
+        try:
+            self.query_one(StatusLine).set_context(text)
+        except Exception:
+            pass
+
+    def on_nav_key_selected(self, event: NavKey.Selected) -> None:
+        switch = getattr(self.app, "action_switch_screen", None)
+        if callable(switch):
+            switch(event.screen_name)
+
     async def on_screen_resume(self) -> None:
-        self.query_one(NavRail).set_active(self.name or "")
+        self.query_one(NavStrip).set_active(self.name or "")
         refresh = getattr(self, "refresh_view", None)
         if callable(refresh):
             result = refresh()
             if inspect.isawaitable(result):
                 await result
-
-    def on_nav_item_selected(self, event: NavItem.Selected) -> None:
-        switch = getattr(self.app, "action_switch_screen", None)
-        if callable(switch):
-            switch(event.screen_name)
