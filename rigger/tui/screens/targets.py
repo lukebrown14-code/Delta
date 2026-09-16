@@ -47,7 +47,6 @@ class TargetAddModal(Dialog):
         super().__init__()
         self.rig = rig
         self._search_task: asyncio.Task | None = None
-        self._search_debounce_task: asyncio.Task | None = None
         self._search_generation = 0
         self._results_by_symbol: dict[str, SearchResult] = {}
         self._suppress_name_search = False
@@ -145,7 +144,8 @@ class TargetAddModal(Dialog):
         if generation != self._search_generation:
             return
         self._set_network("● online · Yahoo", "online")
-        self._show_results(results or self._local_results(query))
+        supported = [result for result in results if result.market in self._suffixes]
+        self._show_results(supported or self._local_results(query))
 
     def on_input_changed(self, event: Input.Changed) -> None:
         if event.input.id != "tg-name":
@@ -154,8 +154,6 @@ class TargetAddModal(Dialog):
             self._suppress_name_search = False
             return
         self._search_generation += 1
-        if self._search_debounce_task:
-            self._search_debounce_task.cancel()
         if self._search_task:
             self._search_task.cancel()
         query = event.value.strip()
@@ -203,8 +201,6 @@ class TargetAddModal(Dialog):
             options.focus()
 
     async def on_unmount(self) -> None:
-        if self._search_debounce_task:
-            self._search_debounce_task.cancel()
         if self._search_task:
             self._search_task.cancel()
 
@@ -317,6 +313,7 @@ class Targets(RiggerScreen):
                 yield Static("", id="tg-details", markup=False)
                 yield Static("", id="tg-form")
                 with Horizontal(id="tg-actions"):
+                    yield Button("enter refresh", id="tg-refresh-hint")
                     yield Button("/ filter", id="tg-search")
                     yield Button("a add", id="tg-add")
                     yield Button("d remove", id="tg-remove")
@@ -640,6 +637,7 @@ class Targets(RiggerScreen):
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         actions = {
+            "tg-refresh-hint": self.action_inspect,
             "tg-add": self.action_add,
             "tg-remove": self.action_remove,
             "tg-search": self.action_filter,
