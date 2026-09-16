@@ -42,6 +42,7 @@ def _cfg(**overrides: Any) -> SimpleNamespace:
         },
         "llm_base_url": "",
         "llm_api_key_env": "",
+        "llm_max_output_tokens": 4096,
     }
     values.update(overrides)
     return SimpleNamespace(**values)
@@ -69,6 +70,8 @@ class _FakeApp:
 
 def test_set_env_value_appends_creates_and_replaces(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("UNRELATED", raising=False)
     ENV_PATH.write_text("UNRELATED=keep-me\n", encoding="utf-8")
 
     set_env_value("OPENAI_API_KEY", "sk-first")
@@ -89,14 +92,21 @@ def test_read_env_value_missing_is_empty(monkeypatch, tmp_path):
     assert read_env_value("NOT_THERE") == ""
 
 
+def test_read_env_value_environment_beats_dotenv(monkeypatch, tmp_path):
+    """An exported shell variable must win, matching Settings' precedence."""
+    monkeypatch.chdir(tmp_path)
+    ENV_PATH.write_text("OPENAI_API_KEY=from-file\n", encoding="utf-8")
+    monkeypatch.setenv("OPENAI_API_KEY", "from-shell")
+
+    assert read_env_value("OPENAI_API_KEY") == "from-shell"
+
+
 # --- config.toml writebacks ----------------------------------------------------
 
 
 def test_set_llm_provider_round_trips(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
-    (tmp_path / "config.toml").write_text(
-        '[llm]\nprovider = "openrouter"\n', encoding="utf-8"
-    )
+    (tmp_path / "config.toml").write_text('[llm]\nprovider = "openrouter"\n', encoding="utf-8")
 
     set_llm_provider("anthropic")
 
@@ -128,26 +138,41 @@ def test_set_llm_custom_round_trips(monkeypatch, tmp_path):
 @respx.mock
 def test_compat_models_parses_endpoint(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
-    respx.get("https://api.openai.com/v1/models").mock(
+    route = respx.get("https://api.openai.com/v1/models").mock(
         return_value=httpx.Response(
             200, json={"data": [{"id": "gpt-4o", "name": "GPT-4o"}, {"id": "gpt-4o-mini"}]}
         )
     )
-    provider = OpenAICompatProvider(PROVIDERS["openai"], "k")
+    provider = OpenAICompatProvider(PROVIDERS["openai"], "sk-k")
 
     models = asyncio.run(provider.models())
 
     assert [m.id for m in models] == ["gpt-4o", "gpt-4o-mini"]
     assert all(m.prompt_price == 0.0 for m in models)
+    assert route.calls.last.request.headers["Authorization"] == "Bearer sk-k"
+
+
+@respx.mock
+def test_compat_models_sends_anthropic_native_auth(monkeypatch, tmp_path):
+    """Anthropic's compat layer authenticates with x-api-key, not Bearer alone."""
+    monkeypatch.chdir(tmp_path)
+    route = respx.get("https://api.anthropic.com/v1/models").mock(
+        return_value=httpx.Response(200, json={"data": []})
+    )
+    provider = OpenAICompatProvider(PROVIDERS["anthropic"], "sk-ant")
+
+    asyncio.run(provider.models())
+
+    headers = route.calls.last.request.headers
+    assert headers["x-api-key"] == "sk-ant"
+    assert headers["anthropic-version"] == "2023-06-01"
 
 
 @respx.mock
 def test_compat_models_degrades_on_missing_endpoint(monkeypatch, tmp_path):
     """Anthropic's compat layer has no /models: the picker falls back to free text."""
     monkeypatch.chdir(tmp_path)
-    respx.get("https://api.anthropic.com/v1/models").mock(
-        return_value=httpx.Response(404)
-    )
+    respx.get("https://api.anthropic.com/v1/models").mock(return_value=httpx.Response(404))
     provider = OpenAICompatProvider(PROVIDERS["anthropic"], "k")
 
     assert asyncio.run(provider.models()) == []
@@ -158,6 +183,24 @@ def test_compat_get_client_requires_base_url():
 
     with pytest.raises(RuntimeError, match="base URL"):
         provider._get_client()
+
+
+# --- legacy config fallback ----------------------------------------------------
+
+
+def test_build_llm_falls_back_on_legacy_provider_name(tmp_engine, monkeypatch, tmp_path):
+    """A config naming a removed provider (e.g. "litellm") must not crash startup."""
+    monkeypatch.chdir(tmp_path)
+    from rigger.runtime import Rigger
+
+    rig = Rigger.__new__(Rigger)
+    rig.settings = SimpleNamespace(openrouter_api_key="", openai_api_key="", anthropic_api_key="")
+    rig.cfg = _cfg(llm_provider="litellm")
+    rig.engine = tmp_engine
+
+    client = rig._build_llm()
+
+    assert client.provider.name == "openrouter"
 
 
 # --- verify_key ----------------------------------------------------------------
@@ -224,6 +267,7 @@ def test_normalize_base_url_adds_scheme():
 
 def test_connect_provider_saves_key_verifies_and_switches(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     (tmp_path / "config.toml").write_text('[llm]\nprovider = "openrouter"\n', encoding="utf-8")
     app = _FakeApp()
     app.push_screen_wait = lambda modal: _async_return("sk-new")  # type: ignore[method-assign]
@@ -244,6 +288,7 @@ def test_connect_provider_saves_key_verifies_and_switches(monkeypatch, tmp_path)
 
 def test_connect_provider_cancelled_modals_do_nothing(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     (tmp_path / "config.toml").write_text('[llm]\nprovider = "openrouter"\n', encoding="utf-8")
     app = _FakeApp()
     app.push_screen_wait = lambda modal: _async_return(None)  # type: ignore[method-assign]
@@ -259,6 +304,7 @@ def test_connect_provider_cancelled_modals_do_nothing(monkeypatch, tmp_path):
 
 def test_connect_provider_existing_key_skips_modal(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     (tmp_path / "config.toml").write_text('[llm]\nprovider = "openrouter"\n', encoding="utf-8")
     ENV_PATH.write_text("ANTHROPIC_API_KEY=sk-ant-existing\n", encoding="utf-8")
 

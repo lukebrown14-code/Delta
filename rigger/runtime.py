@@ -14,6 +14,7 @@ from rigger.core.plugin import (
     discover_targets,
 )
 from rigger.llm.client import LLMClient, build_client
+from rigger.llm.providers import PROVIDERS
 from rigger.plugins.targets.tickers import (
     CompanyTarget,
     IndustryTarget,
@@ -67,8 +68,14 @@ class Rigger:
         }
         custom_env = self.cfg.llm_api_key_env or "CUSTOM_API_KEY"
         keys[custom_env] = config_mod.read_env_value(custom_env)
+        provider = self.cfg.llm_provider
+        if provider not in PROVIDERS:
+            # Legacy configs may still name a removed provider (e.g. "litellm");
+            # fall back to the default so the app starts and the Config screen's
+            # unknown-provider check can guide the fix.
+            provider = "openrouter"
         return build_client(
-            provider=self.cfg.llm_provider,
+            provider=provider,
             engine=self.engine,
             api_keys=keys,
             max_output_tokens=self.cfg.llm_max_output_tokens,

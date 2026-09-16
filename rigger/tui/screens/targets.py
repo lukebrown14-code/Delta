@@ -6,33 +6,64 @@ from typing import Any
 
 from rich.text import Text
 from textual.app import ComposeResult
-from textual.containers import Horizontal
+from textual.containers import Horizontal, Vertical
 from textual.widgets import Button, Input
 
 from rigger import services
 from rigger.tui.shell import RiggerScreen
-from rigger.tui.widgets import Card, RiggerTable
+from rigger.tui.widgets import Pane, PaneRow, RiggerTable
 
 
 class Targets(RiggerScreen):
     name = "targets"
 
+    CSS = """
+    #target-split {
+        height: 1fr;
+    }
+    #target-list-pane {
+        width: 1fr;
+    }
+    #target-form-pane {
+        width: 32;
+    }
+    #target-table {
+        height: 1fr;
+        margin: 0;
+    }
+    .tg-form {
+        height: auto;
+    }
+    .tg-form Input {
+        width: 1fr;
+        margin: 0;
+    }
+    .tg-buttons {
+        height: auto;
+    }
+    """
+
     def __init__(self, rig: Any) -> None:
         super().__init__(rig)
 
     def compose_content(self) -> ComposeResult:
-        yield RiggerTable(id="target-table")
-        with Card(title="Add a target", classes="tg-card"):
-            yield Horizontal(
-                Input(placeholder="name", id="tg-name"),
-                Input(placeholder="kind (company|sector|industry|market|theme)", id="tg-kind"),
-                Input(placeholder="market (us|asx)", id="tg-market"),
-                Input(placeholder="tickers (BHP,RIO)", id="tg-tickers"),
-                Input(placeholder="tags (a,b)", id="tg-tags"),
-                Button("Add", id="tg-add", variant="primary"),
-                Button("Remove", id="tg-remove", variant="error"),
-                classes="tg-form",
-            )
+        with PaneRow(id="target-split"):
+            with Pane(title="targets", icon="", id="target-list-pane"):
+                yield RiggerTable(id="target-table")
+            with Pane(title="add a target", icon="", id="target-form-pane"):
+                yield Vertical(
+                    Input(placeholder="name", id="tg-name"),
+                    Input(placeholder="kind (company|sector|…)", id="tg-kind"),
+                    Input(placeholder="market (us|asx)", id="tg-market"),
+                    Input(placeholder="tickers (BHP,RIO)", id="tg-tickers"),
+                    Input(placeholder="tags (a,b)", id="tg-tags"),
+                    Horizontal(
+                        Button("Add", id="tg-add", variant="primary"),
+                        Button("Remove", id="tg-remove", variant="error"),
+                        classes="tg-buttons",
+                    ),
+                    classes="tg-form",
+                )
 
     def on_mount(self) -> None:
         self.query_one("#target-table", RiggerTable).add_columns(
@@ -43,7 +74,9 @@ class Targets(RiggerScreen):
     def refresh_view(self) -> None:
         table = self.query_one("#target-table", RiggerTable)
         table.clear()
-        for target in sorted(services.target_specs().values(), key=lambda t: t.id):
+        specs = sorted(services.target_specs().values(), key=lambda t: t.id)
+        self.query_one("#target-list-pane", Pane).set_badge(str(len(specs)))
+        for target in specs:
             table.add_row(
                 target.id,
                 Text(target.kind, style="cyan"),

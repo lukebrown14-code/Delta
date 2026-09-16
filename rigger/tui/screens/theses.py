@@ -20,7 +20,7 @@ from rigger import theses, thesis_summary
 from rigger.evidence import EvidenceItem, cite, evidence_by_ids
 from rigger.thesis_health import badge_text, compute_health
 from rigger.tui.shell import RiggerScreen
-from rigger.tui.widgets import Pill, RiggerTable, health_variant
+from rigger.tui.widgets import Pane, PaneRow, Pill, RiggerTable, health_variant
 
 
 class Theses(RiggerScreen):
@@ -30,9 +30,8 @@ class Theses(RiggerScreen):
     #thesis-split {
         height: 1fr;
     }
-    #thesis-left {
+    #thesis-claims {
         width: 34;
-        height: 1fr;
     }
     #thesis-table {
         height: 1fr;
@@ -42,12 +41,19 @@ class Theses(RiggerScreen):
     }
     #thesis-form Input {
         width: 1fr;
-        margin: 0 1 1 0;
+        margin: 0;
     }
-    #thesis-detail {
+    .thesis-buttons {
+        height: auto;
+    }
+    #thesis-detail-pane {
         width: 1fr;
+    }
+    #thesis-evidence-pane {
+        width: 40;
+    }
+    #thesis-detail, #thesis-evidence {
         height: 1fr;
-        margin: 0 0 0 1;
     }
     .thesis-claim {
         text-style: bold;
@@ -72,24 +78,42 @@ class Theses(RiggerScreen):
     .side-neutral { color: $warning; }
     """
 
+    #: Below this width the evidence pane folds into the detail column: three
+    #: columns leave the detail pane a few characters wide on a small terminal.
+    WIDE_WIDTH = 110
+
     def __init__(self, rig: Any) -> None:
         super().__init__(rig)
+        self._wide = True
         self.selected: str | None = None
         self.candidates: list[theses.ThesisEvidence] = []
         self._summary: thesis_summary.ThesisSummary | None = None
 
     def compose_content(self) -> ComposeResult:
-        with Horizontal(id="thesis-split"):
-            with Vertical(id="thesis-left"):
+        with PaneRow(id="thesis-split"):
+            with Pane(title="claims", icon="", id="thesis-claims"):
                 yield RiggerTable(id="thesis-table")
-                with Horizontal(id="thesis-form"):
+                with Vertical(id="thesis-form"):
                     yield Input(placeholder="claim", id="th-claim")
                     yield Input(placeholder="targets (US:AAPL,US:MSFT)", id="th-targets")
                     yield Input(placeholder="time horizon (e.g. 10y)", id="th-horizon")
-                    yield Button("Add", id="th-add", variant="primary")
-                    yield Button("Summarise", id="th-summarise")
-            with VerticalScroll(id="thesis-detail"):
-                yield Static("Select a thesis to see its evidence.", classes="diagram")
+                    with Horizontal(classes="thesis-buttons"):
+                        yield Button("Add", id="th-add", variant="primary")
+                        yield Button("Summarise", id="th-summarise")
+            with Pane(title="detail", icon="", id="thesis-detail-pane"):
+                with VerticalScroll(id="thesis-detail"):
+                    yield Static("Select a thesis to see its evidence.", classes="muted")
+            with Pane(title="evidence", icon="", id="thesis-evidence-pane"):
+                with VerticalScroll(id="thesis-evidence"):
+                    yield Static("", classes="muted")
+
+    async def on_resize(self, event) -> None:
+        wide = event.size.width >= self.WIDE_WIDTH
+        if wide == self._wide:
+            return
+        self._wide = wide
+        self.query_one("#thesis-evidence-pane").display = wide
+        await self.render_detail()
 
     async def on_mount(self) -> None:
         table = self.query_one("#thesis-table", RiggerTable)
@@ -100,8 +124,10 @@ class Theses(RiggerScreen):
     def refresh_list(self) -> None:
         table = self.query_one("#thesis-table", RiggerTable)
         table.clear()
-        for thesis in theses.list_theses(self.rig.engine):
+        rows = theses.list_theses(self.rig.engine)
+        for thesis in rows:
             table.add_row(thesis.claim, thesis.status, key=thesis.id)
+        self.query_one("#thesis-claims", Pane).set_badge(str(len(rows)))
 
     async def on_data_table_row_selected(self, event: RiggerTable.RowSelected) -> None:
         if event.row_key.value is not None:
@@ -168,10 +194,13 @@ class Theses(RiggerScreen):
     async def render_detail(self) -> None:
         """Rebuild the detail pane for the selected thesis, or the empty prompt."""
         detail = self.query_one("#thesis-detail", VerticalScroll)
+        evidence = self.query_one("#thesis-evidence", VerticalScroll)
         await detail.remove_children()
+        await evidence.remove_children()
         self.candidates = []
         if self.selected is None:
-            await detail.mount(Static("Select a thesis to see its evidence.", classes="diagram"))
+            await detail.mount(Static("Select a thesis to see its evidence.", classes="muted"))
+            self.query_one("#thesis-evidence-pane", Pane).set_badge("")
             return
         try:
             thesis = theses.get_thesis(self.rig.engine, self.selected)
@@ -218,13 +247,16 @@ class Theses(RiggerScreen):
                         classes="thesis-line",
                     )
                 )
+        # The accepted-evidence sides live in their own pane: the detail pane
+        # stays a readable column, the evidence pane a scannable list.
+        sides: list[Widget] = []
         for heading, side in (
             ("Supporting", "support"),
             ("Against", "against"),
             ("Unknown", "neutral"),
         ):
             accepted_rows = groups[side]
-            widgets.append(
+            sides.append(
                 Collapsible(
                     *(self._line_widget(row, cites, side) for row in accepted_rows)
                     or (Static("none yet", markup=False, classes="muted"),),
@@ -233,11 +265,17 @@ class Theses(RiggerScreen):
                     classes=f"side-{side}",
                 )
             )
-        await detail.mount(*widgets)
+        accepted = sum(len(rows) for rows in groups.values())
+        self.query_one("#thesis-evidence-pane", Pane).set_badge(str(accepted))
+        if self._wide:
+            await detail.mount(*widgets)
+            await evidence.mount(*sides)
+        else:
+            await detail.mount(*widgets, *sides)
 
     def _summary_widgets(self) -> list[Widget]:
         if self._summary is None:
-            return [Static("press Summarise to generate", classes="diagram")]
+            return [Static("press Summarise to generate", classes="muted")]
         widgets = [
             Static("Summary", classes="thesis-claim"),
             Static(self._summary.summary, markup=False),

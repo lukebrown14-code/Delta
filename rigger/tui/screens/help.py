@@ -1,16 +1,104 @@
-"""Keyboard help screen: the keymap is generated from the app's BINDINGS."""
+"""Help screen: a getting-started tutorial plus a keymap generated from BINDINGS."""
 
 from __future__ import annotations
 
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, VerticalScroll
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import Screen
-from textual.widgets import Static
+from textual.widgets import Markdown, Static, TabbedContent, TabPane
 
 from rigger.tui.widgets import KeyHint
 
 KEY_DISPLAY = {"question_mark": "?"}
+
+# Plain-language tour. Kept as a module constant so the README can
+# reuse the exact same words the TUI shows.
+TUTORIAL = """\
+# Welcome to Rigger
+
+Rigger reads for you. It collects facts about the companies you care about,
+keeps them in one place, and writes summaries where **every claim points back
+to the fact it came from**.
+
+It does not trade, it does not size positions, and it will not tell you what
+to buy or sell. The point is clarity, not tips.
+
+---
+
+## 1. Tell it what you care about
+
+Press **w** for Targets.
+
+A *target* is anything you want watched — one company, a whole sector, or a
+theme. Fill in the row at the bottom and press **Add**:
+
+| Field | Example |
+| --- | --- |
+| name | `iron-ore` |
+| kind | `industry` |
+| market | `asx` |
+| tickers | `BHP,RIO,FMG` |
+
+Prefer typing? Press **c** for the console and run:
+
+```
+target add iron-ore --kind industry --market asx --tickers BHP,RIO
+```
+
+## 2. Let it go collect
+
+Open the command palette (**ctrl+p**) and run **Gather evidence**.
+
+`ingest` pulls prices, news, filings and earnings dates into a local database,
+and `extract` turns the news into structured facts. Gather runs both.
+
+Press **2** for Data to see what landed — row counts, how fresh each feed is,
+and what the model has cost you so far.
+
+## 3. Read what it found
+
+Press **4** for Reports.
+
+Pick a target, press **Generate**, and wait. You get a written summary with a
+citation on every claim. If a sentence could not be traced back to something
+collected in step 2, it gets dropped rather than guessed.
+
+The contents panel on the left jumps between sections.
+
+## 4. Ask it questions
+
+Press **6** for Ask.
+
+Tick the targets you want in scope, then type a question. Answers come only
+from the evidence collected in step 2 — not from the model's own memory.
+
+Web search is a toggle, it is **off by default**, and anything it returns is
+used once and never saved.
+
+## 5. Track an idea over time
+
+Press **5** for Theses.
+
+Write down something you believe — *"iron ore volumes hold up through 2027"* —
+and Rigger proposes evidence for and against it as new facts arrive.
+
+You accept or reject each piece yourself. The model only ever *suggests*; it
+never decides what counts, and the health badge is calculated from what you
+accepted, not from an opinion.
+
+---
+
+## Worth knowing
+
+- **Everything is cited.** You can always check the AI's working.
+- **Nothing is a recommendation.** No buy, sell or position sizing, by design.
+- **Your data stays local.** Evidence lives in a SQLite file in the project.
+- Press **m** to change which model is used on the current screen.
+- Press **f2** to switch between the dark and light palettes.
+
+Press **?** or **escape** to close this help.
+"""
 
 
 class HelpScreen(Screen):
@@ -24,8 +112,8 @@ class HelpScreen(Screen):
         background: $background 60%;
     }
     HelpScreen #help-dialog {
-        width: 76;
-        max-height: 90%;
+        width: 84;
+        height: 90%;
         background: $surface;
         border: round $primary;
         padding: 1 2;
@@ -34,6 +122,12 @@ class HelpScreen(Screen):
         color: $primary;
         text-style: bold;
         margin: 0 0 1 0;
+    }
+    HelpScreen #help-tabs {
+        height: 1fr;
+    }
+    HelpScreen Markdown {
+        background: transparent;
     }
     HelpScreen .help-row {
         height: 1;
@@ -45,25 +139,27 @@ class HelpScreen(Screen):
     """
 
     def compose(self) -> ComposeResult:
-        with VerticalScroll(id="help-dialog"):
+        with Vertical(id="help-dialog"):
             yield Static("Rigger help", classes="help-title", markup=False)
-            yield Static(
-                "Rigger gathers market data and filings, stores them as cited\n"
-                "evidence, and lets an AI summarise them into sourced reports.\n"
-                "Facts come from the data, not the model.",
-                markup=False,
-                classes="muted",
+            with TabbedContent(id="help-tabs"):
+                with TabPane("Getting started", id="help-tour"):
+                    yield Markdown(TUTORIAL)
+                with TabPane("Keys", id="help-keys"):
+                    yield VerticalScroll(*self._key_rows())
+
+    def _key_rows(self) -> list[Horizontal]:
+        """One row per visible binding, generated so it cannot drift from the footer."""
+        rows: list[Horizontal] = []
+        for binding in self.app.BINDINGS:
+            if not binding.show:
+                continue
+            key = KEY_DISPLAY.get(binding.key) or binding.key_display or binding.key
+            description = binding.description + (f" — {binding.tooltip}" if binding.tooltip else "")
+            rows.append(
+                Horizontal(
+                    KeyHint(key),
+                    Static(description, markup=False),
+                    classes="help-row",
+                )
             )
-            # Generated from app.BINDINGS so this list cannot drift from the footer.
-            for binding in self.app.BINDINGS:
-                if not binding.show:
-                    continue
-                with Horizontal(classes="help-row"):
-                    yield KeyHint(
-                        KEY_DISPLAY.get(binding.key, binding.key_display or binding.key)
-                    )
-                    yield Static(
-                        f"{binding.description}"
-                        + (f" — {binding.tooltip}" if binding.tooltip else ""),
-                        markup=False,
-                    )
+        return rows

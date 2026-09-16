@@ -2,18 +2,19 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from textual import work
 from textual.app import ComposeResult
-from textual.containers import Horizontal
-from textual.widgets import Button, MarkdownViewer
+from textual.containers import Horizontal, VerticalScroll
+from textual.widgets import Button, MarkdownViewer, Static
 
 from rigger import services
 from rigger.reports import build_report, write_report
-from rigger.tui.shell import RiggerScreen
-from rigger.tui.widgets import Card, RiggerTable
+from rigger.tui.shell import RiggerScreen, age_text
+from rigger.tui.widgets import Pane, PaneRow, PaneStack, RiggerTable, StatusDot
 
 
 class Reports(RiggerScreen):
@@ -28,17 +29,24 @@ class Reports(RiggerScreen):
     #report-split {
         height: 1fr;
     }
-    #report-split Card {
-        height: 1fr;
-    }
-    #report-list {
-        width: 44;
-    }
     #report-doc {
         width: 1fr;
+        margin-right: 1;
+    }
+    #report-stack {
+        width: 38;
+        border-left: solid $panel;
+        padding-left: 1;
+    }
+    #report-targets-pane {
+        height: auto;
+    }
+    #report-cites-pane, #report-fresh-pane {
+        height: 1fr;
     }
     #report-targets {
-        height: 1fr;
+        height: auto;
+        max-height: 14;
     }
     #report-actions {
         height: auto;
@@ -47,19 +55,38 @@ class Reports(RiggerScreen):
     #report-view {
         height: 1fr;
     }
+    #report-cites, #report-fresh {
+        height: 1fr;
+    }
+    .cite-line {
+        height: auto;
+        color: $text-muted;
+    }
+    .fresh-row {
+        height: 1;
+    }
+    .fresh-row Static {
+        width: 1fr;
+        color: $foreground;
+    }
     """
 
     def __init__(self, rig: Any) -> None:
         super().__init__(rig)
 
     def compose_content(self) -> ComposeResult:
-        with Horizontal(id="report-split"):
-            with Card(title="Targets", id="report-list"):
-                yield RiggerTable(id="report-targets")
-                with Horizontal(id="report-actions"):
-                    yield Button("Generate", id="report-generate", variant="primary")
-            with Card(title="Report", id="report-doc", highlight=True):
+        with PaneRow(id="report-split"):
+            with Pane(title="report", icon="", id="report-doc"):
                 yield MarkdownViewer(id="report-view", show_table_of_contents=True)
+            with PaneStack(id="report-stack"):
+                with Pane(title="targets", icon="", id="report-targets-pane"):
+                    yield RiggerTable(id="report-targets")
+                    with Horizontal(id="report-actions"):
+                        yield Button("Generate", id="report-generate", variant="primary")
+                with Pane(title="citations", icon="", id="report-cites-pane"):
+                    yield VerticalScroll(id="report-cites")
+                with Pane(title="freshness", icon="", id="report-fresh-pane"):
+                    yield VerticalScroll(id="report-fresh")
 
     def on_mount(self) -> None:
         table = self.query_one("#report-targets", RiggerTable)
@@ -69,7 +96,9 @@ class Reports(RiggerScreen):
     def refresh_view(self) -> None:
         table = self.query_one("#report-targets", RiggerTable)
         table.clear()
-        for target in sorted(services.target_specs().values(), key=lambda t: t.id):
+        specs = sorted(services.target_specs().values(), key=lambda t: t.id)
+        self.query_one("#report-targets-pane", Pane).set_badge(str(len(specs)))
+        for target in specs:
             table.add_row(
                 target.id,
                 target.kind,
@@ -79,7 +108,9 @@ class Reports(RiggerScreen):
             )
 
     async def on_data_table_row_highlighted(self, event: RiggerTable.RowHighlighted) -> None:
-        await self.show_latest(str(event.row_key.value))
+        target_id = str(event.row_key.value)
+        await self.show_latest(target_id)
+        await self._show_freshness(target_id)
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id != "report-generate":
@@ -110,8 +141,63 @@ class Reports(RiggerScreen):
             await viewer.document.update(
                 f"# {target_id}\n\n*No report yet — select the target and press Generate.*"
             )
+            await self._show_citations("")
+            self.query_one("#report-doc", Pane).set_badge("no report")
             return
-        await viewer.document.update(paths[-1].read_text(encoding="utf-8"))
+        newest = paths[-1]
+        text = newest.read_text(encoding="utf-8")
+        await viewer.document.update(text)
+        self.query_one("#report-doc", Pane).set_badge(f"{target_id} · {newest.stem}")
+        await self._show_citations(text)
+
+    async def _show_citations(self, markdown: str) -> None:
+        """List the report's cite lines: render_markdown indents them under a claim."""
+        pane = self.query_one("#report-cites-pane", Pane)
+        box = self.query_one("#report-cites", VerticalScroll)
+        await box.remove_children()
+        seen: list[str] = []
+        for line in markdown.splitlines():
+            if line.startswith("  - "):
+                cite_text = line[4:].strip()
+                if cite_text and cite_text not in seen:
+                    seen.append(cite_text)
+        pane.set_badge(str(len(seen)))
+        if not seen:
+            await box.mount(Static("no citations", markup=False, classes="cite-line"))
+            return
+        await box.mount(
+            *(
+                Static(f"[{index}] {text}", markup=False, classes="cite-line")
+                for index, text in enumerate(seen, start=1)
+            )
+        )
+
+    async def _show_freshness(self, target_id: str) -> None:
+        """Per-instrument data age for the selected target."""
+        box = self.query_one("#report-fresh", VerticalScroll)
+        await box.remove_children()
+        try:
+            latest = services.data_health(self.rig).latest_bar
+        except Exception:
+            latest = {}
+        rows = []
+        for instrument_id in self._instruments(target_id):
+            stamp = latest.get(instrument_id)
+            if stamp is None:
+                rows.append(Horizontal(StatusDot("error"), Static(f"{instrument_id}  none"),
+                                       classes="fresh-row"))
+                continue
+            if stamp.tzinfo is None:
+                stamp = stamp.replace(tzinfo=UTC)
+            label, state = age_text(datetime.now(UTC) - stamp)
+            rows.append(
+                Horizontal(
+                    StatusDot(state),
+                    Static(f"{instrument_id}  {label}", markup=False),
+                    classes="fresh-row",
+                )
+            )
+        await box.mount(*(rows or [Static("no instruments", markup=False, classes="cite-line")]))
 
     @work
     async def generate(self, target_id: str) -> None:

@@ -48,9 +48,12 @@ class FakeRig:
 
 
 @pytest.fixture
-def rig(tmp_engine):
+def rig(tmp_engine, tmp_path):
     seed_bars(tmp_engine, AAPL.id, price_fn=lambda i: 100.0)
-    return FakeRig(tmp_engine, [AAPL])
+    fake = FakeRig(tmp_engine, [AAPL])
+    # Keep the last-seen state file out of the repo: the app stamps a visit on start.
+    fake.cfg.db_path = str(tmp_path / "rigger.db")
+    return fake
 
 
 def test_app_mounts_and_navigates(rig):
@@ -158,5 +161,22 @@ def test_targets_panel_remove_with_no_targets_notifies(rig, monkeypatch, tmp_pat
             assert app.screen.query_one("#target-table").row_count == 0
             await pilot.click("#tg-remove")
             await pilot.pause()
+
+    asyncio.run(run())
+
+
+def test_home_pulse_reference_point_is_stable_across_refreshes(rig):
+    """last_seen is captured once per session; re-reading it would zero the panel."""
+
+    async def run():
+        app = RiggerApp(rig)
+        async with app.run_test() as pilot:
+            home = app.screen
+            captured = home.last_seen
+            await home.refresh_view()
+            await pilot.pause()
+            await home.refresh_view()
+            await pilot.pause()
+            assert home.last_seen == captured
 
     asyncio.run(run())

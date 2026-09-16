@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -18,7 +18,9 @@ from rigger.core.db import (
     NewsItemTable,
     store_items,
 )
-from rigger.core.time import parse_date
+from rigger.core.json import from_json
+from rigger.core.time import parse_date, to_utc
+from rigger.evidence import FILING_SOURCE
 from rigger.llm.providers import PROVIDERS, ProviderSpec
 from rigger.targets import DEFAULT_KIND, KNOWN_KINDS, LEGACY_KIND, WatchTarget, target_from_spec
 
@@ -263,6 +265,148 @@ def llm_costs(engine: Any, since: str | None = None) -> list[CostRow]:
     return [
         CostRow(task, model, len(costs), sum(costs))
         for (task, model), costs in sorted(grouped.items())
+    ]
+
+
+@dataclass
+class Pulse:
+    """What has arrived since the user last looked, plus recent activity."""
+
+    since: datetime
+    articles: int
+    filings: int
+    events: int
+    daily: list[int]
+    busiest: tuple[str, int] | None
+    quietest: tuple[str, int] | None
+
+    @property
+    def total(self) -> int:
+        return self.articles + self.filings + self.events
+
+
+def pulse(
+    engine: Any,
+    *,
+    instrument_ids: Sequence[str] = (),
+    since: datetime,
+    days: int = 30,
+) -> Pulse:
+    """Counts since ``since``, a daily histogram, and a per-instrument tally.
+
+    Dates are publish/event time, not ingest time — no table records when a row
+    was written — so this reports what was *published* since the last visit.
+
+    Future-dated rows are excluded: the calendar plugin writes upcoming earnings
+    into ``event.ts``, and those have not happened yet. ``upcoming_events`` is
+    the mirror of this and takes exactly those rows — same table, opposite side
+    of ``now``. Change one boundary and you must change the other.
+
+    ``busiest``/``quietest`` cover the whole ``days`` window; the counts cover
+    only ``since``. One windowed scan per table feeds all three outputs. Do not switch the
+    per-instrument tally to a ``LIKE`` query: ``newsitem.instrument_ids`` is an
+    unindexed JSON column, so that would be one full scan per instrument.
+    """
+    now = datetime.now(UTC)
+    since = to_utc(since)
+    window_start = now - timedelta(days=days - 1)
+    floor = min(since, window_start)
+
+    buckets: dict[date, int] = {}
+    tally: dict[str, int] = dict.fromkeys(instrument_ids, 0)
+    articles = filings = events = 0
+
+    with Session(engine) as session:
+        news = session.exec(
+            select(
+                NewsItemTable.published, NewsItemTable.source, NewsItemTable.instrument_ids
+            ).where(NewsItemTable.published >= floor)
+        ).all()
+        event_rows = session.exec(
+            select(EventTable.ts).where(EventTable.ts >= floor).where(EventTable.ts <= now)
+        ).all()
+
+    for published, source, raw_ids in news:
+        ts = to_utc(published)
+        if ts >= window_start:
+            buckets[ts.date()] = buckets.get(ts.date(), 0) + 1
+            # Tallied over the whole window, not just since the last visit: on a
+            # short visit every instrument would otherwise read zero.
+            for instrument_id in from_json(raw_ids):
+                if instrument_id in tally:
+                    tally[instrument_id] += 1
+        if ts < since:
+            continue
+        if source == FILING_SOURCE:
+            filings += 1
+        else:
+            articles += 1
+
+    for value in event_rows:
+        ts = to_utc(value)
+        if ts >= window_start:
+            buckets[ts.date()] = buckets.get(ts.date(), 0) + 1
+        if ts >= since:
+            events += 1
+
+    daily = [buckets.get((window_start + timedelta(days=n)).date(), 0) for n in range(days)]
+    ranked = sorted(tally.items(), key=lambda item: (-item[1], item[0]))
+    # With nothing at all in the window there is no busiest to name.
+    quiet = not ranked or ranked[0][1] == 0
+    return Pulse(
+        since=since,
+        articles=articles,
+        filings=filings,
+        events=events,
+        daily=daily,
+        busiest=None if quiet else ranked[0],
+        quietest=None if quiet or len(ranked) < 2 else ranked[-1],
+    )
+
+
+@dataclass
+class Upcoming:
+    """A scheduled event that has not happened yet."""
+
+    instrument_id: str
+    ts: datetime
+    kind: str
+    summary: str
+
+
+def upcoming_events(
+    engine: Any,
+    *,
+    instrument_ids: Sequence[str] = (),
+    limit: int = 3,
+) -> list[Upcoming]:
+    """The next scheduled events for ``instrument_ids``, soonest first.
+
+    The mirror of :func:`pulse`, which counts what has already happened: this
+    takes the rows on the other side of ``now``. The calendar plugin writes
+    upcoming earnings and ex-dividend dates into ``event.ts``, and nothing else
+    in the app reads them.
+
+    Both columns are indexed, so this stays one cheap query. No ``kind`` filter:
+    only earnings and dividends are ever future-dated, and extracted events
+    (regulatory, insider_trade) are always in the past.
+    """
+    ids = list(instrument_ids)
+    if not ids:
+        return []  # an empty IN () is a SQL error, and there is nothing to ask for
+
+    now = datetime.now(UTC)
+    with Session(engine) as session:
+        rows = session.exec(
+            select(EventTable.ts, EventTable.instrument_id, EventTable.kind, EventTable.summary)
+            .where(EventTable.instrument_id.in_(ids))  # type: ignore[attr-defined]
+            .where(EventTable.ts > now)
+            .order_by(EventTable.ts)  # type: ignore[arg-type]
+            .limit(limit)
+        ).all()
+    return [
+        Upcoming(instrument_id=instrument_id, ts=to_utc(ts), kind=kind, summary=summary)
+        for ts, instrument_id, kind, summary in rows
     ]
 
 

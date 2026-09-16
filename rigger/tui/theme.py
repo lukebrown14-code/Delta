@@ -1,4 +1,9 @@
-"""Rigger theme: dark "trading desk" palette with amber/green accents.
+"""Rigger theme: dark "trading desk" palette with a cyan-blue accent.
+
+``primary``, ``secondary`` and ``accent`` are deliberately the same blue —
+the one the Home wordmark and sparklines already used — so the whole app
+reads as one accent colour rather than an amber chrome around a blue
+dashboard. Status meaning stays in ``success``/``warning``/``error``.
 
 Token names are identical across dark and light so the stylesheet never
 branches: rules reference ``$panel``, ``$primary``, ``$success`` etc. and
@@ -11,12 +16,12 @@ from textual.theme import Theme
 
 RIGGER_DARK = Theme(
     name="rigger-dark",
-    primary="#ffb454",
+    primary="#5ccfe6",
     secondary="#5ccfe6",
     success="#7fd962",
     warning="#ffd580",
     error="#ff6b6b",
-    accent="#ffb454",
+    accent="#5ccfe6",
     foreground="#cbccc6",
     background="#0b0e14",
     surface="#12161f",
@@ -26,12 +31,12 @@ RIGGER_DARK = Theme(
 
 RIGGER_LIGHT = Theme(
     name="rigger-light",
-    primary="#b35c00",
+    primary="#0f7d93",
     secondary="#0f7d93",
     success="#3f8f2b",
     warning="#8f6a00",
     error="#c0392b",
-    accent="#b35c00",
+    accent="#0f7d93",
     foreground="#22252a",
     background="#f4f4ef",
     surface="#e9e9e1",

@@ -10,23 +10,45 @@ from textual.widgets import Input, RichLog, Static
 
 from rigger import services
 from rigger.tui.shell import RiggerScreen
-from rigger.tui.widgets import Card
+from rigger.tui.widgets import Pane
 
 
 class Console(RiggerScreen):
     name = "console"
     AUTO_FOCUS = "#console-input"
 
+    CSS = """
+    #console-pane {
+        height: 1fr;
+    }
+    #console-log {
+        height: 1fr;
+        margin: 1 0 0 0;
+        background: transparent;
+        border: none;
+    }
+    .console-row {
+        height: auto;
+        margin: 1 0 0 0;
+    }
+    .console-row #console-input {
+        width: 1fr;
+        margin: 0;
+    }
+    .console-prompt {
+        width: 2;
+        color: $primary;
+        text-style: bold;
+        content-align: center middle;
+    }
+    """
+
     def __init__(self, rig) -> None:
         super().__init__(rig)
 
     def compose_content(self) -> ComposeResult:
-        with Card(title="Command console", classes="console-card"):
-            yield Static(
-                "type help for commands — target add | remove | list | show, config show",
-                markup=False,
-                classes="muted",
-            )
+        with Pane(title="console", icon="", badge="type help", id="console-pane"):
+            yield RichLog(id="console-log", markup=True)
             yield Horizontal(
                 Static("❯", markup=False, classes="console-prompt"),
                 Input(
@@ -35,10 +57,11 @@ class Console(RiggerScreen):
                 ),
                 classes="console-row",
             )
-            yield RichLog(id="console-log")
 
     def on_mount(self) -> None:
-        self.query_one("#console-log", RichLog).write("Ready. Enter a command.")
+        log = self.query_one("#console-log", RichLog)
+        log.write("Ready. Enter a command.")
+        log.write("[dim]target add | remove | list | show · config show · help[/dim]")
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         text = event.value.strip()

@@ -1,46 +1,69 @@
-"""Configuration screen: provider, model routing, plugins, targets — in cards."""
+"""Configuration screen: provider, model routing, plugins and targets in one column."""
 
 from __future__ import annotations
 
 from typing import Any
 
 from textual.app import ComposeResult
-from textual.containers import Horizontal, Vertical
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.widgets import Static
 
 from rigger.tui.shell import RiggerScreen
-from rigger.tui.widgets import Card, Pill, RiggerTable, StatusDot
+from rigger.tui.widgets import Pane, PaneStack, Pill, RiggerTable, StatusDot
 
 
 class Config(RiggerScreen):
     name = "config"
 
+    CSS = """
+    #cfg-scroll {
+        height: 1fr;
+    }
+    #cfg-sections > Pane {
+        height: auto;
+    }
+    #cfg-routing, #cfg-targets {
+        height: auto;
+        max-height: 12;
+    }
+    #cfg-plugins {
+        height: auto;
+    }
+    """
+
     def __init__(self, rig: Any) -> None:
         super().__init__(rig)
 
     def compose_content(self) -> ComposeResult:
-        with Card(title="Provider"):
-            with Horizontal(classes="check-row"):
-                yield Static("llm provider:", markup=False, classes="muted")
-                yield Pill("none", id="cfg-provider")
-            yield Static(
-                "press p to connect or switch providers",
-                markup=False,
-                classes="empty-hint",
-            )
-        with Card(title="Model routing"):
-            yield RiggerTable(id="cfg-routing")
-            yield Static("no routes set — press m to pick models", id="cfg-routing-empty", markup=False, classes="empty-hint")
-        with Card(title="Plugins"):
-            yield Vertical(id="cfg-plugins")
-        with Card(title="Targets"):
-            yield RiggerTable(id="cfg-targets")
-            yield Static(
-                "no targets configured — press w to add one",
-                id="cfg-targets-empty",
-                markup=False,
-                classes="empty-hint",
-            )
+        with VerticalScroll(id="cfg-scroll"):
+            with PaneStack(id="cfg-sections"):
+                with Pane(title="provider", icon="", classes="-auto"):
+                    with Horizontal(classes="check-row"):
+                        yield Static("llm provider:", markup=False, classes="muted")
+                        yield Pill("none", id="cfg-provider")
+                    yield Static(
+                        "press p to connect or switch providers",
+                        markup=False,
+                        classes="empty-hint",
+                    )
+                with Pane(title="model routing", icon="", classes="-auto"):
+                    yield RiggerTable(id="cfg-routing")
+                    yield Static(
+                        "no routes set — press m to pick models",
+                        id="cfg-routing-empty",
+                        markup=False,
+                        classes="empty-hint",
+                    )
+                with Pane(title="plugins", icon="", classes="-auto"):
+                    yield Vertical(id="cfg-plugins")
+                with Pane(title="targets", icon="", classes="-auto"):
+                    yield RiggerTable(id="cfg-targets")
+                    yield Static(
+                        "no targets configured — press w to add one",
+                        id="cfg-targets-empty",
+                        markup=False,
+                        classes="empty-hint",
+                    )
 
     async def on_mount(self) -> None:
         self.query_one("#cfg-routing", RiggerTable).add_columns("Task", "Model")

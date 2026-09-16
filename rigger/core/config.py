@@ -99,14 +99,19 @@ def load_config(path: Path = CONFIG_PATH) -> tuple[Settings, AppConfig]:
 
 
 def read_env_value(name: str) -> str:
-    """Value of ``name`` from .env or the environment; '' when unset.
+    """Value of ``name`` from the environment or .env; '' when unset.
 
-    Unlike :class:`Settings` this reads arbitrary variable names, so the
-    ``custom`` provider's ``[llm] api_key_env`` works without a Settings
-    field. Never raises.
+    The process environment wins over .env, matching :class:`Settings`'
+    pydantic-settings precedence, so an exported shell variable can never
+    shadow a key saved from the app. Unlike :class:`Settings` this reads
+    arbitrary variable names, so the ``custom`` provider's
+    ``[llm] api_key_env`` works without a Settings field. Never raises.
     """
     if not name:
         return ""
+    value = os.environ.get(name, "")
+    if value:
+        return value
     try:
         for line in ENV_PATH.read_text(encoding="utf-8").splitlines():
             stripped = line.strip()
@@ -114,7 +119,7 @@ def read_env_value(name: str) -> str:
                 return stripped.split("=", 1)[1].strip().strip('"').strip("'")
     except Exception:
         pass
-    return os.environ.get(name, "")
+    return ""
 
 
 def set_env_value(name: str, value: str) -> None:
