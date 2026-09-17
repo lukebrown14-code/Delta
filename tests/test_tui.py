@@ -366,3 +366,70 @@ def test_theme_tokens_are_readable_on_black():
     for token in ("text-primary", "text-error", "text-success", "text-warning", "text-muted"):
         ratio = (luminance(Color.parse(RIGGER_DARK.variables[token])) + 0.05) / (black + 0.05)
         assert ratio >= 4.5, (token, ratio)
+
+
+def _routed_rig(rig):
+    rig.cfg.llm_routing = {"chat": "x/sonnet", "extract": "x/haiku", "report": "x/sonnet"}
+    rig.cfg.targets = {"apple": {"kind": "company", "market": "us", "tickers": ["AAPL"]}}
+    return rig
+
+
+def test_config_two_columns_fold_and_focus_keys(rig):
+    """Wide: diagnostics open beside the stack; d folds; l/t move focus; enter opens the picker."""
+    from rigger.tui.screens.model_picker import ModelPicker
+
+    async def run():
+        app = RiggerApp(_routed_rig(rig))
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.press("c")
+            screen = app.screen
+            assert screen.name == "config"
+            assert not screen.query("Collapsible")
+            assert screen.query_one("#cfg-diag-body").display
+            assert not screen.query_one("#cfg-diag-summary").display
+            assert screen.query_one("#cfg-left").display
+            assert screen.focused is screen.query_one("#cfg-routing")
+            await pilot.press("d")
+            assert screen.query_one("#cfg-diag-summary").display
+            assert not screen.query_one("#cfg-diag-body").display
+            await pilot.press("d")
+            assert screen.query_one("#cfg-diag-body").display
+            await pilot.press("l")
+            assert screen.focused is screen.query_one("#cfg-plugins")
+            await pilot.press("t")
+            assert screen.focused is screen.query_one("#cfg-targets")
+            # The targets pane is a signpost: no phantom add key.
+            empty = str(screen.query_one("#cfg-targets-empty").render())
+            assert "press w" not in empty and "1 Watchlist" in empty
+            # Enter on a routing row opens the model picker for that task.
+            screen.query_one("#cfg-routing").focus()
+            await pilot.press("enter")
+            await pilot.pause()
+            assert isinstance(app.screen, ModelPicker)
+
+    asyncio.run(run())
+
+
+def test_config_narrow_folds_diagnostics_until_d(rig):
+    """80x24: one column, diagnostics folded; d expands full-height, esc closes."""
+
+    async def run():
+        app = RiggerApp(_routed_rig(rig))
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.press("c")
+            screen = app.screen
+            assert screen.has_class("-narrow")
+            assert screen.query_one("#cfg-diag-summary").display
+            assert not screen.query_one("#cfg-diag-body").display
+            assert screen.query_one("#cfg-left").display
+            # Nothing may fall off the bottom: the body ends above the footer.
+            body = screen.query_one("#cfg-body")
+            assert body.region.bottom <= screen.size.height - 1
+            await pilot.press("d")
+            assert not screen.query_one("#cfg-left").display
+            assert screen.query_one("#cfg-diag-body").display
+            await pilot.press("escape")
+            assert screen.query_one("#cfg-left").display
+            assert not screen.query_one("#cfg-diag-body").display
+
+    asyncio.run(run())
