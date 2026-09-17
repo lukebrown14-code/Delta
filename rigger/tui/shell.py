@@ -48,7 +48,9 @@ OFF_BAR_ITEMS: list[tuple[str, str, str]] = [
 
 ALL_ITEMS: list[tuple[str, str, str]] = NAV_ITEMS + CHROME_ITEMS + OFF_BAR_ITEMS
 
-CHROME_HINT = "? help · ^p go"
+#: The bar's trailing hint. ``g`` opens the Go picker; the caret notation this
+#: used to carry pointed at ctrl+p, which is Textual's command palette, not Go.
+CHROME_HINT = "? help · g go"
 
 
 def age_text(age: timedelta) -> tuple[str, str]:

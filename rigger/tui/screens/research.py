@@ -322,24 +322,19 @@ class Research(RiggerScreen):
 
     def company_report_age(self, company: str) -> Text:
         """``date · age`` of the newest report, so the list answers "what is stale?"."""
-        paths = sorted((self.reports_dir() / company).glob("*.md"))
-        if not paths:
-            return Text("no report", style=self.app.theme_variables["text-muted"])
-        newest = paths[-1]
-        report = read_report(newest.with_suffix(".json"))
-        if report is not None:
-            as_of = report.as_of
-        else:
-            try:
-                as_of = datetime.strptime(newest.stem, "%Y-%m-%d").replace(tzinfo=UTC)
-            except ValueError:
-                return Text(newest.stem)
-        label, state = age_text(datetime.now(UTC) - as_of)
+        stamp = services.latest_report(self.reports_dir(), company)
+        if stamp is None:
+            return Text("no report", style=token_color(self.app, "text-muted"))
+        if stamp.as_of is None:
+            # A legacy report whose filename is not a date: show the stem, which
+            # is all it records, rather than invent an age for it.
+            return Text(stamp.path.stem)
+        label, state = age_text(datetime.now(UTC) - stamp.as_of)
         colour = {
             "ok": token_color(self.app, "foreground"),
             "warn": token_color(self.app, "text-warning"),
         }.get(state, token_color(self.app, "text-error"))
-        return Text.assemble(f"{newest.stem} ", (label, colour))
+        return Text.assemble(f"{stamp.path.stem} ", (label, colour))
 
     async def load_company(self) -> None:
         self._rendered_company = self.state.company

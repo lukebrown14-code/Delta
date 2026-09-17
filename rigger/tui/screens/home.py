@@ -845,7 +845,7 @@ class Home(RiggerScreen):
         table.display = bool(events)
         empty = self.query_one("#upcoming-empty", Static)
         empty.display = not events
-        empty.update("nothing scheduled — gather evidence (^p)")
+        empty.update("nothing scheduled — press 2, then U to gather evidence")
         self.query_one("#upcoming-pane", Pane).set_badge(str(len(events)) if events else "")
 
     def _refresh_theses(self, fleet: list[services.ThesisHealth]) -> None:
