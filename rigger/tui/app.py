@@ -24,7 +24,7 @@ from rigger.tui.screens.targets import Targets
 from rigger.tui.screens.theses import Theses
 from rigger.tui.shell import ALL_ITEMS
 from rigger.tui.theme import THEMES
-from rigger.tui.widgets import Dialog, KeyGrid, PaneRow
+from rigger.tui.widgets import MODAL_WIDTH, Dialog, KeyGrid, PaneRow, hint_markup
 
 
 async def _gather(rig: Any, app: App) -> None:
@@ -78,9 +78,9 @@ class RiggerCommands(Provider):
 class GoPicker(Dialog):
     """Centred keymap of every panel: the replacement for the nav rail."""
 
-    dialog_title = " go"
-    dialog_hint = "<key>: open   <Esc>: exit"
-    dialog_width = 48
+    dialog_title = "go"
+    dialog_hint = hint_markup(("key", "open"), ("esc", "exit"))
+    dialog_width = MODAL_WIDTH
 
     def compose_dialog(self) -> ComposeResult:
         yield KeyGrid([(key, label) for key, _name, label in ALL_ITEMS])
@@ -186,10 +186,19 @@ class RiggerApp(App):
         else:
             self.push_screen(HelpScreen())
 
-    def action_show_model_picker(self) -> None:
-        task = {"data": "report", "reports": "report", "chat": "chat", "theses": "thesis"}.get(
-            self.screen.name or "", "extract"
-        )
+    def action_show_model_picker(self, task: str | None = None) -> None:
+        """Pick the model for a routing task.
+
+        With no ``task`` the task is derived from the current screen, which is
+        what the ``m`` binding wants. Settings passes the task explicitly, so
+        it can re-route any row without re-implementing this action.
+        """
+        task = task or {
+            "data": "report",
+            "reports": "report",
+            "chat": "chat",
+            "theses": "thesis",
+        }.get(self.screen.name or "", "extract")
         provider = getattr(getattr(self.rig, "llm", None), "provider", None)
 
         def on_select(model: ModelInfo) -> None:
