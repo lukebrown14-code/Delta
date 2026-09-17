@@ -75,9 +75,9 @@ def test_status_bar_is_one_row(rig):
     async def run():
         app = RiggerApp(rig)
         async with app.run_test(size=(120, 24)) as pilot:
-            # Home is a splash screen with no shell chrome; the bar lives on
-            # the panel screens.
-            await pilot.press("2")
+            # Home is a RiggerScreen like every panel: the bar is there where a
+            # new user lands, so the 1/2/4/5 rail never disappears.
+            assert app.screen.name == "home"
             bar = app.screen.query_one(StatusBar)
             assert not app.screen.query("#nav-console")
             # Off-bar screens stay reachable by key but earn no columns.
