@@ -119,11 +119,11 @@ class HelpScreen(Screen):
         width: 84;
         height: 90%;
         background: $surface;
-        border: round $primary;
+        border: round $border-blurred;
         padding: 1 2;
     }
     HelpScreen .help-title {
-        color: $primary;
+        color: $text-primary;
         text-style: bold;
         margin: 0 0 1 0;
     }

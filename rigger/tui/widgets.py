@@ -64,7 +64,7 @@ class PaneBar(Horizontal):
     }
     PaneBar .pane-title {
         width: auto;
-        color: $primary;
+        color: $text-primary;
         text-style: bold;
     }
     PaneBar .pane-badge {
@@ -130,7 +130,7 @@ class PaneRow(Horizontal):
     }
     PaneRow > Pane {
         margin: 0 1 0 0;
-        border-left: solid $panel;
+        border-left: solid $border-blurred;
         padding-left: 1;
     }
     /* Textual CSS has no :not(), so every pane gets the rule and the
@@ -154,7 +154,7 @@ class PaneRow(Horizontal):
         overflow-y: auto;
         border-left: none;
         padding-left: 0;
-        border-top: solid $panel;
+        border-top: solid $border-blurred;
         padding-top: 1;
     }
     PaneRow.-narrow > Pane:first-of-type {
@@ -186,7 +186,7 @@ class PaneStack(Vertical):
     }
     PaneStack > Pane {
         margin: 0 0 1 0;
-        border-top: solid $panel;
+        border-top: solid $border-blurred;
         padding-top: 1;
     }
     PaneStack > Pane:first-of-type {
@@ -287,7 +287,7 @@ class KeyStrip(Horizontal):
         color: $text-muted;
     }
     KeyStrip .ks-key {
-        color: $primary;
+        color: $text-primary;
         text-style: bold;
         margin: 0 1 0 0;
     }
@@ -300,8 +300,7 @@ class KeyStrip(Horizontal):
     def __init__(self, bindings: Sequence[Any], id: str | None = None) -> None:
         super().__init__(id=id)
         self._pairs = [
-            (binding_key(binding), binding.description)
-            for binding in shown_bindings(bindings)
+            (binding_key(binding), binding.description) for binding in shown_bindings(bindings)
         ]
 
     def compose(self) -> ComposeResult:
@@ -398,7 +397,7 @@ class Dialog(ModalScreen):
     Dialog #dialog-title {
         height: 1;
         margin: 0 0 1 0;
-        color: $primary;
+        color: $text-primary;
         text-style: bold;
         content-align-horizontal: center;
     }

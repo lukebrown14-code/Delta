@@ -130,6 +130,11 @@ class RiggerApp(App):
 
     def __init__(self, rig: Rigger | None = None) -> None:
         super().__init__()
+        # Register before the first stylesheet parse so the app never paints
+        # a frame in Textual's stock theme.
+        for theme in THEMES:
+            self.register_theme(theme)
+        self.theme = "rigger-dark"
         self.rig = rig if rig is not None else Rigger()
         #: Public registry of the installed screens. Screens that keep each
         #: other in sync read this rather than Textual's private ``_screens``.
@@ -144,9 +149,6 @@ class RiggerApp(App):
         state.write_last_seen(self.rig.cfg)
 
     def on_mount(self) -> None:
-        for theme in THEMES:
-            self.register_theme(theme)
-        self.theme = "rigger-dark"
         research_state = ResearchState()
         self._screens = {
             "home": Home(self.rig, last_seen=self.last_seen),

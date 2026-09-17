@@ -84,7 +84,7 @@ class NavKey(Static):
     }
     NavKey.-active {
         background: $primary;
-        color: $background;
+        color: $block-cursor-foreground;
         text-style: bold;
     }
     NavKey:hover {

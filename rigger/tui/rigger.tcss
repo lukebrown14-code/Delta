@@ -19,12 +19,12 @@ Pill {
     margin: 0 1 0 0;
     padding: 0 1;
     background: $panel;
-    color: $secondary;
+    color: $text-primary;
 }
 
-Pill.-ok { color: $success; }
-Pill.-warn { color: $warning; }
-Pill.-error { color: $error; }
+Pill.-ok { color: $text-success; }
+Pill.-warn { color: $text-warning; }
+Pill.-error { color: $text-error; }
 Pill.-dim { color: $text-muted; }
 
 StatusDot {
@@ -32,16 +32,16 @@ StatusDot {
     margin: 0 1 0 0;
 }
 
-StatusDot.-ok { color: $success; }
-StatusDot.-warn { color: $warning; }
-StatusDot.-error { color: $error; }
+StatusDot.-ok { color: $text-success; }
+StatusDot.-warn { color: $text-warning; }
+StatusDot.-error { color: $text-error; }
 
 KeyHint {
     width: auto;
     margin: 0 1 0 0;
     padding: 0 1;
     background: $panel;
-    color: $primary;
+    color: $text-primary;
     text-style: bold;
 }
 
@@ -107,7 +107,7 @@ Input {
 }
 
 Input:focus {
-    border: round $primary;
+    border: round $border;
 }
 
 Button {
@@ -142,7 +142,7 @@ ModalScreen > Vertical {
 }
 
 #mp-title, #pp-title, #ke-title, #cf-title {
-    color: $primary;
+    color: $text-primary;
     text-style: bold;
 }
 

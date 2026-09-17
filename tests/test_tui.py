@@ -330,3 +330,36 @@ def test_add_modal_yahoo_dropdown_keyboard_and_online_state(rig, monkeypatch, tm
             assert not app.screen.query_one("#tg-suggestions").display
 
     asyncio.run(run())
+
+
+def test_theme_tokens_are_readable_on_black():
+    """Base tokens are ink; anything with ``color:`` must use a ``text-`` token."""
+    import re
+    from pathlib import Path
+
+    from textual.color import Color
+
+    from rigger.tui.theme import RIGGER_DARK
+
+    tui = Path(__file__).resolve().parents[1] / "rigger" / "tui"
+    pattern = re.compile(r"color: \$(primary|secondary|accent|success|error|warning)\b")
+    offenders = [
+        f"{path.relative_to(tui)}:{n}"
+        for path in list(tui.rglob("*.py")) + list(tui.rglob("*.tcss"))
+        if path.name != "theme.py"
+        for n, line in enumerate(path.read_text().splitlines(), 1)
+        if pattern.search(line)
+    ]
+    assert not offenders, offenders
+
+    def luminance(color: Color) -> float:
+        def channel(value: int) -> float:
+            c = value / 255
+            return c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
+
+        return 0.2126 * channel(color.r) + 0.7152 * channel(color.g) + 0.0722 * channel(color.b)
+
+    black = luminance(Color.parse(RIGGER_DARK.background))
+    for token in ("text-primary", "text-error", "text-success", "text-warning", "text-muted"):
+        ratio = (luminance(Color.parse(RIGGER_DARK.variables[token])) + 0.05) / (black + 0.05)
+        assert ratio >= 4.5, (token, ratio)

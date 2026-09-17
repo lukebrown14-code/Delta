@@ -1,32 +1,67 @@
-"""Rigger theme: dark "trading desk" palette with a cyan-blue accent.
+"""Rigger theme: pure-black terminal with a deep blue accent.
 
-``primary``, ``secondary`` and ``accent`` are deliberately the same blue —
-the one the Home wordmark and sparklines already used — so the whole app
-reads as one accent colour rather than an amber chrome around a blue
-dashboard. Status meaning stays in ``success``/``warning``/``error``.
+Two rules keep the palette readable on ``#000000``:
 
-Token names are identical across dark and light so the stylesheet never
-branches: rules reference ``$panel``, ``$primary``, ``$success`` etc. and
-the active theme decides the values.
+* A base token is **ink**: ``$primary`` fills the cursor row, the active nav
+  tab and the wordmark; ``$success``/``$error`` fill bars and stripes. They
+  are the brand hexes exactly and are too dark to read as text on black
+  (2.5:1 and 3.3:1).
+* The ``text-`` variant is what you **read**: ``$text-primary`` for hotkeys
+  and titles, ``$text-success``/``$text-error`` for gains and losses. Every
+  ``color:`` rule in the TUI uses a ``text-`` token; a test enforces it.
+
+``variables`` overrides the derivations Textual gets wrong on a pure-black
+background (borders that come out black, hover that comes out transparent,
+scrollbars that vanish). Token names are identical across dark and light so
+the stylesheet never branches.
 """
-
-from __future__ import annotations
 
 from textual.theme import Theme
 
 RIGGER_DARK = Theme(
     name="rigger-dark",
-    primary="#5ccfe6",
-    secondary="#5ccfe6",
-    success="#7fd962",
-    warning="#ffd580",
-    error="#ff6b6b",
-    accent="#5ccfe6",
-    foreground="#cbccc6",
-    background="#0b0e14",
-    surface="#12161f",
-    panel="#1a1f2b",
+    primary="#264b96",
+    secondary="#264b96",
+    accent="#264b96",
+    success="#15803d",
+    warning="#d97706",
+    error="#b91c1c",
+    foreground="#d4d4d4",
+    background="#000000",
+    surface="#0d0d0d",
+    panel="#1a1a1a",
     dark=True,
+    variables={
+        # What you read: brighter siblings of the ink colours, same hue.
+        "text-primary": "#5b8def",
+        "text-secondary": "#5b8def",
+        "text-accent": "#5b8def",
+        "text-error": "#f87171",
+        "text-success": "#22c55e",
+        "text-warning": "#f59e0b",
+        "text-muted": "#8a8a8a",
+        "text-disabled": "#5c5c5c",
+        # Lines: separators (``$border-blurred``) want a quiet grey, focus
+        # (``$border``) wants the readable blue.
+        "border": "#5b8def",
+        "border-blurred": "#333333",
+        # Selection and cursor: white on the brand blue; the unfocused
+        # cursor stays visible instead of Textual's 30% fade.
+        "block-cursor-foreground": "#ffffff",
+        "block-cursor-background": "#264b96",
+        "block-cursor-blurred-background": "#264b96 50%",
+        "block-hover-background": "#ffffff 8%",
+        # Chrome that would otherwise inherit the 2.5:1 blue or vanish.
+        "footer-key-foreground": "#5b8def",
+        "scrollbar": "#3a3a3a",
+        "scrollbar-hover": "#525252",
+        "scrollbar-active": "#5b8def",
+        "scrollbar-background": "#0d0d0d",
+        "markdown-h1-color": "#5b8def",
+        "markdown-h2-color": "#5b8def",
+        "markdown-h3-color": "#5b8def",
+        "button-color-foreground": "#ffffff",
+    },
 )
 
 RIGGER_LIGHT = Theme(

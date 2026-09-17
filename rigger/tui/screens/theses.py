@@ -34,9 +34,9 @@ from rigger.tui.widgets import (
 #: preview uses. One table so the ledger, the legend and the preview cannot
 #: disagree about what a side is called.
 SIDE_MARKS: dict[str, tuple[str, str, str]] = {
-    "support": ("+", "success", "Supporting"),
-    "against": ("−", "error", "Against"),
-    "neutral": ("?", "warning", "Neutral"),
+    "support": ("+", "text-success", "Supporting"),
+    "against": ("−", "text-error", "Against"),
+    "neutral": ("?", "text-warning", "Neutral"),
 }
 
 #: Claims-list status marker: glyph plus the theme token that colours it.
@@ -44,8 +44,8 @@ SIDE_MARKS: dict[str, tuple[str, str, str]] = {
 #: distinguishable without relying on hue. Every glyph is verified single-cell
 #: so the claim text stays aligned down the column.
 STATUS_MARKS: dict[str, tuple[str, str]] = {
-    "active": ("●", "success"),
-    "paused": ("◐", "warning"),
+    "active": ("●", "text-success"),
+    "paused": ("◐", "text-warning"),
     "concluded": ("○", "foreground"),
 }
 
@@ -133,9 +133,7 @@ class ThesisForm(Dialog):
                 placeholder="Targets (US:AAPL)",
                 id="th-targets",
             )
-            yield Input(
-                value=self._seed["horizon"], placeholder="Horizon (5y)", id="th-horizon"
-            )
+            yield Input(value=self._seed["horizon"], placeholder="Horizon (5y)", id="th-horizon")
         with Horizontal(classes="form-row"):
             yield Input(
                 value=self._seed["scope"],
@@ -429,7 +427,11 @@ class Theses(RiggerScreen):
     def refresh_list(self) -> None:
         table = self.query_one("#thesis-table", RiggerTable)
         query = self.query_one("#thesis-filter", Input).value.casefold().strip()
-        rows = [row for row in self._theses if query in row.claim.casefold()] if query else self._theses
+        rows = (
+            [row for row in self._theses if query in row.claim.casefold()]
+            if query
+            else self._theses
+        )
         index = {row.id: position for position, row in enumerate(rows)}
         colours = self._colours()
         with self.prevent(RiggerTable.RowHighlighted, RiggerTable.RowSelected):
@@ -602,7 +604,7 @@ class Theses(RiggerScreen):
         # Only the keys are styled here; the muted body colour comes from the
         # widget's own CSS, because $text-muted resolves to a blend token that
         # is not a colour Rich can parse.
-        key_style = f"bold {self._colours().get('primary', 'white')}"
+        key_style = f"bold {self._colours().get('text-primary', 'white')}"
         line = Text(no_wrap=True, overflow="ellipsis")
         if not keys:
             line.append("nothing to review")
@@ -749,7 +751,7 @@ class Theses(RiggerScreen):
             )
         widgets.append(
             Static(
-                f"{"targets":10}" + (", ".join(thesis.targets) or "all evidence"),
+                f"{'targets':10}" + (", ".join(thesis.targets) or "all evidence"),
                 classes="thesis-field",
                 markup=False,
             )
@@ -760,9 +762,7 @@ class Theses(RiggerScreen):
             ("breaks if", "; ".join(thesis.falsifiers)),
         ):
             if value:
-                widgets.append(
-                    Static(f"{label:10}{value}", classes="thesis-field", markup=False)
-                )
+                widgets.append(Static(f"{label:10}{value}", classes="thesis-field", markup=False))
         if not thesis.falsifiers:
             widgets.append(
                 Static(

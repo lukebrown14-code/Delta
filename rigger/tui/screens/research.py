@@ -106,7 +106,7 @@ class Research(RiggerScreen):
     #evidence-search { width: 1fr; }
     /* The active tab is marked with a class: "primary" is reserved for the
        action button, so exactly one control ever reads as the primary one. */
-    #research-actions Button.-tab-active { background: $primary; color: $background; }
+    #research-actions Button.-tab-active { background: $primary; color: $block-cursor-foreground; }
     #evidence-kind { width: 20; }
     #evidence-table, #evidence-preview, #report-view { height: 1fr; }
     #evidence-empty, #evidence-count, #report-legacy { height: auto; }
@@ -782,9 +782,7 @@ class Research(RiggerScreen):
                 )
             self.notify(f"Thesis created with {len(claim.evidence_ids)} linked sources", timeout=6)
 
-        self.app.push_screen(
-            ThesisForm(claim=claim.text, targets=self.state.company), created
-        )
+        self.app.push_screen(ThesisForm(claim=claim.text, targets=self.state.company), created)
 
     def research_screens(self) -> list[Research]:
         """Every mounted Research panel, so Reports and Research stay in sync.

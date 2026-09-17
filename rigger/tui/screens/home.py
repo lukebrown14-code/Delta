@@ -191,7 +191,7 @@ class Home(Screen):
         width: 100%;
         height: 6;
         text-align: center;
-        color: $secondary;
+        color: $text-primary;
         text-style: bold;
     }
     Home #clock {
@@ -203,8 +203,8 @@ class Home(Screen):
     Home #statbox {
         width: 50;
         height: auto;
-        border: round $secondary;
-        border-title-color: $secondary;
+        border: round $border-blurred;
+        border-title-color: $text-primary;
         border-title-align: left;
         padding: 0 1;
         margin: 0 3;
@@ -217,8 +217,8 @@ class Home(Screen):
         margin-bottom: 1;
     }
     Home .pulse-spark { width: 100%; height: 3; }
-    Home .pulse-spark > .sparkline--min-color { color: $secondary 45%; }
-    Home .pulse-spark > .sparkline--max-color { color: $secondary; }
+    Home .pulse-spark > .sparkline--min-color { color: $text-primary; }
+    Home .pulse-spark > .sparkline--max-color { color: $text-primary; }
     Home .pulse-axis { height: 1; margin-bottom: 1; }
     Home .pulse-axis-left { width: 1fr; color: $text-muted; }
     Home .pulse-axis-right { width: auto; color: $text-muted; }
@@ -239,22 +239,22 @@ class Home(Screen):
         text-wrap: nowrap;
         text-overflow: ellipsis;
     }
-    Home #setup-line.-ok { color: $success; }
-    Home #setup-line.-bad { color: $error; }
+    Home #setup-line.-ok { color: $text-success; }
+    Home #setup-line.-bad { color: $text-error; }
     Home .up-row { height: 1; }
     Home .up-sym { width: 9; color: $foreground; text-style: bold; }
     Home .up-kind { width: 12; color: $text-muted; }
     Home .up-date { width: 9; color: $foreground; }
-    Home .up-when { width: 1fr; color: $primary; }
+    Home .up-when { width: 1fr; color: $text-primary; }
     Home .tick-row { height: 1; }
     Home .tick-sym { width: 9; color: $foreground; text-style: bold; }
     Home .tick-px { width: 11; text-align: right; color: $foreground; }
     Home .tick-chg { width: 9; text-align: right; color: $text-muted; }
-    Home .tick-chg.-up { color: $success; }
-    Home .tick-chg.-down { color: $error; }
+    Home .tick-chg.-up { color: $text-success; }
+    Home .tick-chg.-down { color: $text-error; }
     Home .tick-row Sparkline { width: 1fr; height: 1; margin-left: 2; }
-    Home .tick-row Sparkline > .sparkline--min-color { color: $secondary 45%; }
-    Home .tick-row Sparkline > .sparkline--max-color { color: $secondary; }
+    Home .tick-row Sparkline > .sparkline--min-color { color: $text-primary; }
+    Home .tick-row Sparkline > .sparkline--max-color { color: $text-primary; }
     Home #boot {
         width: 100%;
         text-align: center;
@@ -265,16 +265,16 @@ class Home(Screen):
     Home .hint-row { height: 1; }
     Home .hint-cell { width: 1fr; height: 1; }
     Home .hint-glyph { width: 2; }
-    Home .hint-key { width: 2; color: $primary; text-style: bold; }
+    Home .hint-key { width: 2; color: $text-primary; text-style: bold; }
     Home .hint-label { width: 1fr; color: $text-muted; }
-    Home .hint-cell.-do .hint-glyph { color: $primary; }
-    Home .hint-cell.-look .hint-glyph { color: $secondary; }
+    Home .hint-cell.-do .hint-glyph { color: $text-primary; }
+    Home .hint-cell.-look .hint-glyph { color: $text-primary; }
     Home .hint-cell.-app .hint-glyph { color: $text-muted; }
     Home .hint-cell:hover .hint-label { color: $foreground; }
     Home .sec-head {
         height: 1;
         margin: 1 0 0 0;
-        color: $secondary;
+        color: $text-primary;
         text-style: bold;
     }
     Home .sec-row { height: 1; }
@@ -284,7 +284,7 @@ class Home(Screen):
         text-wrap: nowrap;
         text-overflow: ellipsis;
     }
-    Home .sec-num { width: 4; text-align: right; color: $primary; }
+    Home .sec-num { width: 4; text-align: right; color: $text-primary; }
     """
 
     def __init__(self, rig: Any, last_seen: datetime | None = None) -> None:

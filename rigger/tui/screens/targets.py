@@ -65,8 +65,8 @@ class TargetAddModal(Dialog):
     TargetAddModal .tg-field Label { width: 10; padding: 1 0; color: $text-muted; }
     TargetAddModal .tg-field Input { width: 1fr; margin: 0; }
     TargetAddModal #tg-network { height: 1; color: $text-muted; content-align-horizontal: center; }
-    TargetAddModal #tg-network.-online { color: $success; }
-    TargetAddModal #tg-network.-offline { color: $warning; }
+    TargetAddModal #tg-network.-online { color: $text-success; }
+    TargetAddModal #tg-network.-offline { color: $text-warning; }
     TargetAddModal #tg-suggestions { display: none; height: auto; max-height: 6; margin: 0 0 1 10; background: $panel; }
     TargetAddModal #tg-modal-actions { height: 1; margin-top: 1; }
     TargetAddModal #tg-modal-actions Button { height: 1; min-width: 0; border: none; padding: 0 1; margin: 0 1 0 0; }
@@ -310,7 +310,7 @@ class Targets(RiggerScreen):
     #target-list-pane { height: 1fr; }
     #target-table { height: 1fr; margin: 0; border: none; }
     #target-table > .option-list--option { padding: 0 1; }
-    #target-table .tg-group { color: $primary; text-style: bold; }
+    #target-table .tg-group { color: $text-primary; text-style: bold; }
     #tg-filter { height: 3; }
     #tg-form { height: auto; max-height: 18; overflow-y: auto; }
     .tg-field { height: 3; }
@@ -322,7 +322,7 @@ class Targets(RiggerScreen):
         padding: 0;
     }
     #tg-actions Button { height: 1; min-width: 0; border: none; padding: 0 1; margin: 0; background: $panel; color: $text-muted; }
-    #tg-actions Button:focus { color: $primary; text-style: bold; }
+    #tg-actions Button:focus { color: $text-primary; text-style: bold; }
     #tg-action-spacer { width: 1fr; height: 1; background: $panel; }
     #tg-empty, #tg-state { height: auto; color: $text-muted; }
     #target-inspector-pane { width: 2fr; min-width: 0; padding: 0 1; }
@@ -334,14 +334,16 @@ class Targets(RiggerScreen):
     #target-inspector-hero { width: 1fr; height: 3; margin-bottom: 1; }
     #target-chart-header { width: 1fr; height: 1; }
     #target-chart-label { width: 1fr; color: $text-muted; text-style: bold; }
-    #target-chart-change { width: auto; color: $success; text-style: bold; }
+    #target-chart-change { width: auto; text-style: bold; }
+    #target-chart-change.-up { color: $text-success; }
+    #target-chart-change.-down { color: $text-error; }
     #target-chart { width: 1fr; height: 7; margin-bottom: 1; padding: 0 1; background: $panel; }
     #target-metric-grid { width: 1fr; height: auto; layout: grid; grid-size: 2; grid-columns: 1fr 1fr; grid-gutter: 1 1; }
     .pane-row.-narrow #target-metric-grid { grid-size: 1; grid-columns: 1fr; }
     .metric-card { width: 1fr; height: auto; min-height: 5; padding: 1; border: round $panel; background: $surface; }
-    .metric-card-title { width: 1fr; height: 1; color: $primary; text-style: bold; }
+    .metric-card-title { width: 1fr; height: 1; color: $text-primary; text-style: bold; }
     .metric-card-body { width: 1fr; height: auto; color: $foreground; }
-    #target-inspector-title { color: $primary; text-style: bold; }
+    #target-inspector-title { color: $text-primary; text-style: bold; }
     #target-inspector-status, #target-inspector-empty { color: $text-muted; height: auto; }
     """
 
@@ -607,6 +609,7 @@ class Targets(RiggerScreen):
             )
             hero.update("")
             chart_change.update("")
+            chart_change.set_classes("")
             self.query_one("#target-chart", Sparkline).data = []
             clear_cards()
             return
@@ -616,6 +619,7 @@ class Targets(RiggerScreen):
             status.update("Loading live metrics…")
             hero.update("")
             chart_change.update("—")
+            chart_change.set_classes("")
             self.query_one("#target-chart", Sparkline).data = []
             clear_cards()
             return
@@ -625,25 +629,27 @@ class Targets(RiggerScreen):
         daily = (
             "—" if quote is None or quote.change_pct is None else f"{quote.change_pct:+.1f}% today"
         )
+        tokens = self.app.theme_variables
+        up, down, flat = tokens["text-success"], tokens["text-error"], tokens["text-muted"]
         hero_text = Text()
-        hero_text.append(current, style="bold bright_white")
+        hero_text.append(current, style=f"bold {tokens['foreground']}")
         hero_text.append("   ")
         hero_text.append(
             daily,
-            style="green"
+            style=up
             if quote and quote.change_pct and quote.change_pct > 0
-            else "red"
+            else down
             if quote and quote.change_pct and quote.change_pct < 0
-            else "dim",
+            else flat,
         )
         hero_text.append("   ")
         hero_text.append(
             f"{metric.change_label or '—'} {self._range_label().casefold()}",
-            style="green"
+            style=up
             if metric.change_label.startswith("+")
-            else "red"
+            else down
             if metric.change_label.startswith("-")
-            else "dim",
+            else flat,
         )
         hero.update(hero_text)
         if metric.error:
@@ -666,6 +672,8 @@ class Targets(RiggerScreen):
                 f"{range_context} · {volatility}"
             )
         chart_change.update(metric.change_label or "—")
+        chart_change.set_class(metric.change_label.startswith("+"), "-up")
+        chart_change.set_class(metric.change_label.startswith("-"), "-down")
         self.query_one("#target-chart", Sparkline).data = chart_window(
             metric.series, None if self._range == "all" else 30
         )
@@ -756,12 +764,13 @@ class Targets(RiggerScreen):
             else:
                 pct = quote.change_pct
                 trend = "─" if pct is None or pct == 0 else "▲" if pct > 0 else "▼"
+                tokens = self.app.theme_variables
                 color = (
-                    self.app.current_theme.success
+                    tokens["text-success"]
                     if pct and pct > 0
-                    else self.app.current_theme.error
+                    else tokens["text-error"]
                     if pct and pct < 0
-                    else self.app.current_theme.foreground
+                    else tokens["foreground"]
                 )
                 prompt = Text(
                     f"  {target.id}  ·  {','.join(target.tickers) or 'market'}  ·  {','.join(target.markets)}  ·  {', '.join(sorted(target.tags)) or '—'}  {quote.price:,.2f} {trend}",

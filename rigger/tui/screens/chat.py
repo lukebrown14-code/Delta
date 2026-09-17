@@ -68,7 +68,7 @@ class Chat(RiggerScreen):
     }
     .msg-head {
         height: 1;
-        color: $primary;
+        color: $text-primary;
         text-style: bold;
     }
     """
