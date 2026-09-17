@@ -203,7 +203,7 @@ class Home(Screen):
     Home #statbox {
         width: 50;
         height: auto;
-        border: round $border-blurred;
+        border: solid $border-blurred;
         border-title-color: $text-primary;
         border-title-align: left;
         padding: 0 1;

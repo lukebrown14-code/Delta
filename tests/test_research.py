@@ -8,7 +8,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from sqlmodel import Session
 from textual.app import App
-from textual.widgets import Button, Input, Markdown, MarkdownViewer, Select, Static
+from textual.widgets import Button, Input, Markdown, MarkdownViewer, OptionList, Static
 
 from rigger.core.db import NewsItemTable
 from rigger.core.json import to_json
@@ -21,6 +21,12 @@ from rigger.tui.screens.research import ResearchState
 from rigger.tui.theme import THEMES
 from tests.conftest import FakeLLM
 from tests.test_reports import INST, ScreenRig, _draft, _seed
+
+
+def pick_company(screen, company: str) -> None:
+    """Highlight a company in the header list, as the arrow keys would."""
+    companies = screen.query_one("#research-company", OptionList)
+    companies.highlighted = companies.get_option_index(company)
 
 
 def setup_rig(tmp_engine, tmp_path, monkeypatch):
@@ -120,17 +126,17 @@ def test_company_filters_and_citation_round_trip(tmp_engine, tmp_path, monkeypat
             assert opened == []
             assert screen.view.search == "close"
             assert "Both companies" in str(screen.query_one("#source-body", Static).render())
-            assert not screen.query_one("#evidence-report", Button).disabled
-            await pilot.click("#evidence-report")
+            assert screen.can_view
+            await pilot.press("v")
             assert screen.tab == "report"
             await screen.inspect_evidence("news:deleted")
             assert "no longer available" in str(screen.query_one("#source-body", Static).render())
-            screen.query_one("#research-company", Select).value = "US:MSFT"
+            pick_company(screen, "US:MSFT")
             await pilot.pause()
             assert screen.state.company == "US:MSFT"
             assert not screen.items
             assert screen.report is None
-            screen.query_one("#research-company", Select).value = INST
+            pick_company(screen, INST)
             await pilot.pause()
             assert screen.view.search == "close"
             assert screen.report.target_id == INST
@@ -164,7 +170,7 @@ def test_aliases_share_state_and_narrow_details(tmp_engine, tmp_path, monkeypatc
             assert not screen.query_one("#evidence-list-pane").display
             assert screen.query_one("#evidence-preview-pane").display
             await pilot.pause()
-            await pilot.click("#evidence-back")
+            await pilot.press("escape")
             assert screen.query_one("#evidence-list-pane").display
             pilot.app.switch_screen("reports")
             await pilot.pause()
@@ -199,13 +205,13 @@ def test_generation_captures_company_and_handles_failure(tmp_engine, tmp_path, m
             worker = screen.generate(INST)
             await started.wait()
             assert screen.query_one("#report-generate", Button).disabled
-            screen.query_one("#research-company", Select).value = "US:MSFT"
+            pick_company(screen, "US:MSFT")
             await pilot.pause()
             release.set()
             await worker.wait()
             assert screen.state.company == "US:MSFT"
             assert "Updated" not in screen.query_one(MarkdownViewer).document.source
-            screen.query_one("#research-company", Select).value = INST
+            pick_company(screen, INST)
             await pilot.pause()
             assert "Updated" in screen.query_one(MarkdownViewer).document.source
 
@@ -250,7 +256,7 @@ def test_report_scroll_returns_and_first_citing_claim(tmp_engine, tmp_path, monk
             assert viewer.scroll_y == position
             await screen.inspect_evidence("news:news-1")
             await pilot.pause()
-            await pilot.click("#evidence-report")
+            await pilot.press("v")
             await pilot.pause()
             assert viewer.scroll_y > position
             viewer.scroll_to(y=20, animate=False)
@@ -334,7 +340,7 @@ def test_report_age_and_section_counts_surface_staleness(tmp_engine, tmp_path, m
             assert "-0.50" in str(screen.query_one("#report-sentiment").render())
             assert screen.query_one("#report-sentiment").has_class("-error")
             # The badge says how much substance the report has.
-            badge = str(screen.query_one("#report-doc")._bar._badge.render())
+            badge = screen.query_one("#report-doc")._badge
             assert "bull 1" in badge and "bear 1" in badge
             # A claim's source count is visible without counting cite lines.
             assert "(1 source)" in screen.query_one(MarkdownViewer).document.source
@@ -423,14 +429,9 @@ def test_every_action_is_reachable_from_the_keyboard(tmp_engine, tmp_path, monke
             assert screen.tab == "evidence"
             await pilot.press("r")
             assert screen.tab == "report"
-            # The active tab is marked by class, leaving one primary button.
+            # Exactly one tab chip reads as active.
             assert screen.query_one("#tab-report", Button).has_class("-tab-active")
-            primaries = [
-                button
-                for button in screen.query(Button)
-                if button.variant == "primary" and button.display
-            ]
-            assert [button.id for button in primaries] == ["report-generate"]
+            assert not screen.query_one("#tab-evidence", Button).has_class("-tab-active")
             await pilot.press("slash")
             assert screen.tab == "evidence"
             assert screen.query_one("#evidence-search", Input).has_focus

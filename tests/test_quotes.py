@@ -12,7 +12,14 @@ from rigger.quotes import YahooQuotes, classify_yahoo_asset, parse_quote, yahoo_
 
 @pytest.mark.parametrize(
     ("quote_type", "expected"),
-    [("EQUITY", "equity"), ("ETF", "etf"), ("BOND", "bond"), ("CURRENCY", "fx"), ("FUTURE", "commodity"), ("CRYPTOCURRENCY", "crypto")],
+    [
+        ("EQUITY", "equity"),
+        ("ETF", "etf"),
+        ("BOND", "bond"),
+        ("CURRENCY", "fx"),
+        ("FUTURE", "commodity"),
+        ("CRYPTOCURRENCY", "crypto"),
+    ],
 )
 def test_classify_yahoo_asset(quote_type, expected):
     assert classify_yahoo_asset("TEST", quote_type) == expected
@@ -56,9 +63,19 @@ def test_yahoo_search_normalizes_exchange_and_currency(monkeypatch):
             assert query == "BHP"
             assert max_results == 8
             self.quotes = [
-                {"symbol": "BHP.AX", "longname": "BHP Group Limited", "exchange": "ASX", "currency": "AUD"},
+                {
+                    "symbol": "BHP.AX",
+                    "longname": "BHP Group Limited",
+                    "exchange": "ASX",
+                    "currency": "AUD",
+                },
                 {"symbol": "AAPL", "shortname": "Apple Inc.", "exchange": "NMS"},
-                {"symbol": "BTC-USD", "shortname": "Bitcoin USD", "exchange": "CCC", "quoteType": "CRYPTOCURRENCY"},
+                {
+                    "symbol": "BTC-USD",
+                    "shortname": "Bitcoin USD",
+                    "exchange": "CCC",
+                    "quoteType": "CRYPTOCURRENCY",
+                },
             ]
 
     monkeypatch.setattr(yfinance, "Search", Search)

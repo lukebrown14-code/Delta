@@ -12,8 +12,9 @@ from typing import Any
 from textual import work
 from textual.app import ComposeResult
 from textual.containers import Horizontal, VerticalScroll
-from textual.widgets import Button, Input, Markdown, MarkdownViewer, Select, Static
+from textual.widgets import Button, Input, Markdown, MarkdownViewer, OptionList, Static
 from textual.widgets._markdown import MarkdownBlock
+from textual.widgets.option_list import Option
 from textual.worker import Worker, get_current_worker
 
 from rigger import services, theses
@@ -32,7 +33,26 @@ from rigger.reports import (
     write_report,
 )
 from rigger.tui.shell import RiggerScreen, age_text
-from rigger.tui.widgets import Pane, PaneRow, Pill, RiggerTable, StatusDot, sentiment_variant
+from rigger.tui.widgets import (
+    ActionChip,
+    Pane,
+    PaneRow,
+    Pill,
+    RiggerTable,
+    StatusDot,
+    hint_markup,
+    sentiment_variant,
+)
+
+#: Evidence kinds in the order ``k`` cycles them; label, filter value.
+KINDS: tuple[tuple[str, str], ...] = (
+    ("all", "all"),
+    ("news", "news"),
+    ("filings", "filing"),
+    ("prices", "bar"),
+    ("fundamentals", "fundamental"),
+    ("events", "event"),
+)
 
 
 @dataclass
@@ -82,41 +102,46 @@ class Research(RiggerScreen):
     #: ``RiggerApp`` (1-5, c, h, m, p, g, q) so the global navigation still
     #: works from this screen — notably ``g``, which is the Go picker.
     BINDINGS = [
-        ("e", "show_evidence", "Sources"),
+        ("e", "show_evidence", "Evidence"),
         ("r", "show_report", "Report"),
-        ("n", "generate_report", "New report"),
-        ("u", "update_evidence", "Update evidence"),
+        ("n", "generate_report", "Generate report"),
+        ("u", "update_evidence", "Refresh company"),
+        ("U", "gather_all", "Gather all targets"),
         ("slash", "focus_search", "Search sources"),
+        ("k", "cycle_kind", "Kind"),
+        ("l", "load_more", "Load more"),
+        ("t", "focus_targets", "Targets"),
         ("o", "open_source", "Open source"),
         ("v", "view_in_report", "View in report"),
         ("escape", "back", "Back"),
     ]
     CSS = """
-    #research-header, #research-actions, #evidence-filters, #preview-actions { height: auto; }
-    #research-header { max-height: 6; }
-    /* Scrolls rather than clamping: a long watchlist must not be silently
-       cut off, since this table is how you find what needs attention. */
-    #report-targets { height: 6; width: 1fr; overflow-y: auto; }
-    #research-company { width: 1fr; }
-    #research-actions Button { min-width: 10; }
-    #research-status { height: auto; color: $text-muted; }
+    /* Header: targets and company side by side, six rows including frames.
+       Narrow terminals fold the company into the targets title (see
+       layout_views) and give the rows back to the sources list. */
+    #research-header { height: 6; }
+    #research-header.-narrow { height: 4; }
+    #report-targets { height: 1fr; width: 1fr; overflow-y: auto; }
+    #research-company { height: 1fr; margin: 0; border: none; background: transparent; }
+    #research-company > .option-list--option { padding: 0 1; }
+    #research-actions { height: 1; margin: 0 0 0 1; }
+    #research-actions .chip-gap { width: auto; height: 1; }
+    #research-status { height: 1; margin: 0 1; color: $text-muted; }
     #evidence-layout, #report-doc { height: 1fr; }
     #evidence-list-pane { width: 2fr; }
     #evidence-preview-pane { width: 3fr; }
+    #evidence-filters { height: 1; margin: 0 0 0 0; }
     #evidence-search { width: 1fr; }
-    /* The active tab is marked with a class: "primary" is reserved for the
-       action button, so exactly one control ever reads as the primary one. */
-    #research-actions Button.-tab-active { background: $primary; color: $block-cursor-foreground; }
-    #evidence-kind { width: 20; }
-    #evidence-table, #evidence-preview, #report-view { height: 1fr; }
-    #evidence-empty, #evidence-count, #report-legacy { height: auto; }
-    #report-meta { height: 1; }
+    #evidence-kind { width: auto; height: 1; padding: 0 1; color: $text-muted; }
+    #evidence-table { height: 1fr; }
+    #evidence-preview, #report-view { height: 1fr; }
+    #evidence-count { height: 1; padding: 0 1; color: $text-muted; }
+    #source-body { height: auto; padding: 0 1; }
+    #report-meta { height: 1; padding: 0 1; }
     #report-meta StatusDot { width: 2; }
     #report-meta Static, #report-meta Pill { width: auto; padding: 0 1 0 0; }
-    #report-age { color: $text-muted; }
-    #report-sentiment-delta { color: $text-muted; }
-    #report-history { height: auto; color: $text-muted; }
-    #source-body { height: auto; }
+    #report-age, #report-sentiment-delta { color: $text-muted; }
+    #report-history, #report-legacy { height: auto; padding: 0 1; color: $text-muted; }
     """
     initial_tab = "evidence"
 
@@ -128,6 +153,9 @@ class Research(RiggerScreen):
         self.items: dict[str, EvidenceItem] = {}
         self.ready = False
         self.detail_open = False
+        self.more_available = False
+        self.can_open = False
+        self.can_view = False
         self._rendered_company = ""
         self.status_text = ""
         self._claim_to_reveal = ""
@@ -142,48 +170,51 @@ class Research(RiggerScreen):
         return self.state.companies.setdefault(self.state.company, CompanyView())
 
     def compose_content(self) -> ComposeResult:
-        with Horizontal(id="research-header"):
-            yield RiggerTable(id="report-targets")
-            yield Select([], prompt="Company", id="research-company")
+        with PaneRow(id="research-header"):
+            with Pane(
+                title="targets",
+                key="t",
+                hints=hint_markup(("↑↓", "select"), ("tab", "company")),
+                id="research-targets-pane",
+            ):
+                yield RiggerTable(id="report-targets")
+            with Pane(
+                title="company", hints=hint_markup(("↑↓", "select")), id="research-company-pane"
+            ):
+                yield OptionList(id="research-company")
         with Horizontal(id="research-actions"):
-            yield Button("Evidence", id="tab-evidence")
-            yield Button("Report", id="tab-report")
-            yield Button("Refresh company", id="research-refresh")
-            yield Button("Gather all targets", id="research-gather")
-            yield Button("Generate report", id="report-generate", variant="primary")
+            yield ActionChip("e", "evidence", id="tab-evidence")
+            yield ActionChip("r", "report", id="tab-report")
+            yield Static("  ", classes="chip-gap")
+            yield ActionChip("u", "refresh company", id="research-refresh")
+            yield ActionChip("U", "gather all", id="research-gather")
+            yield ActionChip("n", "generate report", id="report-generate", classes="-primary")
         yield Static("", id="research-status", markup=False)
         with PaneRow(id="evidence-layout"):
-            with Pane(title="sources", id="evidence-list-pane"):
+            with Pane(
+                title="sources",
+                key="e",
+                hints=hint_markup(("/", "search"), ("k", "kind"), ("l", "more"), ("enter", "open")),
+                id="evidence-list-pane",
+            ):
                 with Horizontal(id="evidence-filters"):
-                    yield Input(placeholder="Search sources", id="evidence-search")
-                    yield Select(
-                        [
-                            (label, value)
-                            for label, value in (
-                                ("All", "all"),
-                                ("News", "news"),
-                                ("Filings", "filing"),
-                                ("Prices", "bar"),
-                                ("Fundamentals", "fundamental"),
-                                ("Events", "event"),
-                            )
-                        ],
-                        value="all",
-                        allow_blank=False,
-                        id="evidence-kind",
-                    )
+                    yield Input(placeholder="/ search sources", id="evidence-search")
+                    yield Static("", id="evidence-kind")
                 yield RiggerTable(id="evidence-table")
-                yield Static("", id="evidence-empty", markup=False)
                 yield Static("", id="evidence-count", markup=False)
-                yield Button("Load more", id="evidence-more")
-            with Pane(title="preview", id="evidence-preview-pane"):
+            with Pane(
+                title="preview",
+                hints=hint_markup(("o", "open source"), ("v", "view in report"), ("esc", "back")),
+                id="evidence-preview-pane",
+            ):
                 with VerticalScroll(id="evidence-preview"):
                     yield Static("Select a source.", id="source-body", markup=False)
-                with Horizontal(id="preview-actions"):
-                    yield Button("Back", id="evidence-back")
-                    yield Button("View in report", id="evidence-report")
-                    yield Button("Open source", id="evidence-open")
-        with Pane(title="report", id="report-doc"):
+        with Pane(
+            title="report",
+            key="r",
+            hints=hint_markup(("↑↓", "scroll"), ("enter", "follow citation"), ("n", "regenerate")),
+            id="report-doc",
+        ):
             with Horizontal(id="report-meta"):
                 yield StatusDot("warn", id="report-age-dot")
                 yield Static("", id="report-age", markup=False)
@@ -272,19 +303,27 @@ class Research(RiggerScreen):
         ids = [i.id for i in instruments]
         if self.state.company not in ids:
             self.state.company = ids[0] if ids else ""
-        selector = self.query_one("#research-company", Select)
-        with self.prevent(Select.Changed):
-            selector.set_options(
-                [(f"{getattr(i, 'name', '') or i.symbol} · {i.id}", i.id) for i in instruments]
+        selector = self.query_one("#research-company", OptionList)
+        with self.prevent(OptionList.OptionHighlighted):
+            selector.clear_options()
+            selector.add_options(
+                [
+                    Option(f"{getattr(i, 'name', '') or i.symbol} · {i.id}", id=i.id)
+                    for i in instruments
+                ]
             )
-            selector.value = self.state.company or Select.NULL
+            if self.state.company in ids:
+                selector.highlighted = ids.index(self.state.company)
+        self.query_one("#research-company-pane", Pane).set_badge(
+            "" if len(ids) != 1 else "one company in this target"
+        )
         await self.load_company()
 
     async def load_company(self) -> None:
         self._rendered_company = self.state.company
-        with self.prevent(Input.Changed, Select.Changed):
+        with self.prevent(Input.Changed):
             self.query_one("#evidence-search", Input).value = self.view.search
-            self.query_one("#evidence-kind", Select).value = self.view.kind
+        self.render_kind()
         for button in ("#report-generate", "#research-gather", "#research-refresh"):
             self.query_one(button, Button).disabled = self.state.busy
         self.detail_open = False
@@ -321,18 +360,28 @@ class Research(RiggerScreen):
             self.detail_open = True
             self.layout_views()
 
-    async def on_select_changed(self, event: Select.Changed) -> None:
-        if not self.ready or event.value is Select.NULL:
+    async def on_option_list_option_highlighted(self, event: OptionList.OptionHighlighted) -> None:
+        if not self.ready or event.option_list.id != "research-company":
             return
-        if event.select.id == "research-company" and str(event.value) != self.state.company:
+        company = str(event.option.id or "")
+        if company and company != self.state.company:
             self.save_position()
-            self.state.company = str(event.value)
+            self.state.company = company
             await self.load_company()
-        elif event.select.id == "evidence-kind" and str(event.value) != self.view.kind:
-            self.view.kind = str(event.value)
-            self.view.limit = 200
-            self.view.inspected = ""
-            self.load_evidence()
+
+    def render_kind(self) -> None:
+        label = next((label for label, value in KINDS if value == self.view.kind), self.view.kind)
+        self.query_one("#evidence-kind", Static).update(f"kind: {label}")
+
+    def action_cycle_kind(self) -> None:
+        self.show_tab("evidence")
+        values = [value for _label, value in KINDS]
+        index = values.index(self.view.kind) if self.view.kind in values else 0
+        self.view.kind = values[(index + 1) % len(values)]
+        self.view.limit = 200
+        self.view.inspected = ""
+        self.render_kind()
+        self.load_evidence()
 
     def on_input_changed(self, event: Input.Changed) -> None:
         if self.ready and event.input.id == "evidence-search" and event.value != self.view.search:
@@ -353,16 +402,22 @@ class Research(RiggerScreen):
             if self.state.company
             else []
         )
-        self.query_one("#evidence-more", Button).disabled = len(rows) <= self.view.limit
+        self.more_available = len(rows) > self.view.limit
         self.items = {item.id: item for item in rows[: self.view.limit]}
         table = self.query_one("#evidence-table", RiggerTable)
         with self.prevent(RiggerTable.RowHighlighted):
             table.clear()
             for item in self.items.values():
                 table.add_row(item.title, item.kind, item.ts.strftime("%Y-%m-%d"), key=item.id)
-        self.query_one("#evidence-count", Static).update(f"{len(self.items)} sources shown")
-        self.query_one("#evidence-empty", Static).update(
-            "" if rows else "No matching evidence. Gather all or change filters."
+        self.query_one("#evidence-list-pane", Pane).set_badge(
+            f"{len(self.items)}+" if self.more_available else str(len(self.items))
+        )
+        self.query_one("#evidence-count", Static).update(
+            "No matching evidence — U gathers all targets, k changes kind."
+            if not rows
+            else f"{len(self.items)} shown · l loads more"
+            if self.more_available
+            else f"{len(self.items)} shown"
         )
         selected = self.items.get(self.view.selected) or next(iter(self.items.values()), None)
         if selected:
@@ -384,12 +439,13 @@ class Research(RiggerScreen):
         )
 
     def preview(self, item: EvidenceItem | None) -> None:
-        self.query_one("#evidence-open", Button).disabled = not (
-            item and item.url and item.url.startswith(("https://", "http://"))
-        )
-        self.query_one("#evidence-report", Button).disabled = not (
-            item and item.id in self.cited_ids()
-        )
+        self.can_open = bool(item and item.url and item.url.startswith(("https://", "http://")))
+        self.can_view = bool(item and item.id in self.cited_ids())
+        hints = [("o", "open source")] if self.can_open else []
+        if self.can_view:
+            hints.append(("v", "view in report"))
+        hints.append(("esc", "back"))
+        self.query_one("#evidence-preview-pane", Pane).set_hints(hint_markup(*hints))
         if item is None:
             self.query_one("#source-body", Static).update("Select a source.")
             return
@@ -629,7 +685,19 @@ class Research(RiggerScreen):
         self.query_one("#report-doc").display = self.tab == "report"
         self.query_one("#evidence-list-pane").display = not (narrow and self.detail_open)
         self.query_one("#evidence-preview-pane").display = not narrow or self.detail_open
-        self.query_one("#evidence-back").display = narrow
+        # Narrow: the company pane folds into the targets title so the header
+        # costs four rows, not twelve stacked.
+        header = self.query_one("#research-header", PaneRow)
+        header.set_class(narrow, "-narrow")
+        self.query_one("#research-company-pane").display = not narrow
+        targets_pane = self.query_one("#research-targets-pane", Pane)
+        targets_pane.set_badge(self.state.company if narrow else "")
+        for chip, short, long in (
+            ("#research-refresh", "refresh", "refresh company"),
+            ("#research-gather", "gather all", "gather all"),
+            ("#report-generate", "generate", "generate report"),
+        ):
+            self.query_one(chip, ActionChip).set_text(short if narrow else long)
 
     def on_resize(self) -> None:
         if self.ready:
@@ -650,15 +718,24 @@ class Research(RiggerScreen):
         self.dispatch("report-generate")
 
     def action_update_evidence(self) -> None:
+        self.dispatch("research-refresh")
+
+    def action_gather_all(self) -> None:
         self.dispatch("research-gather")
+
+    def action_load_more(self) -> None:
+        self.dispatch("evidence-more")
+
+    def action_focus_targets(self) -> None:
+        self.query_one("#report-targets", RiggerTable).focus()
 
     def action_open_source(self) -> None:
         self.dispatch("evidence-open")
 
     def action_view_in_report(self) -> None:
-        # The button is disabled for an uncited source; the key must not jump
-        # to the report tab and land nowhere.
-        if self.view.selected in self.cited_ids():
+        # An uncited source has nowhere to go: the key must not jump to the
+        # report tab and land nowhere.
+        if self.can_view:
             self.dispatch("evidence-report")
 
     def action_back(self) -> None:
@@ -681,8 +758,9 @@ class Research(RiggerScreen):
             self.show_tab(action.removeprefix("tab-"))
             self.call_after_refresh(self.restore_position)
         elif action == "evidence-more":
-            self.view.limit += 200
-            self.load_evidence()
+            if self.more_available:
+                self.view.limit += 200
+                self.load_evidence()
         elif action == "evidence-back":
             self.view.inspected = ""
             self.load_evidence()
@@ -693,7 +771,7 @@ class Research(RiggerScreen):
             self.show_tab("report")
         elif action == "evidence-open":
             item = self.items.get(self.view.selected)
-            if item and item.url and item.url.startswith(("https://", "http://")):
+            if self.can_open and item and item.url:
                 self.app.open_url(item.url)
         elif action == "report-generate":
             if not self.state.company:

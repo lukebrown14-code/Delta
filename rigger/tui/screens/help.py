@@ -119,7 +119,7 @@ class HelpScreen(Screen):
         width: 84;
         height: 90%;
         background: $surface;
-        border: round $border-blurred;
+        border: solid $border-blurred;
         padding: 1 2;
     }
     HelpScreen .help-title {

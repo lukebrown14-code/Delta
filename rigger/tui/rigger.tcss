@@ -89,7 +89,7 @@ KeyHint {
 
 /* ---------- tables ---------- */
 
-/* Borderless to match the panes: the winbar above is the only header.
+/* Borderless: the pane frame is the only border.
    Height is deliberately absent — the app stylesheet outranks every screen's
    DEFAULT_CSS regardless of specificity, so setting it here would override
    each screen's own #id sizing. */
@@ -101,17 +101,33 @@ DataTable {
 
 /* ---------- forms ---------- */
 
+/* One-row inputs: the left bar is the focus ring, so height stays 1. */
 Input {
-    border: round $panel;
-    background: transparent;
+    height: 1;
+    padding: 0 1;
+    border: none;
+    border-left: thick $border-blurred;
+    background: $surface;
 }
 
 Input:focus {
-    border: round $border;
+    border: none;
+    border-left: thick $border;
+    background: $surface;
 }
 
+/* Stock buttons lose the three-row slab; ActionChip is the intended shape. */
 Button {
+    height: 1;
+    min-width: 0;
+    border: none;
+    padding: 0 1;
     margin: 0 1 0 0;
+}
+
+Button:focus, Button:hover {
+    border: none;
+    text-style: bold;
 }
 
 /* ---------- panes ---------- */
@@ -138,7 +154,7 @@ ModalScreen > Vertical {
     padding: 1 2;
     max-height: 90%;
     background: $surface;
-    border: round $panel;
+    border: solid $border-blurred;
 }
 
 #mp-title, #pp-title, #ke-title, #cf-title {

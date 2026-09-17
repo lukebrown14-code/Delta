@@ -340,7 +340,7 @@ class Targets(RiggerScreen):
     #target-chart { width: 1fr; height: 7; margin-bottom: 1; padding: 0 1; background: $panel; }
     #target-metric-grid { width: 1fr; height: auto; layout: grid; grid-size: 2; grid-columns: 1fr 1fr; grid-gutter: 1 1; }
     .pane-row.-narrow #target-metric-grid { grid-size: 1; grid-columns: 1fr; }
-    .metric-card { width: 1fr; height: auto; min-height: 5; padding: 1; border: round $panel; background: $surface; }
+    .metric-card { width: 1fr; height: auto; min-height: 5; padding: 1; border: solid $border-blurred; background: $surface; }
     .metric-card-title { width: 1fr; height: 1; color: $text-primary; text-style: bold; }
     .metric-card-body { width: 1fr; height: auto; color: $foreground; }
     #target-inspector-title { color: $text-primary; text-style: bold; }

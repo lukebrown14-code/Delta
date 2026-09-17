@@ -213,7 +213,14 @@ def test_reports_screen_lists_targets_and_generates(tmp_engine, tmp_path, monkey
             assert table.row_count == 1
             assert table.get_row_at(0)[0] == "apple"
 
+            # Let the first layout settle: the header reflows once on mount.
+            await pilot.pause()
             await pilot.click("#report-generate")
+            await pilot.pause()
+            for _ in range(100):
+                if list((reports_dir / INST).glob("*.md")):
+                    break
+                await asyncio.sleep(0.05)
             await pilot.pause()
 
             written = list((reports_dir / INST).glob("*.md"))
@@ -271,6 +278,7 @@ def test_reports_screen_generate_with_no_targets_notifies(tmp_engine, tmp_path, 
         app = ReportsApp()
         async with app.run_test() as pilot:
             assert app.screen.query_one("#report-targets", DataTable).row_count == 0
+            await pilot.pause()
             await pilot.click("#report-generate")
             await pilot.pause()
 
