@@ -156,7 +156,7 @@ def test_targets_panel_remove_with_no_targets_notifies(rig, monkeypatch, tmp_pat
         async with app.run_test() as pilot:
             await pilot.press("1")
             assert app.screen.query_one("#target-table").row_count == 0
-            await pilot.click("#tg-remove")
+            await pilot.press("d")
             await pilot.pause()
 
     asyncio.run(run())
@@ -221,15 +221,18 @@ def test_ledger_groups_quotes_and_focus(rig, monkeypatch, tmp_path, size, theme)
             await pilot.press("1")
             screen = app.screen
             table = screen.query_one("#target-table")
-            assert not screen.query_one("#tg-form").display
             assert table.row_count == 2
             await pilot.press("enter")
             # Enter refreshes the always-open inspector; grouped assets are
             # no longer expanded into child rows.
             assert table.row_count == 2
-            members = screen.query_one("#target-members")
-            assert members.display
-            assert len(members.options) == 2
+            # A multi-ticker target steps through its members with the arrows.
+            assert screen._members_by_target["mining"] == ["ASX:BHP", "ASX:RIO"]
+            assert screen._selected_instrument.id == "ASX:BHP"
+            await pilot.press("right")
+            assert screen._selected_instrument.id == "ASX:RIO"
+            await pilot.press("left")
+            assert screen._selected_instrument.id == "ASX:BHP"
             assert len(screen.feed.symbols) == 2
             screen.feed.quotes["ASX:BHP"] = parse_quote(
                 {"price": 42.18, "time": 1789516800000, "change_percent": -0.4}, "AUD"
@@ -270,7 +273,7 @@ def test_company_form_enter_submits(rig, monkeypatch, tmp_path, field):
             await pilot.press("enter")
             assert services.target_specs()["apple"].tickers == ("AAPL",)
             assert app.screen.name == "targets"
-            assert not app.screen.query_one("#tg-form").display
+            assert not app.screen.query("#tg-form")
             assert app.screen.query_one("#target-table").has_focus
 
     asyncio.run(run())

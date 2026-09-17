@@ -77,6 +77,9 @@ RIGGER_LIGHT = Theme(
     surface="#e9e9e1",
     panel="#dddbcf",
     dark=False,
+    # Rich Text cells read these tokens as colours; Textual's derived
+    # "auto 60%" is not one, so pin them here as well.
+    variables={"text-muted": "#6b6e74", "text-disabled": "#9a9da3"},
 )
 
 THEMES = (RIGGER_DARK, RIGGER_LIGHT)

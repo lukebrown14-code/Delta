@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import suppress
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from rich.text import Text
@@ -19,8 +19,8 @@ from rigger.asset_metrics import AssetMetrics, chart_window, fetch_asset_metrics
 from rigger.core.models import Instrument
 from rigger.plugins.data.yfinance import DEFAULT_SUFFIXES
 from rigger.quotes import SearchResult, YahooQuotes, canonical_symbol, yahoo_search
-from rigger.tui.shell import RiggerScreen
-from rigger.tui.widgets import Dialog, Pane, PaneRow
+from rigger.tui.shell import RiggerScreen, age_text
+from rigger.tui.widgets import Dialog, Pane, PaneRow, hint_markup
 
 
 class WatchlistList(OptionList):
@@ -304,47 +304,43 @@ class Targets(RiggerScreen):
         ("a", "add", "Add"),
         ("d", "remove", "Remove"),
         ("slash", "filter", "Filter"),
-        ("escape", "cancel", "Close"),
+        ("space", "toggle_group", "Fold"),
+        ("left", "member(-1)", "Member"),
+        ("right", "member(1)", "Member"),
+        ("escape", "cancel", "Back"),
     ]
+    #: Below this terminal width the list takes the whole screen and the
+    #: metrics pane opens on enter — the two do not fit side by side.
+    NARROW_WIDTH = 100
+    #: Column widths of a watchlist row: name, last, change, age.
+    COLUMNS = (12, 10, 8, 4)
     CSS = """
-    #target-list-pane { height: 1fr; }
-    #target-table { height: 1fr; margin: 0; border: none; }
+    #target-list-pane { width: 46; min-width: 46; }
+    #target-inspector-pane { width: 1fr; min-width: 0; }
+    Targets.-narrow #target-list-pane, Targets.-narrow #target-inspector-pane { width: 1fr; }
+    #target-table { height: 1fr; margin: 0; border: none; background: transparent; }
     #target-table > .option-list--option { padding: 0 1; }
+    #target-table > .option-list--option-disabled { color: $text-muted; text-style: none; }
     #target-table .tg-group { color: $text-primary; text-style: bold; }
-    #tg-filter { height: 3; }
-    #tg-form { height: auto; max-height: 18; overflow-y: auto; }
-    .tg-field { height: 3; }
-    .tg-field Label { width: 10; padding: 1 0; color: $text-muted; }
-    .tg-field Input { width: 1fr; margin: 0; }
-    #tg-actions {
-        height: 1;
-        margin-bottom: 0;
-        padding: 0;
-    }
-    #tg-actions Button { height: 1; min-width: 0; border: none; padding: 0 1; margin: 0; background: $panel; color: $text-muted; }
-    #tg-actions Button:focus { color: $text-primary; text-style: bold; }
-    #tg-action-spacer { width: 1fr; height: 1; background: $panel; }
-    #tg-empty, #tg-state { height: auto; color: $text-muted; }
-    #target-inspector-pane { width: 2fr; min-width: 0; padding: 0 1; }
+    #tg-filter { margin: 0 0 0 0; }
+    #tg-empty { height: auto; padding: 0 1; color: $text-muted; }
     #target-inspector-content { width: 1fr; height: 1fr; padding: 0 1; overflow-y: auto; }
-    #target-inspector-empty { width: 1fr; height: 1; content-align-vertical: middle; }
-    #target-inspector-title { width: 1fr; height: 2; content-align-vertical: middle; }
-    #target-inspector-members-label { width: 1fr; height: 1; color: $text-muted; }
-    #target-members { width: 1fr; height: auto; max-height: 4; margin-bottom: 1; background: $panel; }
-    #target-inspector-hero { width: 1fr; height: 3; margin-bottom: 1; }
-    #target-chart-header { width: 1fr; height: 1; }
+    #target-inspector-title { width: 1fr; height: 1; }
+    #target-inspector-empty { width: 1fr; height: auto; color: $text-muted; }
+    #target-inspector-hero { width: 1fr; height: 1; margin: 1 0 0 0; }
+    #target-inspector-status { width: 1fr; height: auto; color: $text-muted; }
+    #target-chart-header { width: 1fr; height: 1; margin: 1 0 0 0; }
     #target-chart-label { width: 1fr; color: $text-muted; text-style: bold; }
     #target-chart-change { width: auto; text-style: bold; }
     #target-chart-change.-up { color: $text-success; }
     #target-chart-change.-down { color: $text-error; }
-    #target-chart { width: 1fr; height: 7; margin-bottom: 1; padding: 0 1; background: $panel; }
-    #target-metric-grid { width: 1fr; height: auto; layout: grid; grid-size: 2; grid-columns: 1fr 1fr; grid-gutter: 1 1; }
-    .pane-row.-narrow #target-metric-grid { grid-size: 1; grid-columns: 1fr; }
-    .metric-card { width: 1fr; height: auto; min-height: 5; padding: 1; border: solid $border-blurred; background: $surface; }
-    .metric-card-title { width: 1fr; height: 1; color: $text-primary; text-style: bold; }
+    #target-chart { width: 1fr; height: 5; padding: 0 1; background: $panel; }
+    #target-chart-axis { width: 1fr; height: 1; color: $text-muted; margin: 0 0 1 0; }
+    #target-metric-grid { width: 1fr; height: auto; layout: grid; grid-size: 2; grid-columns: 1fr 1fr; grid-gutter: 0 1; }
+    Targets.-narrow #target-metric-grid { grid-size: 1; grid-columns: 1fr; }
+    .metric-card { height: auto; padding: 0 1; }
     .metric-card-body { width: 1fr; height: auto; color: $foreground; }
-    #target-inspector-title { color: $text-primary; text-style: bold; }
-    #target-inspector-status, #target-inspector-empty { color: $text-muted; height: auto; }
+    #target-inspector-source { width: 1fr; height: auto; margin: 1 0 0 0; color: $text-muted; }
     """
 
     def __init__(self, rig: Any) -> None:
@@ -363,64 +359,70 @@ class Targets(RiggerScreen):
         self._range = "month"
         self._members_by_target: dict[str, list[str]] = {}
         self._selected_member: dict[str, str] = {}
+        self.detail_open = False
 
     def compose_content(self) -> ComposeResult:
         with PaneRow(id="target-split"):
-            with Pane(title="watchlist", id="target-list-pane"):
-                yield Static("quotes: idle", id="tg-state", markup=False)
+            with Pane(
+                title="watchlist",
+                hints=hint_markup(
+                    ("a", "add"), ("d", "remove"), ("/", "filter"), ("space", "fold")
+                ),
+                id="target-list-pane",
+            ):
                 yield Input(
-                    placeholder="filter names, tickers, markets, kinds or tags", id="tg-filter"
+                    placeholder="/ filter names, tickers, markets, kinds or tags", id="tg-filter"
                 )
                 yield WatchlistList(id="target-table")
-                yield Static("No targets yet — a add your first target.", id="tg-empty")
-                yield Static("", id="tg-form")
-                with Horizontal(id="tg-actions"):
-                    yield Button("enter refresh", id="tg-refresh-hint")
-                    yield Button("a add", id="tg-add")
-                    yield Button("d remove", id="tg-remove")
-                    yield Button("/ filter", id="tg-search")
-                    yield Button("r range: month", id="tg-range-hint")
-                    yield Button("space groups", id="tg-space-hint")
-                    yield Button("esc close", id="tg-close")
-                    yield Static("", id="tg-action-spacer")
-            with Pane(title="metrics", icon="", id="target-inspector-pane"):
+                yield Static("No targets yet — a adds your first target.", id="tg-empty")
+            with Pane(title="metrics", hints=self._metric_hints(), id="target-inspector-pane"):
                 with Vertical(id="target-inspector-content"):
-                    yield Static(
-                        "Select a Watchlist item",
-                        id="target-inspector-empty",
-                        classes="muted",
-                        markup=False,
-                    )
                     yield Static("", id="target-inspector-title", markup=False)
-                    yield Static("", id="target-inspector-members-label", markup=False)
-                    yield OptionList(id="target-members")
+                    yield Static(
+                        "Select a watchlist item", id="target-inspector-empty", markup=False
+                    )
                     yield Static("", id="target-inspector-hero", markup=False)
-                    yield Static("", id="target-inspector-status", classes="muted", markup=False)
+                    yield Static("", id="target-inspector-status", markup=False)
                     with Horizontal(id="target-chart-header"):
-                        yield Static(
-                            "PRICE PERFORMANCE · 1 MONTH", id="target-chart-label", markup=False
-                        )
+                        yield Static("PRICE · 1 MONTH", id="target-chart-label", markup=False)
                         yield Static("", id="target-chart-change", markup=False)
                     yield Sparkline([], id="target-chart")
+                    yield Static("", id="target-chart-axis", markup=False)
                     with Vertical(id="target-metric-grid"):
                         for index in range(4):
-                            with Vertical(classes="metric-card", id=f"metric-card-{index}"):
-                                yield Static(
-                                    "",
-                                    classes="metric-card-title",
-                                    id=f"metric-card-title-{index}",
-                                    markup=False,
-                                )
+                            with Pane(classes="metric-card -auto", id=f"metric-card-{index}"):
                                 yield Static(
                                     "",
                                     classes="metric-card-body",
                                     id=f"metric-card-body-{index}",
                                     markup=False,
                                 )
+                    yield Static("", id="target-inspector-source", markup=False)
+
+    def _metric_hints(self) -> str:
+        pairs = [("enter", "refresh"), ("r", f"range: {self._range_label().casefold()}")]
+        target_key = self._selected() if self.is_mounted else None
+        if target_key and len(self._members_by_target.get(self.rows[target_key][0], [])) > 1:
+            pairs.append(("←→", "member"))
+        if self.has_class("-narrow"):
+            pairs.append(("esc", "back"))
+        return hint_markup(*pairs)
+
+    def layout_views(self) -> None:
+        """Wide: both panes. Narrow: the list, or the metrics after enter."""
+        narrow = self.size.width < self.NARROW_WIDTH
+        self.set_class(narrow, "-narrow")
+        self.query_one("#target-list-pane").display = not (narrow and self.detail_open)
+        self.query_one("#target-inspector-pane").display = not narrow or self.detail_open
+        self.query_one("#target-inspector-pane", Pane).set_hints(self._metric_hints())
+
+    def on_resize(self) -> None:
+        if self.is_mounted:
+            self.layout_views()
 
     def on_mount(self) -> None:
         self.query_one("#tg-filter").display = False
-        self.query_one("#tg-form").display = False
+        self.layout_views()
         self.refresh_view()
         self.query_one("#target-table").focus()
         self.set_interval(0.5, self._paint_quotes)
@@ -436,6 +438,13 @@ class Targets(RiggerScreen):
         table.clear_options()
         self.rows.clear()
         self._option_indices.clear()
+        name_w, last_w, chg_w, age_w = self.COLUMNS
+        table.add_option(
+            Option(
+                f"  {'Name':<{name_w}}{'Last':>{last_w}}  {'Chg%':>{chg_w}}  {'Age':>{age_w}}",
+                disabled=True,
+            )
+        )
         self.specs = services.target_specs()
         specs = sorted(self.specs.values(), key=lambda t: t.id)
         known = {inst.id: inst for inst in self.rig.universe()}
@@ -486,28 +495,20 @@ class Targets(RiggerScreen):
                 continue
             group_key = f"group:{asset_class}"
             expanded = group_key not in self._collapsed_groups
-            header = (
-                f"▾ {asset_class.upper()}  ({len(entries)})"
-                if expanded
-                else f"▸ {asset_class.upper()}  ({len(entries)})"
+            table.add_option(
+                Option(self._group_prompt(asset_class, entries, expanded), id=group_key)
             )
-            table.add_option(Option(Text(header, style="bold"), id=group_key))
             if not expanded:
                 continue
             for target, members in entries:
                 key = f"target:{target.id}"
                 inst = members[0] if len(members) == 1 else None
                 self.rows[key] = (target.id, inst)
-                tickers = ",".join(target.tickers) or "market"
-                market = ",".join(target.markets)
-                tags = ", ".join(sorted(target.tags)) or "—"
-                table.add_option(
-                    Option(f"  {target.id}  ·  {tickers}  ·  {market}  ·  {tags}", id=key)
-                )
+                table.add_option(Option(self._row_prompt(target, members), id=key))
         empty = self.query_one("#tg-empty", Static)
         empty.display = not table.row_count
         empty.update(
-            "No matching targets." if specs else "No targets yet — a add your first target."
+            "No matching targets." if specs else "No targets yet — a adds your first target."
         )
         if selected:
             with suppress(Exception):
@@ -534,7 +535,6 @@ class Targets(RiggerScreen):
             if ident not in members:
                 ident = members[0]
             self._selected_member[target_id] = ident
-        self._render_member_selector(target_id, members, ident)
         instrument = (
             next((item for item in self.rig.universe() if item.id == ident), None)
             if ident
@@ -558,7 +558,8 @@ class Targets(RiggerScreen):
 
     @work(exclusive=True, thread=False)
     async def fetch_metrics(self, instrument: Instrument) -> None:
-        self.query_one("#target-inspector-status", Static).update("Loading live metrics…")
+        # Paint the loading state first so the pane never shows a stale card.
+        self._render_metrics()
         metric = await asyncio.to_thread(
             fetch_asset_metrics, instrument, self._range, self.rig.engine
         )
@@ -574,89 +575,90 @@ class Targets(RiggerScreen):
         status = self.query_one("#target-inspector-status", Static)
         hero = self.query_one("#target-inspector-hero", Static)
         chart_change = self.query_one("#target-chart-change", Static)
-        members_label = self.query_one("#target-inspector-members-label", Static)
-        members_widget = self.query_one("#target-members", OptionList)
+        axis = self.query_one("#target-chart-axis", Static)
+        source = self.query_one("#target-inspector-source", Static)
         cards = [
             (
-                self.query_one(f"#metric-card-title-{i}", Static),
+                self.query_one(f"#metric-card-{i}", Pane),
                 self.query_one(f"#metric-card-body-{i}", Static),
-                self.query_one(f"#metric-card-{i}", Vertical),
             )
             for i in range(4)
         ]
+        self.query_one("#target-inspector-pane", Pane).set_hints(self._metric_hints())
 
         def clear_cards() -> None:
-            for card_title, card_body, card in cards:
+            for card, body in cards:
                 card.display = False
-                card_title.update("")
-                card_body.update("")
+                body.update("")
 
-        if not instrument:
-            selected = self._selected()
-            target = self.specs.get(self.rows[selected][0]) if selected in self.rows else None
-            empty.update(
-                "No ticker proxy configured"
-                if target and not target.tickers
-                else "Select a Watchlist item"
-            )
-            title.update(f"{target.id} · {target.kind}" if target else "")
-            members_label.update("")
-            members_widget.display = False
-            status.update(
-                "This target has no ticker proxy. Add a representative instrument to view live metrics."
-                if target and not target.tickers
-                else ""
-            )
-            hero.update("")
+        def clear_chart() -> None:
             chart_change.update("")
             chart_change.set_classes("")
             self.query_one("#target-chart", Sparkline).data = []
+            axis.update("")
+            source.update("")
+
+        selected = self._selected()
+        target = self.specs.get(self.rows[selected][0]) if selected in self.rows else None
+        members = self._members_by_target.get(target.id, []) if target else []
+        if not instrument:
+            empty.display = True
+            empty.update(
+                "No ticker proxy configured — add a representative instrument to see metrics."
+                if target and not target.tickers
+                else "Select a watchlist item"
+            )
+            title.update(f"{target.id} · {target.kind}" if target else "")
+            hero.update("")
+            status.update("")
+            clear_chart()
             clear_cards()
             return
-        empty.update("")
-        title.update(f"{instrument.symbol} · {instrument.id} · {instrument.asset_class}")
+        empty.display = False
+        name = getattr(instrument, "name", "") or instrument.symbol
+        member_note = (
+            f" · member {members.index(instrument.id) + 1}/{len(members)}"
+            if instrument.id in members and len(members) > 1
+            else ""
+        )
+        tags = f" · tags: {', '.join(sorted(target.tags))}" if target and target.tags else ""
+        tokens = self.app.theme_variables
+        title.update(
+            Text.assemble(
+                (name, f"bold {tokens['foreground']}"),
+                (
+                    f"  {instrument.id} · {instrument.market.upper()} · {instrument.asset_class}{tags}{member_note}",
+                    tokens["text-muted"],
+                ),
+            )
+        )
         if metric is None:
-            status.update("Loading live metrics…")
             hero.update("")
-            chart_change.update("—")
-            chart_change.set_classes("")
-            self.query_one("#target-chart", Sparkline).data = []
+            status.update("Loading live metrics…")
+            clear_chart()
             clear_cards()
             return
         current_label = "Current yield" if metric.profile == "bond" else "Current price"
         current = metric.values.get(current_label, "—")
-        quote = self.feed.quotes.get(instrument.id) if self.feed else None
-        daily = (
-            "—" if quote is None or quote.change_pct is None else f"{quote.change_pct:+.1f}% today"
-        )
-        tokens = self.app.theme_variables
+        quote = self._quote_for(instrument.id)
         up, down, flat = tokens["text-success"], tokens["text-error"], tokens["text-muted"]
         hero_text = Text()
         hero_text.append(current, style=f"bold {tokens['foreground']}")
+        hero_text.append(f" {instrument.currency}" if instrument.currency else "", style=flat)
         hero_text.append("   ")
-        hero_text.append(
-            daily,
-            style=up
-            if quote and quote.change_pct and quote.change_pct > 0
-            else down
-            if quote and quote.change_pct and quote.change_pct < 0
-            else flat,
-        )
-        hero_text.append("   ")
-        hero_text.append(
-            f"{metric.change_label or '—'} {self._range_label().casefold()}",
-            style=up
-            if metric.change_label.startswith("+")
-            else down
-            if metric.change_label.startswith("-")
-            else flat,
-        )
+        if quote is not None and quote.change_pct is not None:
+            pct = quote.change_pct
+            arrow = "▲" if pct > 0 else "▼" if pct < 0 else "─"
+            hero_text.append(
+                f"{arrow} {pct:+.2f}%", style=up if pct > 0 else down if pct < 0 else flat
+            )
+            hero_text.append("  today", style=flat)
+        else:
+            hero_text.append("— today", style=flat)
         hero.update(hero_text)
         if metric.error:
-            status.update(f"Metrics unavailable: {metric.error} · press Enter to retry")
+            status.update(f"Metrics unavailable: {metric.error} · enter retries")
         else:
-            quote_stamp = quote.timestamp.strftime("%H:%M:%S UTC") if quote else "—"
-            history_stamp = _friendly_date_range(metric.history_start, metric.history_end)
             range_context = (
                 f"high {metric.period_high:,.2f} · low {metric.period_low:,.2f}"
                 if metric.period_high is not None and metric.period_low is not None
@@ -667,52 +669,28 @@ class Targets(RiggerScreen):
                 if metric.volatility is not None
                 else "vol unavailable"
             )
-            status.update(
-                f"{metric.source} · live {quote_stamp} · history {history_stamp}\n"
-                f"{range_context} · {volatility}"
-            )
+            status.update(f"{range_context} · {volatility}")
         chart_change.update(metric.change_label or "—")
         chart_change.set_class(metric.change_label.startswith("+"), "-up")
         chart_change.set_class(metric.change_label.startswith("-"), "-down")
         self.query_one("#target-chart", Sparkline).data = chart_window(
             metric.series, None if self._range == "all" else 30
         )
+        history = _friendly_date_range(metric.history_start, metric.history_end)
+        axis.update(
+            history.replace(" – ", " " * 20 + "→" + " " * 20) if " – " in history else history
+        )
         groups = metric.groups or ({"Available Metrics": metric.values} if metric.values else {})
         clear_cards()
-        for index, (card_title, card_body, card) in enumerate(cards):
+        for index, (card, body) in enumerate(cards):
             if index >= len(groups):
                 continue
-            card.display = True
-            card_title.display = True
-            card_body.display = True
             group, values = list(groups.items())[index]
-            card_title.update(group.upper())
-            card_body.update(
-                "\n".join(f"{label:<22} {value:>12}" for label, value in values.items())
-            )
-
-    def _render_member_selector(
-        self, target_id: str, members: list[str], selected: str | None
-    ) -> None:
-        label = self.query_one("#target-inspector-members-label", Static)
-        options = self.query_one("#target-members", OptionList)
-        if len(members) < 2:
-            label.update("")
-            options.display = False
-            return
-        label.update(f"TICKERS · {len(members)} members")
-        options.clear_options()
-        for ident in members:
-            market, symbol = ident.split(":", 1)
-            quote = self.feed.quotes.get(ident) if self.feed else None
-            quote_text = ""
-            if quote:
-                change = "—" if quote.change_pct is None else f"{quote.change_pct:+.1f}%"
-                quote_text = f" · {quote.price:,.2f} {change}"
-            options.add_option(Option(f"{symbol} · {market}{quote_text}", id=ident))
-        options.display = True
-        with suppress(Exception):
-            options.highlighted = members.index(selected) if selected in members else 0
+            card.display = True
+            card.set_title(group.casefold())
+            body.update("\n".join(f"{label:<20} {value:>10}" for label, value in values.items()))
+        quote_stamp = quote.timestamp.strftime("%H:%M:%S UTC") if quote else "—"
+        source.update(f"{metric.source} · live {quote_stamp} · history {history}")
 
     def _sync_feed(self) -> None:
         suffixes = DEFAULT_SUFFIXES | getattr(self.rig.cfg, "plugins", {}).get("yfinance", {}).get(
@@ -742,10 +720,78 @@ class Targets(RiggerScreen):
         self.feed_task = asyncio.create_task(start())
 
     def _quote_state(self, state: str) -> None:
-        if self.is_mounted:
-            self.query_one("#tg-state", Static).update(
-                f"quotes: {state} · Yahoo · age is quote age"
+        self._feed_state = state
+
+    def _quote_for(self, ident: str | None) -> Any:
+        return self.feed.quotes.get(ident) if self.feed and ident else None
+
+    def _row_prompt(self, target: Any, members: list[str]) -> Text:
+        """One watchlist row: name, last, change, quote age — columns, not prose.
+
+        Only the change cell carries colour, so the cursor row stays readable
+        and the eye scans one column for what moved.
+        """
+        name_w, last_w, chg_w, age_w = self.COLUMNS
+        tokens = self.app.theme_variables
+        ident = members[0] if len(members) == 1 else self._selected_member.get(target.id)
+        if len(members) == 1:
+            name = members[0].split(":", 1)[1]
+        elif members:
+            name = f"{target.id} ▸{len(members)}"
+        else:
+            name = target.id
+        quote = self._quote_for(ident)
+        row = Text(f"  {name[:name_w]:<{name_w}}")
+        if quote is None:
+            row.append(
+                f"{'—':>{last_w}}  {'—':>{chg_w}}  {'':>{age_w}}", style=tokens["text-muted"]
             )
+            return row
+        pct = quote.change_pct
+        row.append(f"{quote.price:,.2f}"[:last_w].rjust(last_w), style=tokens["foreground"])
+        row.append("  ")
+        row.append(
+            f"{'—' if pct is None else f'{pct:+.2f}%':>{chg_w}}",
+            style=tokens["text-success"]
+            if pct and pct > 0
+            else tokens["text-error"]
+            if pct and pct < 0
+            else tokens["text-muted"],
+        )
+        age, state = age_text(datetime.now(UTC) - quote.received_at)
+        row.append("  ")
+        row.append(
+            f"{age:>{age_w}}",
+            style=tokens["text-muted"] if state == "ok" else tokens["text-warning"],
+        )
+        return row
+
+    def _group_prompt(self, asset_class: str, entries: list[Any], expanded: bool) -> Text:
+        """Group header with the mean move of its members that have a quote."""
+        name_w, last_w, chg_w, _age_w = self.COLUMNS
+        tokens = self.app.theme_variables
+        arrow = "▾" if expanded else "▸"
+        row = Text(f"{arrow} {asset_class.upper()} ", style=f"bold {tokens['text-primary']}")
+        row.append(f"({len(entries)})", style=tokens["text-muted"])
+        moves = [
+            quote.change_pct
+            for _target, members in entries
+            for quote in (self._quote_for(members[0] if len(members) == 1 else None),)
+            if quote is not None and quote.change_pct is not None
+        ]
+        if moves:
+            mean = sum(moves) / len(moves)
+            pad = 2 + name_w + last_w + 2 - len(row.plain)
+            row.append(" " * max(1, pad))
+            row.append(
+                f"{mean:+.2f}%".rjust(chg_w),
+                style=tokens["text-success"]
+                if mean > 0
+                else tokens["text-error"]
+                if mean < 0
+                else tokens["text-muted"],
+            )
+        return row
 
     def _paint_quotes(self) -> None:
         if not self.is_mounted:
@@ -754,37 +800,33 @@ class Targets(RiggerScreen):
             table = self.query_one("#target-table", WatchlistList)
         except Exception:
             return
-        for key, (_, ident) in self.rows.items():
-            target = self.specs.get(self.rows[key][0])
+        grouped: dict[str, list[Any]] = {}
+        for key, (target_id, _ident) in self.rows.items():
+            target = self.specs.get(target_id)
             if target is None:
                 continue
-            quote = self.feed.quotes.get(ident) if self.feed and ident else None
-            if quote is None:
-                prompt = f"  {target.id}  ·  {','.join(target.tickers) or 'market'}  ·  {','.join(target.markets)}  ·  {', '.join(sorted(target.tags)) or '—'}"
-            else:
-                pct = quote.change_pct
-                trend = "─" if pct is None or pct == 0 else "▲" if pct > 0 else "▼"
-                tokens = self.app.theme_variables
-                color = (
-                    tokens["text-success"]
-                    if pct and pct > 0
-                    else tokens["text-error"]
-                    if pct and pct < 0
-                    else tokens["foreground"]
-                )
-                prompt = Text(
-                    f"  {target.id}  ·  {','.join(target.tickers) or 'market'}  ·  {','.join(target.markets)}  ·  {', '.join(sorted(target.tags)) or '—'}  {quote.price:,.2f} {trend}",
-                    style=color,
-                )
-            with suppress(Exception):
-                table.replace_option_prompt(key, prompt)
-        selected = self._selected()
-        if selected in self.rows:
-            target_id, ident = self.rows[selected]
             members = self._members_by_target.get(target_id, [])
-            self._render_member_selector(
-                target_id, members, ident or self._selected_member.get(target_id)
-            )
+            asset_class = str(getattr(target, "asset_class", "equity")).casefold()
+            grouped.setdefault(
+                asset_class if asset_class in ASSET_CLASS_ORDER else "other", []
+            ).append((target, members))
+            with suppress(Exception):
+                table.replace_option_prompt(key, self._row_prompt(target, members))
+        for asset_class, entries in grouped.items():
+            group_key = f"group:{asset_class}"
+            with suppress(Exception):
+                table.replace_option_prompt(
+                    group_key,
+                    self._group_prompt(
+                        asset_class, entries, group_key not in self._collapsed_groups
+                    ),
+                )
+        live = self.feed is not None and any(
+            self._quote_for(ident) for _t, ident in self.rows.values() if ident
+        )
+        self.query_one("#target-list-pane", Pane).set_badge(
+            f"{'● live' if live else 'quotes idle'} · {len(self.rows)}"
+        )
 
     def on_option_list_option_highlighted(self, event: Any) -> None:
         if getattr(event.option_list, "id", None) != "target-table":
@@ -792,23 +834,25 @@ class Targets(RiggerScreen):
         self._select_instrument()
 
     def on_option_list_option_selected(self, event: Any) -> None:
-        if getattr(event.option_list, "id", None) == "target-members":
-            selected = str(event.option.id)
-            target_key = self._selected()
-            if target_key in self.rows:
-                self._selected_member[self.rows[target_key][0]] = selected
-                self._select_instrument(force=True)
-            return
-        self._select_instrument(force=True)
+        self.action_inspect()
 
-    def on_key(self, event: Any) -> None:
-        if self.focused is not self.query_one("#target-table", WatchlistList):
+    def action_toggle_group(self) -> None:
+        self._toggle_group()
+
+    def action_member(self, delta: int) -> None:
+        """Step through the tickers of a multi-ticker target."""
+        key = self._selected()
+        if key is None:
             return
-        option = self.query_one("#target-table", WatchlistList).highlighted_option
-        key = str(option.id) if option and option.id else ""
-        if key.startswith("group:") and event.key == "space":
-            event.stop()
-            self._toggle_group(key)
+        target_id = self.rows[key][0]
+        members = self._members_by_target.get(target_id, [])
+        if len(members) < 2:
+            return
+        current = self._selected_member.get(target_id, members[0])
+        index = members.index(current) if current in members else 0
+        self._selected_member[target_id] = members[(index + delta) % len(members)]
+        self._select_instrument(force=True)
+        self._paint_quotes()
 
     def _toggle_group(self, key: str | None = None) -> None:
         key = key or self._selected()
@@ -821,7 +865,10 @@ class Targets(RiggerScreen):
         self.refresh_view()
 
     def action_inspect(self) -> None:
-        """Refresh live metrics for the highlighted instrument."""
+        """Refresh live metrics for the highlighted instrument; narrow: open them."""
+        if self.has_class("-narrow") and not self.detail_open:
+            self.detail_open = True
+            self.layout_views()
         self._select_instrument(force=True)
 
     def _range_label(self) -> str:
@@ -829,16 +876,17 @@ class Targets(RiggerScreen):
 
     def action_cycle_range(self) -> None:
         self._range = {"month": "all", "all": "day", "day": "month"}[self._range]
-        self.query_one(
-            "#tg-range-hint", Button
-        ).label = f"r range: {self._range_label().casefold()}"
+        self.query_one("#target-inspector-pane", Pane).set_hints(self._metric_hints())
         self.query_one("#target-chart-label", Static).update(
-            f"PRICE PERFORMANCE · {self._range_label().upper()}"
+            f"PRICE · {self._range_label().upper()}"
         )
         self._metrics.clear()
         self._select_instrument(force=True)
 
     def action_filter(self) -> None:
+        if self.detail_open:
+            self.detail_open = False
+            self.layout_views()
         self.query_one("#tg-filter").display = True
         self.query_one("#tg-filter").focus()
 
@@ -859,10 +907,12 @@ class Targets(RiggerScreen):
             self.action_add()
 
     def action_cancel(self) -> None:
+        """Escape: close the filter, or back out of the narrow metrics view."""
         self.query_one("#tg-filter", Input).value = ""
         self.query_one("#tg-filter").display = False
-        self.query_one("#tg-form").display = False
-        self.query_one("#tg-add", Button).label = "a add"
+        if self.detail_open:
+            self.detail_open = False
+            self.layout_views()
         self.query_one("#target-table").focus()
 
     def action_add(self) -> None:
@@ -919,19 +969,6 @@ class Targets(RiggerScreen):
             return
         self.refresh_view()
         self.notify(f"Removed {name} from the watchlist")
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        actions = {
-            "tg-refresh-hint": self.action_inspect,
-            "tg-range-hint": self.action_cycle_range,
-            "tg-space-hint": self._toggle_group,
-            "tg-add": self.action_add,
-            "tg-remove": self.action_remove,
-            "tg-search": self.action_filter,
-            "tg-close": self.action_cancel,
-        }
-        if event.button.id in actions:
-            actions[event.button.id]()
 
     async def on_screen_resume(self) -> None:
         self.active = True
