@@ -21,7 +21,7 @@ from rigger.core.models import Instrument
 from rigger.plugins.data.yfinance import DEFAULT_SUFFIXES
 from rigger.quotes import SearchResult, YahooQuotes, canonical_symbol, yahoo_search
 from rigger.tui.shell import RiggerScreen, age_text
-from rigger.tui.widgets import BrailleGraph, Dialog, Pane, PaneRow, hint_markup
+from rigger.tui.widgets import BrailleGraph, Dialog, Pane, PaneRow, hint_markup, token_color
 
 
 class WatchlistList(OptionList):
@@ -54,10 +54,10 @@ def _friendly_date_range(start: str | None, end: str | None) -> str:
 
 
 class TargetAddModal(Dialog):
-    """Centered terminal form for adding one watch target."""
+    """Centred terminal form for adding one target to the watchlist."""
 
     dialog_title = "add to watchlist"
-    dialog_hint = "<Enter>: save   <Esc>: cancel"
+    dialog_hint = "enter save · esc cancel"
     dialog_width = 64
 
     DEFAULT_CSS = """
@@ -300,15 +300,15 @@ class TargetAddModal(Dialog):
 class Targets(RiggerScreen):
     name = "targets"
     BINDINGS = [
-        ("enter", "inspect", "Refresh metrics"),
-        ("r", "cycle_range", "Range"),
-        ("a", "add", "Add"),
-        ("d", "remove", "Remove"),
-        ("slash", "filter", "Filter"),
-        ("space", "toggle_group", "Fold"),
-        ("left", "member(-1)", "Member"),
-        ("right", "member(1)", "Member"),
-        ("escape", "cancel", "Back"),
+        ("enter", "inspect", "refresh metrics"),
+        ("r", "cycle_range", "range"),
+        ("a", "add", "add"),
+        ("d", "remove", "remove"),
+        ("slash", "filter", "filter"),
+        ("space", "toggle_group", "fold"),
+        ("left", "member(-1)", "member"),
+        ("right", "member(1)", "member"),
+        ("escape", "cancel", "back"),
     ]
     #: Below this terminal width the list takes the whole screen and the
     #: metrics pane opens on enter — the two do not fit side by side.
@@ -375,17 +375,19 @@ class Targets(RiggerScreen):
                     placeholder="/ filter names, tickers, markets, kinds or tags", id="tg-filter"
                 )
                 yield WatchlistList(id="target-table")
-                yield Static("No targets yet — a adds your first target.", id="tg-empty")
+                yield Static("no targets yet — press a to add one", id="tg-empty")
             with Pane(title="metrics", hints=self._metric_hints(), id="target-inspector-pane"):
                 with Vertical(id="target-inspector-content"):
                     yield Static("", id="target-inspector-title", markup=False)
                     yield Static(
-                        "Select a watchlist item", id="target-inspector-empty", markup=False
+                        "no target selected — ↑↓ picks one",
+                        id="target-inspector-empty",
+                        markup=False,
                     )
                     yield Static("", id="target-inspector-hero", markup=False)
                     yield Static("", id="target-inspector-status", markup=False)
                     with Horizontal(id="target-chart-header"):
-                        yield Static("PRICE · 1 MONTH", id="target-chart-label", markup=False)
+                        yield Static("price · month", id="target-chart-label", markup=False)
                         yield Static("", id="target-chart-change", markup=False)
                     yield BrailleGraph([], id="target-chart")
                     yield Static("", id="target-chart-axis", markup=False)
@@ -400,8 +402,22 @@ class Targets(RiggerScreen):
                                 )
                     yield Static("", id="target-inspector-source", markup=False)
 
+    def _colours(self) -> dict[str, str]:
+        """Theme tokens as colours Rich can parse — never a raw theme value."""
+        return {
+            token: token_color(self.app, token)
+            for token in (
+                "foreground",
+                "text-muted",
+                "text-primary",
+                "text-success",
+                "text-error",
+                "text-warning",
+            )
+        }
+
     def _metric_hints(self) -> str:
-        pairs = [("enter", "refresh"), ("r", f"range: {self._range_label().casefold()}")]
+        pairs = [("enter", "refresh"), ("r", f"range: {self._range_label()}")]
         target_key = self._selected() if self.is_mounted else None
         if target_key and len(self._members_by_target.get(self.rows[target_key][0], [])) > 1:
             pairs.append(("←→", "member"))
@@ -509,7 +525,9 @@ class Targets(RiggerScreen):
         empty = self.query_one("#tg-empty", Static)
         empty.display = not table.row_count
         empty.update(
-            "No matching targets." if specs else "No targets yet — a adds your first target."
+            "no targets match the filter — press esc to clear it"
+            if specs
+            else "no targets yet — press a to add one"
         )
         if selected:
             with suppress(Exception):
@@ -604,11 +622,13 @@ class Targets(RiggerScreen):
         members = self._members_by_target.get(target.id, []) if target else []
         if not instrument:
             empty.display = True
-            empty.update(
-                "No ticker proxy configured — add a representative instrument to see metrics."
-                if target and not target.tickers
-                else "Select a watchlist item"
-            )
+            if target and not target.tickers:
+                message = "no tickers on this target — metrics need at least one ticker"
+            elif not self.rows:
+                message = "no targets yet — press a to add one"
+            else:
+                message = "no target selected — ↑↓ picks one"
+            empty.update(message)
             title.update(f"{target.id} · {target.kind}" if target else "")
             hero.update("")
             status.update("")
@@ -623,7 +643,7 @@ class Targets(RiggerScreen):
             else ""
         )
         tags = f" · tags: {', '.join(sorted(target.tags))}" if target and target.tags else ""
-        tokens = self.app.theme_variables
+        tokens = self._colours()
         title.update(
             Text.assemble(
                 (name, f"bold {tokens['foreground']}"),
@@ -635,7 +655,7 @@ class Targets(RiggerScreen):
         )
         if metric is None:
             hero.update("")
-            status.update("Loading live metrics…")
+            status.update("loading metrics…")
             clear_chart()
             clear_cards()
             return
@@ -658,7 +678,7 @@ class Targets(RiggerScreen):
             hero_text.append("— today", style=flat)
         hero.update(hero_text)
         if metric.error:
-            status.update(f"Metrics unavailable: {metric.error} · enter retries")
+            status.update(f"metrics unavailable: {metric.error} — press enter to retry")
         else:
             range_context = (
                 f"high {metric.period_high:,.2f} · low {metric.period_low:,.2f}"
@@ -738,7 +758,7 @@ class Targets(RiggerScreen):
         and the eye scans one column for what moved.
         """
         name_w, last_w, chg_w, age_w = self.COLUMNS
-        tokens = self.app.theme_variables
+        tokens = self._colours()
         ident = members[0] if len(members) == 1 else self._selected_member.get(target.id)
         if len(members) == 1:
             name = members[0].split(":", 1)[1]
@@ -775,9 +795,9 @@ class Targets(RiggerScreen):
     def _group_prompt(self, asset_class: str, entries: list[Any], expanded: bool) -> Text:
         """Group header with the mean move of its members that have a quote."""
         name_w, last_w, chg_w, _age_w = self.COLUMNS
-        tokens = self.app.theme_variables
+        tokens = self._colours()
         arrow = "▾" if expanded else "▸"
-        row = Text(f"{arrow} {asset_class.upper()} ", style=f"bold {tokens['text-primary']}")
+        row = Text(f"{arrow} {asset_class} ", style=f"bold {tokens['text-primary']}")
         row.append(f"({len(entries)})", style=tokens["text-muted"])
         moves = [
             quote.change_pct
@@ -831,7 +851,7 @@ class Targets(RiggerScreen):
             self._quote_for(ident) for _t, ident in self.rows.values() if ident
         )
         self.query_one("#target-list-pane", Pane).set_badge(
-            f"{'● live' if live else 'quotes idle'} · {len(self.rows)}"
+            f"{'● live' if live else '○ idle'} · {len(self.rows)}"
         )
 
     def on_option_list_option_highlighted(self, event: Any) -> None:
@@ -878,14 +898,12 @@ class Targets(RiggerScreen):
         self._select_instrument(force=True)
 
     def _range_label(self) -> str:
-        return {"day": "Day", "month": "Month", "all": "All time"}[self._range]
+        return {"day": "day", "month": "month", "all": "all time"}[self._range]
 
     def action_cycle_range(self) -> None:
         self._range = {"month": "all", "all": "day", "day": "month"}[self._range]
         self.query_one("#target-inspector-pane", Pane).set_hints(self._metric_hints())
-        self.query_one("#target-chart-label", Static).update(
-            f"PRICE · {self._range_label().upper()}"
-        )
+        self.query_one("#target-chart-label", Static).update(f"price · {self._range_label()}")
         self._metrics.clear()
         self._select_instrument(force=True)
 
@@ -933,7 +951,7 @@ class Targets(RiggerScreen):
             with suppress(Exception):
                 table = self.query_one("#target-table", WatchlistList)
                 table.highlighted = table.get_option_index(key)
-        self.notify(f"Added {name} to the watchlist")
+        self.notify(f"added {name} to the watchlist")
         target = self.specs.get(name)
         if target and target.tickers and target.markets:
             instruments = [
@@ -951,21 +969,24 @@ class Targets(RiggerScreen):
             self._collect_task = asyncio.create_task(self._collect_target(name, instruments))
 
     async def _collect_target(self, name: str, instruments: list[Instrument]) -> None:
-        self.notify(f"Collecting data for {name}…")
+        self.notify(f"gathering evidence for {name}…")
         try:
             result = await services.ingest(self.rig, instruments=instruments)
-            self.notify(f"Collected data for {name}: {sum(result.counts.values())} records")
+            self.notify(f"gathered {sum(result.counts.values())} records for {name}")
             self._metrics.clear()
             self._select_instrument(force=True)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            self.notify(f"Data collection failed for {name}: {exc}", severity="error")
+            self.notify(
+                f"could not gather evidence for {name}: {exc} — press c to check the provider",
+                severity="error",
+            )
 
     def action_remove(self) -> None:
         key = self._selected()
         if key is None or key.startswith("child:"):
-            self.notify("Select a watchlist target first", severity="error")
+            self.notify("select a target first", severity="error")
             return
         name = self.rows[key][0]
         try:
@@ -974,7 +995,7 @@ class Targets(RiggerScreen):
             self.notify(str(exc), severity="error")
             return
         self.refresh_view()
-        self.notify(f"Removed {name} from the watchlist")
+        self.notify(f"removed {name} from the watchlist")
 
     async def on_screen_resume(self) -> None:
         self.active = True

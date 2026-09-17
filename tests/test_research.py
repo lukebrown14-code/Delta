@@ -99,7 +99,9 @@ def test_structured_report_round_trip_and_legacy(tmp_engine, tmp_path, monkeypat
             path.with_suffix(".json").unlink()
             await screen.show_latest(INST)
             assert screen.report is None
-            assert "Regenerate" in str(screen.query_one("#report-legacy", Static).render())
+            assert "press n to regenerate" in str(
+                screen.query_one("#report-legacy", Static).render()
+            )
             assert "A sourced summary" in screen.query_one(MarkdownViewer).document.source
 
     asyncio.run(run())

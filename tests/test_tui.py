@@ -11,6 +11,7 @@ from rigger import services
 from rigger.core.models import Instrument
 from rigger.tui.app import RiggerApp
 from rigger.tui.shell import ALL_ITEMS, OFF_BAR_ITEMS, ScreenFooter, StatusBar
+from rigger.tui.widgets import Pane
 from tests.conftest import seed_bars
 
 AAPL = Instrument(id="US:AAPL", market="us", symbol="AAPL", currency="USD", sector="Tech")
@@ -402,9 +403,12 @@ def test_config_two_columns_fold_and_focus_keys(rig):
             assert screen.focused is screen.query_one("#cfg-plugins")
             await pilot.press("t")
             assert screen.focused is screen.query_one("#cfg-targets")
-            # The targets pane is a signpost: no phantom add key.
+            # The targets pane is a signpost: it names keys that are bound.
             empty = str(screen.query_one("#cfg-targets-empty").render())
-            assert "press w" not in empty and "1 Watchlist" in empty
+            assert "press w " not in empty
+            assert "press 1" in empty and "a to add one" in empty
+            # …and the pane's own border says where 1 goes.
+            assert "watchlist" in screen.query_one("#cfg-targets-pane", Pane).border_subtitle
             # Enter on a routing row opens the model picker for that task.
             screen.query_one("#cfg-routing").focus()
             await pilot.press("enter")

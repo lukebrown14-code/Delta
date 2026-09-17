@@ -38,8 +38,8 @@ from rigger.tui.widgets import (
 )
 
 #: ``rigger.chat`` offers the model this many items per instrument, so the
-#: "sources in scope" figure counts what the model will actually see.
-SOURCE_CAP = 50
+#: "evidence in scope" figure counts what the model will actually see.
+EVIDENCE_CAP = 50
 
 _WEB = ("http://", "https://")
 
@@ -73,19 +73,19 @@ class Chat(RiggerScreen):
     #: While the Input has focus it consumes letters, space and enter first,
     #: so none of these fire mid-sentence.
     BINDINGS = [
-        ("i", "focus_input", "Ask"),
-        ("enter", "focus_input", "Ask"),
-        ("escape", "back", "Back"),
-        ("t", "focus_targets", "Targets"),
-        ("space", "toggle_target", "Toggle target"),
-        ("a", "toggle_all", "All / none"),
-        ("w", "toggle_web", "Web search"),
-        ("x", "clear_transcript", "Clear"),
-        Binding("y", "confirm_clear", "Confirm", show=False),
-        Binding("left", "prev_citation", "Citation", show=False),
-        Binding("right", "next_citation", "Citation", show=False),
-        ("o", "open_citation", "Open source"),
-        ("s", "save_answer", "Save to thesis"),
+        ("i", "focus_input", "ask"),
+        ("enter", "focus_input", "ask"),
+        ("escape", "back", "back"),
+        ("t", "focus_targets", "targets"),
+        ("space", "toggle_target", "toggle target"),
+        ("a", "toggle_all", "all / none"),
+        ("w", "toggle_web", "web search"),
+        ("x", "clear_transcript", "clear"),
+        Binding("y", "confirm_clear", "confirm", show=False),
+        Binding("left", "prev_citation", "citation", show=False),
+        Binding("right", "next_citation", "citation", show=False),
+        ("o", "open_citation", "open citation"),
+        ("s", "save_answer", "save to thesis"),
     ]
 
     CSS = """
@@ -175,7 +175,7 @@ class Chat(RiggerScreen):
         table.add_column("", key="dot")
         table.add_column("Target", key="target")
         table.add_column("Kind", key="kind")
-        table.add_column("Sources", key="sources")
+        table.add_column("Evidence", key="evidence")
         self.scope = set(services.target_specs())
         self.ready = True
         self.refresh_targets()
@@ -204,12 +204,12 @@ class Chat(RiggerScreen):
             )
         )
 
-    def source_count(self, ids: list[str]) -> tuple[int, bool]:
-        """Items the model would be offered for ``ids``; ``True`` when a cap was hit."""
+    def evidence_count(self, ids: list[str]) -> tuple[int, bool]:
+        """Evidence the model would be offered for ``ids``; ``True`` when a cap was hit."""
         total, capped = 0, False
         for instrument in ids:
-            n = len(evidence(self.rig.engine, target=instrument, limit=SOURCE_CAP))
-            capped = capped or n >= SOURCE_CAP
+            n = len(evidence(self.rig.engine, target=instrument, limit=EVIDENCE_CAP))
+            capped = capped or n >= EVIDENCE_CAP
             total += n
         return total, capped
 
@@ -221,7 +221,7 @@ class Chat(RiggerScreen):
         with self.prevent(RiggerTable.RowHighlighted):
             table.clear()
             for spec in specs:
-                count, capped = self.source_count(self.instrument_ids(spec))
+                count, capped = self.evidence_count(self.instrument_ids(spec))
                 table.add_row(
                     self.dot(spec.id in self.scope),
                     spec.id,
@@ -261,9 +261,9 @@ class Chat(RiggerScreen):
             line = " ".join(part for part in ("scope:", names, " ".join(ids)) if part)
             line += f"  · web {web}"
         else:
-            count, capped = self.source_count(ids)
-            sources = f"{count}{'+' if capped else ''} sources"
-            line = f"scope: {names} → {' '.join(ids) or '—'} · {sources} · web {web}"
+            count, capped = self.evidence_count(ids)
+            pool = f"{count}{'+' if capped else ''} evidence items"
+            line = f"scope: {names} → {' '.join(ids) or '—'} · web {web} · {pool}"
         self.query_one("#chat-scope", Static).update(line)
         count_line = f"{len(scoped)} of {len(specs)} in scope"
         if ids and not narrow:
@@ -449,7 +449,7 @@ class Chat(RiggerScreen):
         else:
             hints.append(("↑↓", "scroll"))
         if self.citations():
-            hints += [("←→", "citation"), ("o", "open source")]
+            hints += [("←→", "citation"), ("o", "open citation")]
         if self.answer() is not None:
             hints.append(("s", "save"))
         if self.history:
@@ -488,7 +488,7 @@ class Chat(RiggerScreen):
                 allow_web=self.allow_web,
             )
         except Exception as exc:
-            self.notify(f"chat failed: {exc}", severity="error")
+            self.notify(f"ask failed: {exc} — press i to try again", severity="error")
             self.busy_since = None
             await self._render_transcript()
             return
@@ -586,7 +586,7 @@ class Chat(RiggerScreen):
         inspect = getattr(research, "inspect_evidence", None)
         switch = getattr(self.app, "action_switch_screen", None)
         if not callable(inspect) or not callable(switch):
-            self.notify("Research screen is not available here", severity="warning")
+            self.notify("the research panel is not available here", severity="warning")
             return
         switch("data")
         await inspect(citation)
@@ -599,7 +599,7 @@ class Chat(RiggerScreen):
 
         message = self.answer()
         if message is None:
-            self.notify("No answer to save yet", severity="warning")
+            self.notify("no answer to save yet — press i to ask something", severity="warning")
             return
         stored = [c for c in message.citations if not c.startswith(_WEB)]
         targets = self._selected_targets()
@@ -620,7 +620,7 @@ class Chat(RiggerScreen):
                 theses.add_evidence(
                     self.rig.engine, thesis.id, evidence_id, "support", "from ask", accepted=True
                 )
-            self.notify(f"Thesis created with {len(stored)} linked sources", timeout=6)
+            self.notify(f"thesis created with {len(stored)} linked evidence items", timeout=6)
 
         claim = message.text.split("\n\n")[0]
         self.app.push_screen(ThesisForm(claim=claim, targets=", ".join(targets)), created)
@@ -643,7 +643,7 @@ class Chat(RiggerScreen):
         if not blocks:
             blocks.append(
                 Static(
-                    "No messages yet. Pick targets with t, then i to ask.",
+                    "no messages yet — press t to pick targets, then i to ask",
                     classes="msg-empty",
                     markup=False,
                 )

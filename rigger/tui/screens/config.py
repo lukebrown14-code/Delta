@@ -39,11 +39,11 @@ class Config(RiggerScreen):
     #: ``m`` and ``p`` already open the pickers app-wide and are only surfaced
     #: in the pane hints.
     BINDINGS = [
-        ("d", "toggle_diagnostics", "Diagnostics"),
-        ("r", "refresh", "Refresh"),
-        ("l", "focus_plugins", "Plugins"),
-        ("t", "focus_targets", "Targets"),
-        ("escape", "close_diagnostics", "Back"),
+        ("d", "toggle_diagnostics", "diagnostics"),
+        ("r", "refresh", "refresh"),
+        ("l", "focus_plugins", "plugins"),
+        ("t", "focus_targets", "targets"),
+        ("escape", "close_diagnostics", "back"),
     ]
 
     #: Below this terminal width the two columns stack and diagnostics folds.
@@ -154,7 +154,7 @@ class Config(RiggerScreen):
                     yield RiggerTable(id="cfg-targets")
                     yield FocusLine("", id="cfg-targets-line")
                     yield Static(
-                        "no targets configured — add one in 1 Watchlist (a add)",
+                        "no targets yet — press 1, then a to add one",
                         id="cfg-targets-empty",
                         markup=False,
                     )
@@ -169,7 +169,7 @@ class Config(RiggerScreen):
                 yield Static("", id="cfg-diag-summary")
                 with VerticalScroll(id="cfg-diag-body"):
                     with Horizontal(classes="cfg-heading"):
-                        yield Static("STORED EVIDENCE", markup=False)
+                        yield Static("evidence", markup=False)
                         yield Static(
                             "", id="cfg-db-size", classes="cfg-heading-right", markup=False
                         )
@@ -177,7 +177,7 @@ class Config(RiggerScreen):
                     yield Static("", id="health-latest", markup=False)
                     yield Static("", classes="cfg-gap")
                     with Horizontal(classes="cfg-heading"):
-                        yield Static("MODEL SPEND · CUMULATIVE", markup=False)
+                        yield Static("model spend · cumulative", markup=False)
                     yield RiggerTable(id="costs-table")
                     yield Static("", id="costs-total", markup=False)
                     yield Static("", id="costs-today", markup=False)
@@ -334,16 +334,22 @@ class Config(RiggerScreen):
         self.query_one("#cfg-targets-line", FocusLine).update(line)
         legacy = len(targets) - len(configured)
         legacy_note = self.query_one("#cfg-targets-legacy", Static)
-        legacy_note.update(f"{legacy} legacy universe entries are active · hidden here")
+        legacy_note.update(
+            f"{legacy} legacy universe entr{'y' if legacy == 1 else 'ies'} active · hidden here"
+        )
         legacy_note.display = bool(legacy)
         self.query_one("#cfg-targets-empty", Static).display = not configured
+        # With no targets the empty line above already names the keys; saying
+        # it twice in one pane reads as two different instructions.
         self.query_one("#cfg-targets-signpost", Static).update(
-            "[$text-muted]add or remove targets in[/] [bold $text-primary]1[/] [$text-muted]Watchlist"
-            " ([/][bold $text-primary]a[/] [$text-muted]add,[/] [bold $text-primary]d[/] [$text-muted]remove)[/]"
+            "[$text-muted]targets live on the[/] [bold $text-primary]1[/] [$text-muted]watchlist —[/]"
+            " [bold $text-primary]a[/] [$text-muted]add,[/] [bold $text-primary]d[/] [$text-muted]remove[/]"
+            if configured
+            else ""
         )
         badge = str(len(configured)) if configured else ""
         if self.narrow and configured:
-            badge += " · edit in 1 Watchlist"
+            badge += " · edit on the 1 watchlist"
         self.query_one("#cfg-targets-pane", Pane).set_badge(badge)
 
     def _refresh_diagnostics(self) -> None:
@@ -360,7 +366,7 @@ class Config(RiggerScreen):
         if latest_parts:
             lines.append("latest bar " + " · ".join(latest_parts))
         else:
-            lines.append("no prices gathered yet")
+            lines.append("no prices gathered yet — press 2, then U to gather")
         if health.last_llm:
             lines.append(f"last model call {_stamp(health.last_llm)}")
         self.query_one("#health-latest", Static).update("\n".join(lines))
@@ -380,7 +386,7 @@ class Config(RiggerScreen):
             costs.add_row(row.task, row.model, str(row.calls), f"${row.cost_usd:.3f}")
         total = sum(row.cost_usd for row in cost_rows)
         calls = sum(row.calls for row in cost_rows)
-        self.query_one("#costs-total", Static).update(f"Total  {calls} calls  ${total:.2f}")
+        self.query_one("#costs-total", Static).update(f"total  {calls} calls  ${total:.2f}")
         try:
             today = sum(
                 row.cost_usd
@@ -393,7 +399,8 @@ class Config(RiggerScreen):
             self.query_one("#costs-today", Static).update("")
         now = datetime.now().strftime("%H:%M:%S")
         self.query_one("#cfg-refreshed", Static).update(
-            f"[$text-muted]refreshed {now} · [/][bold $text-primary]r[/][$text-muted] to refresh[/]"
+            f"[$text-muted]refreshed {now} · press [/][bold $text-primary]r[/]"
+            "[$text-muted] to refresh[/]"
         )
         self.query_one("#cfg-diag", Pane).set_badge(f"{total_rows:,} rows · ${total:.2f}")
         newest = max(health.latest_bar.values()) if health.latest_bar else None
