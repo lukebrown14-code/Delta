@@ -23,6 +23,8 @@ from rigger.core.time import parse_date, to_utc
 from rigger.evidence import FILING_SOURCE
 from rigger.llm.providers import PROVIDERS, ProviderSpec
 from rigger.targets import DEFAULT_KIND, KNOWN_KINDS, LEGACY_KIND, WatchTarget, target_from_spec
+from rigger.theses import Thesis
+from rigger.thesis_health import HealthResult
 
 Log = Callable[[str], None]
 
@@ -491,3 +493,90 @@ def setup_checks(rig: Any) -> list[Check]:
     health = data_health(rig)
     checks.append(Check("Price history", bool(health.latest_bar), "Gather evidence"))
     return checks
+
+
+@dataclass
+class Headline:
+    """The newest news title, for the Home overview."""
+
+    title: str
+    ts: datetime
+    instrument_ids: tuple[str, ...]
+
+
+def latest_headline(
+    engine: Any, *, instrument_ids: Sequence[str] = (), scan: int = 50
+) -> Headline | None:
+    """Newest news item touching ``instrument_ids`` (any item when empty).
+
+    Reads the newest ``scan`` rows by the indexed ``published`` column and
+    filters in Python: ``instrument_ids`` is an unindexed JSON column, so a
+    ``LIKE`` per instrument would be a full scan each.
+    """
+    wanted = set(instrument_ids)
+    with Session(engine) as session:
+        rows = session.exec(
+            select(NewsItemTable.title, NewsItemTable.published, NewsItemTable.instrument_ids)
+            .order_by(NewsItemTable.published.desc())  # type: ignore[attr-defined]
+            .limit(scan)
+        ).all()
+    for title, published, raw_ids in rows:
+        ids = tuple(from_json(raw_ids))
+        if not wanted or wanted.intersection(ids):
+            return Headline(title, to_utc(published), ids)
+    return None
+
+
+@dataclass
+class ThesisHealth:
+    """One thesis with its computed health; ``result`` is None with no accepted evidence."""
+
+    thesis: Thesis
+    result: HealthResult | None
+
+    @property
+    def state(self) -> str:
+        return self.result.state if self.result else "emerging"
+
+
+#: Most at risk first: the order the Home theses box lists claims in.
+RISK_ORDER: dict[str, int] = {
+    "challenged": 0,
+    "weakening": 1,
+    "mixed": 2,
+    "idle": 3,
+    "emerging": 4,
+    "building": 5,
+}
+
+
+def thesis_fleet(engine: Any, *, now: datetime | None = None) -> list[ThesisHealth]:
+    """Health of every thesis, most at risk first.
+
+    Two indexed reads per thesis (accepted links, then the items by id) — the
+    same path the Theses screen takes for one claim — so the overview stays
+    cheap for a desk-sized fleet. Ties break on tilt (most negative first),
+    then on the claim.
+    """
+    from rigger import theses as theses_mod
+    from rigger.evidence import evidence_by_ids
+    from rigger.thesis_health import compute_health
+
+    now = now or datetime.now(UTC)
+    fleet: list[ThesisHealth] = []
+    for thesis in theses_mod.list_theses(engine):
+        links = theses_mod.evidence_for(engine, thesis.id, accepted_only=True)
+        by_id = {
+            item.id: item for item in evidence_by_ids(engine, [row.evidence_id for row in links])
+        }
+        accepted = [(by_id[row.evidence_id], row.side) for row in links if row.evidence_id in by_id]
+        result = compute_health(thesis, accepted, now=now) if accepted else None
+        fleet.append(ThesisHealth(thesis, result))
+    fleet.sort(
+        key=lambda entry: (
+            RISK_ORDER.get(entry.state, len(RISK_ORDER)),
+            entry.result.tilt if entry.result else 0.0,
+            entry.thesis.claim,
+        )
+    )
+    return fleet
