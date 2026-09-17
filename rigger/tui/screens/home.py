@@ -243,8 +243,19 @@ class GoCell(Horizontal):
         yield Static(self.key, classes="go-key", markup=False)
         yield Static(self.label, classes="go-label", markup=False)
 
+    def retune(self, key: str, label: str, action: str) -> None:
+        """Repoint an existing cell, so the grid never remounts its children."""
+        self.key, self.label, self.action = key, label, action
+        self.query_one(".go-key", Static).update(key)
+        self.query_one(".go-label", Static).update(label)
+
     async def on_click(self) -> None:
         await self.app.run_action(self.action)
+
+
+#: The system box's rows, in order. Mounted once in ``compose_content`` and
+#: updated in place, so their ids stay unique across refreshes.
+SYSTEM_ROWS = ("plugins", "data", "llm", "spend", "setup", "db")
 
 
 class Home(RiggerScreen):
@@ -440,7 +451,9 @@ class Home(RiggerScreen):
                     hints=hint_markup(("c", "settings"), ("p", "provider"), ("m", "model")),
                     id="system-pane",
                 ):
-                    yield Vertical(id="system-rows")
+                    with Vertical(id="system-rows"):
+                        for row in SYSTEM_ROWS:
+                            yield Static("", classes="sys-row", id=f"system-{row}")
 
     async def on_mount(self) -> None:
         self.layout_views()
@@ -736,11 +749,16 @@ class Home(RiggerScreen):
     def _refresh_go(self) -> None:
         grid = self.query_one("#go-grid", Vertical)
         items = go_items(getattr(self.app, "BINDINGS", []))
-        current = [(cell.key, cell.label, cell.action) for cell in grid.query(GoCell)]
-        if current == items:
+        cells = list(grid.query(GoCell))
+        if [(cell.key, cell.label, cell.action) for cell in cells] == items:
             return
-        grid.remove_children()
-        grid.mount(*(GoCell(key, label, action) for key, label, action in items))
+        # Mount once; afterwards retune the existing cells rather than
+        # remove-then-mount, which races the async removal.
+        if not cells:
+            grid.mount(*(GoCell(key, label, action) for key, label, action in items))
+            return
+        for cell, (key, label, action) in zip(cells, items, strict=False):
+            cell.retune(key, label, action)
 
     def _refresh_system(self, health: Any, checks: list[services.Check]) -> None:
         plugins = getattr(self.rig, "plugins", {}) or {}
@@ -805,13 +823,14 @@ class Home(RiggerScreen):
                 else f"[$text-success]✓ {len(checks)} checks passed[/]",
             ),
         ]
-        holder = self.query_one("#system-rows", Vertical)
-        holder.remove_children()
-        widgets = [Static(label(name) + text, classes="sys-row") for name, text in lines]
+        # Update in place: ``remove_children`` is async, so a remove-then-mount
+        # here would race the next refresh and duplicate the row ids.
+        for name, text in lines:
+            self.query_one(f"#system-{name}", Static).update(label(name) + text)
         db = self._db_line()
-        if db:
-            widgets.append(Static(label("db") + db, classes="sys-row", id="system-db"))
-        holder.mount(*widgets)
+        db_row = self.query_one("#system-db", Static)
+        db_row.display = bool(db)
+        db_row.update(label("db") + db if db else "")
         self.query_one("#system-pane", Pane).set_badge(
             "ok" if not failing else f"{len(failing)} to fix"
         )

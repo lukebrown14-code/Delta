@@ -433,3 +433,34 @@ def test_config_narrow_folds_diagnostics_until_d(rig):
             assert not screen.query_one("#cfg-diag-body").display
 
     asyncio.run(run())
+
+
+def test_home_refreshes_twice_without_duplicate_ids(rig, monkeypatch, tmp_path):
+    """Home's boxes update in place.
+
+    A remove-then-mount rebuild raced Textual's async ``remove_children`` and
+    crashed with DuplicateIds on the second refresh — the first repaint after
+    the screen had already been drawn once.
+    """
+    import tomli_w
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "config.toml").write_text(
+        tomli_w.dumps(
+            {"targets": {"apple": {"kind": "company", "market": "us", "tickers": ["AAPL"]}}}
+        ),
+        encoding="utf-8",
+    )
+
+    async def run():
+        app = RiggerApp(rig)
+        async with app.run_test() as pilot:
+            home = app.screen
+            assert home.name == "home"
+            for _ in range(3):
+                await home.refresh_view()
+                await pilot.pause()
+            assert len(app.screen.query("#system-db")) == 1
+            assert len(app.screen.query("#system-plugins")) == 1
+
+    asyncio.run(run())
