@@ -272,8 +272,6 @@ def test_report_scroll_returns_and_first_citing_claim(tmp_engine, tmp_path, monk
 
 
 def test_settings_diagnostics_and_gather_refresh(tmp_engine, tmp_path, monkeypatch):
-    from textual.widgets import Collapsible
-
     from rigger.tui.screens.config import Config
 
     rig = setup_rig(tmp_engine, tmp_path, monkeypatch)
@@ -304,7 +302,9 @@ def test_settings_diagnostics_and_gather_refresh(tmp_engine, tmp_path, monkeypat
             pilot.app.switch_screen("config")
             await pilot.pause()
             settings = pilot.app.screen
-            assert settings.query_one(Collapsible).collapsed
+            # 80 columns: diagnostics starts folded to its summary line.
+            assert settings.query_one("#cfg-diag-summary").display
+            assert not settings.query_one("#cfg-diag-body").display
             assert settings.query_one("#health-table").row_count > 0
             assert "US:AAPL" in str(settings.query_one("#health-latest", Static).render())
 

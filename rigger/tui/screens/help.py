@@ -30,7 +30,7 @@ Press **1** for Watchlist.
 
 A watchlist entry is anything you want watched — one company, a whole
 sector, or a theme. Press **a** to open the entry form, fill in the fields,
-and click **save**. Press **Escape** to close the form.
+and press **enter** to save. Press **Escape** to close the form.
 
 Use **/** to filter, **↑/↓** to select, and **Enter** to refresh metrics for
 the selected target. The metrics inspector stays open beside the watchlist.
@@ -63,12 +63,12 @@ filter its evidence. Database counts and model spend are under Settings → Diag
 
 Press **3** for the Research report view.
 
-Pick a company, press **Generate report**, and wait. You get a written summary with a
+Pick a company, press **n** to generate a report, and wait. You get a written summary with a
 citation on every claim. If a sentence could not be traced back to something
 collected in step 2, it gets dropped rather than guessed.
 
-The contents panel on the left jumps between sections. Select **Inspect source**
-to read a citation in Evidence, then switch back to Report to resume reading.
+The contents panel on the left jumps between sections. In Evidence, press **o** to
+open a source and **v** to view it in the report; switch back to Report to resume reading.
 
 ## 4. Ask it questions
 
