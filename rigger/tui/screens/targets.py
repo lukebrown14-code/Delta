@@ -7,6 +7,7 @@ from contextlib import suppress
 from datetime import UTC, datetime
 from typing import Any
 
+from rich.table import Table
 from rich.text import Text
 from textual import work
 from textual.app import ComposeResult
@@ -688,7 +689,12 @@ class Targets(RiggerScreen):
             group, values = list(groups.items())[index]
             card.display = True
             card.set_title(group.casefold())
-            body.update("\n".join(f"{label:<20} {value:>10}" for label, value in values.items()))
+            grid = Table.grid(expand=True, padding=(0, 1))
+            grid.add_column(ratio=1, no_wrap=True, overflow="ellipsis")
+            grid.add_column(justify="right", no_wrap=True)
+            for label, value in values.items():
+                grid.add_row(label, Text(value, style=tokens["foreground"]))
+            body.update(grid)
         quote_stamp = quote.timestamp.strftime("%H:%M:%S UTC") if quote else "—"
         source.update(f"{metric.source} · live {quote_stamp} · history {history}")
 
