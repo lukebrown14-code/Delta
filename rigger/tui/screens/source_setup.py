@@ -14,7 +14,7 @@ from textual.widgets import Button, Input, Static
 from rigger.core.plugin import DataProviderSpec
 
 
-class SourceSetupModal(ModalScreen[dict[str, str] | None]):
+class SourceSetupModal(ModalScreen[tuple[dict[str, str], list[str]] | None]):
     """Collect only the explicitly declared non-secret settings for a source."""
 
     BINDINGS = [Binding("escape", "cancel", "Cancel")]
@@ -30,6 +30,8 @@ class SourceSetupModal(ModalScreen[dict[str, str] | None]):
         self.current = current
 
     def compose(self) -> ComposeResult:
+        scope = self.current.get("scope", {})
+        markets = ",".join(scope.get("markets", [])) if isinstance(scope, dict) else ""
         yield Vertical(
             Static(f"[bold]Configure {self.spec.label}[/bold]", markup=True),
             Static(self.spec.notice, markup=False) if self.spec.notice else Static("", markup=False),
@@ -42,6 +44,7 @@ class SourceSetupModal(ModalScreen[dict[str, str] | None]):
                 )
                 for field in self.spec.fields
             ),
+            Input(value=markets, placeholder="Markets to attach, e.g. lse,asx (optional)", id="source-markets"),
             Horizontal(Button("Save", id="source-save"), Button("Cancel", id="source-cancel")),
         )
 
@@ -64,7 +67,12 @@ class SourceSetupModal(ModalScreen[dict[str, str] | None]):
         if missing:
             self.notify(f"required: {', '.join(missing)}", severity="warning")
             return
-        self.dismiss(values)
+        markets = [
+            market.strip().lower()
+            for market in self.query_one("#source-markets", Input).value.split(",")
+            if market.strip()
+        ]
+        self.dismiss((values, markets))
 
     def action_cancel(self) -> None:
         self.dismiss(None)
@@ -80,11 +88,12 @@ async def configure_source(app: Any, rig: Any, name: str, refresh: Callable[[], 
         app.notify(f"{name} has no setup form", severity="warning")
         return
     current = dict(getattr(rig.cfg, "plugins", {}).get(name, {}))
-    values = await app.push_screen_wait(SourceSetupModal(spec, current))
-    if values is None:
+    result = await app.push_screen_wait(SourceSetupModal(spec, current))
+    if result is None:
         return
+    values, markets = result
     try:
-        services.configure_data_provider(rig, name, values)
+        services.configure_data_provider(rig, name, values, markets=markets)
     except ValueError as exc:
         app.notify(str(exc), severity="error")
         return

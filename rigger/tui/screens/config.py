@@ -16,7 +16,12 @@ from rigger.tui.widgets import Pane, PaneStack, Pill, RiggerTable, StatusDot
 
 class Config(RiggerScreen):
     name = "config"
-    BINDINGS = [Binding("d", "configure_source", "Source")]
+    BINDINGS = [
+        Binding("d", "configure_source", "Source"),
+        Binding("a", "add_market", "Market"),
+        Binding("e", "edit_market", "Edit market"),
+        Binding("x", "remove_market", "Remove market"),
+    ]
 
     CSS = """
     #cfg-scroll {
@@ -68,6 +73,13 @@ class Config(RiggerScreen):
                         markup=False,
                         classes="empty-hint",
                     )
+                with Pane(title="markets", icon="", classes="-auto"):
+                    yield RiggerTable(id="cfg-markets")
+                    yield Static(
+                        "a add · e edit · x remove (user-defined markets only)",
+                        markup=False,
+                        classes="empty-hint",
+                    )
                 with Pane(title="targets", icon="", classes="-auto"):
                     yield RiggerTable(id="cfg-targets")
                     yield Static(
@@ -91,6 +103,7 @@ class Config(RiggerScreen):
         self.query_one("#cfg-routing", RiggerTable).add_columns("Task", "Model")
         self.query_one("#cfg-targets", RiggerTable).add_columns("Name", "Kind", "Market", "Tickers")
         self.query_one("#cfg-sources", RiggerTable).add_columns("Source", "Quality", "Status")
+        self.query_one("#cfg-markets", RiggerTable).add_columns("ID", "Market", "Currency", "Yahoo")
         await self.refresh_view()
 
     async def refresh_view(self) -> None:
@@ -116,6 +129,7 @@ class Config(RiggerScreen):
             costs.add_row(row.task, row.model, str(row.calls), f"${row.cost_usd:.4f}")
         await self._refresh_plugins()
         self._refresh_sources()
+        self._refresh_markets()
         cfg = self.rig.cfg
         self.query_one("#cfg-provider", Pill).update(str(getattr(cfg, "llm_provider", "") or "—"))
         routing = self.query_one("#cfg-routing", RiggerTable)
@@ -183,3 +197,68 @@ class Config(RiggerScreen):
         if row_key is None:
             return
         await configure_source(self.app, self.rig, str(row_key.value), self.refresh_view)
+
+    def _refresh_markets(self) -> None:
+        table = self.query_one("#cfg-markets", RiggerTable)
+        table.clear()
+        for name, profile in sorted(getattr(self.rig.cfg, "markets", {}).items()):
+            table.add_row(name, profile.label, profile.currency, profile.yahoo_suffix or "—", key=name)
+
+    def _selected_market(self) -> str | None:
+        table = self.query_one("#cfg-markets", RiggerTable)
+        if table.cursor_row is None or table.row_count == 0:
+            return None
+        return str(table.coordinate_to_cell_key((table.cursor_row, 0)).row_key.value)
+
+    async def action_add_market(self) -> None:
+        from rigger.tui.screens.market_setup import MarketSetupModal
+
+        values = await self.app.push_screen_wait(MarketSetupModal())
+        if values is None:
+            return
+        await self._save_market(values)
+
+    async def action_edit_market(self) -> None:
+        from rigger.tui.screens.market_setup import MarketSetupModal
+
+        name = self._selected_market()
+        if name is None:
+            self.app.notify("select a market first", severity="warning")
+            return
+        profile = self.rig.cfg.markets[name]
+        values = await self.app.push_screen_wait(
+            MarketSetupModal(
+                {"id": name, "label": profile.label, "currency": profile.currency, "yahoo_suffix": profile.yahoo_suffix},
+                editable_id=False,
+            )
+        )
+        if values is not None:
+            await self._save_market(values)
+
+    async def _save_market(self, values: dict[str, str]) -> None:
+        try:
+            services.save_market(**values)
+        except ValueError as exc:
+            self.app.notify(str(exc), severity="error")
+            return
+        reload_markets = getattr(self.rig, "reload_markets", None)
+        if callable(reload_markets):
+            reload_markets()
+        await self.refresh_view()
+        self.app.notify(f"{values['id'].lower()} market saved")
+
+    async def action_remove_market(self) -> None:
+        name = self._selected_market()
+        if name is None:
+            self.app.notify("select a market first", severity="warning")
+            return
+        try:
+            services.remove_market(name)
+        except ValueError as exc:
+            self.app.notify(str(exc), severity="error")
+            return
+        reload_markets = getattr(self.rig, "reload_markets", None)
+        if callable(reload_markets):
+            reload_markets()
+        await self.refresh_view()
+        self.app.notify(f"{name} market removed")
