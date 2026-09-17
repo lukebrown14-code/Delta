@@ -29,14 +29,22 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.markup import escape
 from textual.message import Message
-from textual.widgets import DataTable, OptionList, Sparkline, Static
+from textual.widgets import DataTable, OptionList, Static
 
 from rigger import services
 from rigger.core.models import Instrument
 from rigger.core.state import read_last_seen
 from rigger.core.time import to_utc
 from rigger.tui.shell import RiggerScreen, age_text
-from rigger.tui.widgets import Pane, PaneRow, RiggerTable, binding_key, hint_markup, shown_bindings
+from rigger.tui.widgets import (
+    BrailleGraph,
+    Pane,
+    PaneRow,
+    RiggerTable,
+    binding_key,
+    hint_markup,
+    shown_bindings,
+)
 
 PULSE_DAYS = 30
 WATCH_ROWS = 7
@@ -162,7 +170,7 @@ class WatchRow(Horizontal):
             else:
                 direction = "-up" if pct > 0 else "-down" if pct < 0 else ""
                 yield Static(f"{pct:+.2f}%", classes=f"w-chg {direction}".strip(), markup=False)
-            yield Sparkline(self.closes, classes="w-spark")
+            yield BrailleGraph(self.closes, fill=True, classes="w-spark")
         else:
             yield Static("—", classes="w-close", markup=False)
             yield Static("", classes="w-chg", markup=False)
@@ -293,13 +301,13 @@ class Home(RiggerScreen):
     Home .w-chg.-down { color: $text-error; }
     Home .w-none { width: 1fr; margin-left: 2; color: $text-muted; }
     Home .w-spark { width: 1fr; height: 1; margin: 0 1 0 2; }
-    Home .w-spark > .sparkline--min-color { color: $text-primary 45%; }
-    Home .w-spark > .sparkline--max-color { color: $text-primary; }
+    Home .w-spark > .braille-graph--low-color { color: $text-primary 45%; }
+    Home .w-spark > .braille-graph--high-color { color: $text-primary; }
     Home .w-row.-cursor { background: $block-cursor-blurred-background; }
     Home WatchRows:focus .w-row.-cursor { background: $primary; }
     Home .w-row.-cursor Static { color: $block-cursor-foreground; }
-    Home .w-row.-cursor .w-spark > .sparkline--min-color { color: $block-cursor-foreground 60%; }
-    Home .w-row.-cursor .w-spark > .sparkline--max-color { color: $block-cursor-foreground; }
+    Home .w-row.-cursor .w-spark > .braille-graph--low-color { color: $block-cursor-foreground 60%; }
+    Home .w-row.-cursor .w-spark > .braille-graph--high-color { color: $block-cursor-foreground; }
     Home #watch-note, Home #watch-since, Home #watch-next {
         height: 1;
         padding-left: 1;
@@ -316,8 +324,8 @@ class Home(RiggerScreen):
     Home .since-right { width: auto; margin-left: 2; color: $text-muted; }
     Home #since-head { margin-bottom: 1; }
     Home #since-spark { width: 1fr; height: 2; }
-    Home #since-spark > .sparkline--min-color { color: $text-primary 45%; }
-    Home #since-spark > .sparkline--max-color { color: $text-primary; }
+    Home #since-spark > .braille-graph--low-color { color: $text-primary 45%; }
+    Home #since-spark > .braille-graph--high-color { color: $text-primary; }
     Home #since-axis { margin-bottom: 1; color: $text-muted; }
     Home #since-newest { margin-bottom: 1; }
     Home #since-stale { height: 1; text-wrap: nowrap; text-overflow: ellipsis; }
@@ -408,7 +416,7 @@ class Home(RiggerScreen):
                         with Horizontal(id="since-head", classes="since-line"):
                             yield Static("", classes="since-left")
                             yield Static("", classes="since-right", markup=False)
-                        yield Sparkline([], id="since-spark")
+                        yield BrailleGraph([], fill=True, id="since-spark")
                         with Horizontal(id="since-axis", classes="since-line"):
                             yield Static(
                                 f"{PULSE_DAYS} days ago", classes="since-left", markup=False
@@ -627,7 +635,7 @@ class Home(RiggerScreen):
         )
         self.query_one("#since-pane", Pane).set_badge(f"{pulse.total} new" if pulse.total else "")
 
-        spark = self.query_one("#since-spark", Sparkline)
+        spark = self.query_one("#since-spark", BrailleGraph)
         spark.data = pulse.daily
         spark.display = any(pulse.daily)
         self.query_one("#since-axis").display = any(pulse.daily)

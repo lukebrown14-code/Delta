@@ -13,13 +13,21 @@ theses, chat) keep their shape when mounted under any App.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, ClassVar
 
-from textual.app import ComposeResult
+from rich.color import Color as RichColor
+from rich.console import Console, ConsoleOptions
+from rich.segment import Segment
+from rich.style import Style
+from textual.app import ComposeResult, RenderResult
 from textual.binding import Binding
+from textual.color import Color
 from textual.containers import Horizontal, Vertical
 from textual.markup import escape
+from textual.reactive import reactive
 from textual.screen import ModalScreen
+from textual.widget import Widget
 from textual.widgets import Button, DataTable, Static
 
 #: Keys whose Textual name is not what a user would recognise on a keycap.
@@ -467,6 +475,127 @@ class Dialog(ModalScreen):
 
     def action_dismiss_dialog(self) -> None:
         self.dismiss(None)
+
+
+class BrailleGraph(Widget):
+    """A price graph drawn in braille: 2x4 dots per cell, not one block glyph.
+
+    A block sparkline gives eight levels of height in one row. A braille cell
+    addresses two dot columns and four dot rows, so a ``W x H`` box carries
+    ``4H`` levels and ``2W`` sample points — enough for the shape of a month
+    of closes to be legible in six rows, which is what the pane already spends.
+
+    ``data`` is the series; assigning to it repaints. ``fill`` draws the area
+    under the line (for one-row sparklines, where a bare line is too sparse);
+    the default line reads as a chart. Colour comes from the two component
+    classes, low to high, so CSS keeps the ``$primary``/``$text-primary`` pair
+    the rest of the app uses.
+    """
+
+    COMPONENT_CLASSES: ClassVar[set[str]] = {
+        "braille-graph--low-color",
+        "braille-graph--high-color",
+    }
+
+    DEFAULT_CSS = """
+    BrailleGraph {
+        height: 1;
+    }
+    BrailleGraph > .braille-graph--low-color { color: $primary; }
+    BrailleGraph > .braille-graph--high-color { color: $text-primary; }
+    """
+
+    #: Bit of the braille cell for each (dot column, dot row). The fourth row
+    #: is the 8-dot extension, hence 0x40/0x80 rather than a run.
+    DOTS: ClassVar[tuple[tuple[int, ...], ...]] = (
+        (0x01, 0x02, 0x04, 0x40),
+        (0x08, 0x10, 0x20, 0x80),
+    )
+    #: The empty braille cell. Deliberately not ``BLANK``: that name is a
+    #: Textual ``Widget`` attribute meaning "paint nothing", and shadowing it
+    #: with a truthy string makes the widget render blank without ever
+    #: calling ``render()``.
+    EMPTY = "\u2800"
+
+    data: reactive[list[float]] = reactive(list, layout=True)
+
+    def __init__(
+        self,
+        data: Sequence[float] | None = None,
+        *,
+        fill: bool = False,
+        id: str | None = None,
+        classes: str = "",
+    ) -> None:
+        super().__init__(id=id, classes=classes)
+        self.fill = fill
+        self.data = list(data or [])
+
+    def _sample(self, columns: int) -> list[float]:
+        """One value per dot column: the mean of its bucket, never a dropped point."""
+        series = self.data
+        per = len(series) / columns
+        return [
+            sum(chunk) / len(chunk)
+            for x in range(columns)
+            for chunk in (series[int(x * per) : max(int((x + 1) * per), int(x * per) + 1)],)
+            if chunk
+        ]
+
+    def rows(self, width: int, height: int) -> list[str]:
+        """The graph as ``height`` strings of ``width`` braille cells."""
+        blank = [self.EMPTY * width for _ in range(height)]
+        if not self.data or width < 1 or height < 1:
+            return blank
+        points = self._sample(width * 2)
+        if not points:
+            return blank
+        low, high = min(points), max(points)
+        span = (high - low) or 1.0
+        dot_rows = height * 4
+        grid = [[0] * width for _ in range(height)]
+        for x, value in enumerate(points):
+            # Dot rows count down from the top, so invert the scaled value.
+            top = dot_rows - 1 - int(round((value - low) / span * (dot_rows - 1)))
+            for y in range(top, dot_rows) if self.fill else (top,):
+                grid[y // 4][x // 2] |= self.DOTS[x % 2][y % 4]
+        return ["".join(chr(0x2800 + cell) for cell in row) for row in grid]
+
+    def render(self) -> RenderResult:
+        base = self.background_colors[1]
+        return _BrailleRender(
+            self.rows(self.size.width, self.size.height),
+            low=(base + self.get_component_styles("braille-graph--low-color").color).rich_color,
+            high=(base + self.get_component_styles("braille-graph--high-color").color).rich_color,
+            fill=self.fill,
+        )
+
+
+@dataclass
+class _BrailleRender:
+    """Segments for :class:`BrailleGraph`.
+
+    A Rich renderable rather than a multi-line ``Text``: Textual paints a
+    widget line by line, and only a renderable that yields one segment run
+    per line survives that (the convention ``Sparkline`` also follows).
+    """
+
+    rows: list[str]
+    low: RichColor
+    high: RichColor
+    fill: bool
+
+    def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
+        rows = self.rows
+        low, high = Color.from_rich_color(self.low), Color.from_rich_color(self.high)
+        for index, row in enumerate(rows):
+            # A filled area is a mass: shade it low to high up the box so its
+            # bright top edge reads as the line. A bare line has no mass to
+            # shade — gradient it and the bottom half drops to 2.5:1 and
+            # vanishes — so it stays on the bright colour throughout.
+            ratio = 1.0 if not self.fill or len(rows) == 1 else 1 - index / (len(rows) - 1)
+            yield Segment(row, Style(color=low.blend(high, ratio).rich_color))
+            yield Segment.line()
 
 
 class RiggerTable(DataTable):

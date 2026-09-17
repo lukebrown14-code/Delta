@@ -12,7 +12,7 @@ from rich.text import Text
 from textual import work
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
-from textual.widgets import Button, Input, Label, OptionList, Sparkline, Static
+from textual.widgets import Button, Input, Label, OptionList, Static
 from textual.widgets.option_list import Option
 
 from rigger import services
@@ -21,7 +21,7 @@ from rigger.core.models import Instrument
 from rigger.plugins.data.yfinance import DEFAULT_SUFFIXES
 from rigger.quotes import SearchResult, YahooQuotes, canonical_symbol, yahoo_search
 from rigger.tui.shell import RiggerScreen, age_text
-from rigger.tui.widgets import Dialog, Pane, PaneRow, hint_markup
+from rigger.tui.widgets import BrailleGraph, Dialog, Pane, PaneRow, hint_markup
 
 
 class WatchlistList(OptionList):
@@ -335,7 +335,7 @@ class Targets(RiggerScreen):
     #target-chart-change { width: auto; text-style: bold; }
     #target-chart-change.-up { color: $text-success; }
     #target-chart-change.-down { color: $text-error; }
-    #target-chart { width: 1fr; height: 5; padding: 0 1; background: $panel; }
+    #target-chart { width: 1fr; height: 6; padding: 0 1; background: $panel; }
     #target-chart-axis { width: 1fr; height: 1; color: $text-muted; margin: 0 0 1 0; }
     #target-metric-grid { width: 1fr; height: auto; layout: grid; grid-size: 2; grid-columns: 1fr 1fr; grid-gutter: 0 1; }
     Targets.-narrow #target-metric-grid { grid-size: 1; grid-columns: 1fr; }
@@ -387,7 +387,7 @@ class Targets(RiggerScreen):
                     with Horizontal(id="target-chart-header"):
                         yield Static("PRICE · 1 MONTH", id="target-chart-label", markup=False)
                         yield Static("", id="target-chart-change", markup=False)
-                    yield Sparkline([], id="target-chart")
+                    yield BrailleGraph([], id="target-chart")
                     yield Static("", id="target-chart-axis", markup=False)
                     with Vertical(id="target-metric-grid"):
                         for index in range(4):
@@ -595,7 +595,7 @@ class Targets(RiggerScreen):
         def clear_chart() -> None:
             chart_change.update("")
             chart_change.set_classes("")
-            self.query_one("#target-chart", Sparkline).data = []
+            self.query_one("#target-chart", BrailleGraph).data = []
             axis.update("")
             source.update("")
 
@@ -674,7 +674,7 @@ class Targets(RiggerScreen):
         chart_change.update(metric.change_label or "—")
         chart_change.set_class(metric.change_label.startswith("+"), "-up")
         chart_change.set_class(metric.change_label.startswith("-"), "-down")
-        self.query_one("#target-chart", Sparkline).data = chart_window(
+        self.query_one("#target-chart", BrailleGraph).data = chart_window(
             metric.series, None if self._range == "all" else 30
         )
         history = _friendly_date_range(metric.history_start, metric.history_end)

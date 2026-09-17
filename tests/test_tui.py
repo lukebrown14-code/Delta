@@ -346,12 +346,16 @@ def test_theme_tokens_are_readable_on_black():
 
     tui = Path(__file__).resolve().parents[1] / "rigger" / "tui"
     pattern = re.compile(r"color: \$(primary|secondary|accent|success|error|warning)\b")
+    # A graphic is ink, not text: the braille graph's low end is the brand
+    # blue on purpose, and reading it never depends on that contrast — the
+    # bright end and the figures above the chart carry the meaning.
+    graphic = re.compile(r"--(low|high)-color")
     offenders = [
         f"{path.relative_to(tui)}:{n}"
         for path in list(tui.rglob("*.py")) + list(tui.rglob("*.tcss"))
         if path.name != "theme.py"
         for n, line in enumerate(path.read_text().splitlines(), 1)
-        if pattern.search(line)
+        if pattern.search(line) and not graphic.search(line)
     ]
     assert not offenders, offenders
 
@@ -464,3 +468,61 @@ def test_home_refreshes_twice_without_duplicate_ids(rig, monkeypatch, tmp_path):
             assert len(app.screen.query("#system-plugins")) == 1
 
     asyncio.run(run())
+
+
+def test_braille_graph_paints_in_a_running_app():
+    """The graph reaches the screen, not just the renderable.
+
+    Asserting on ``rows()`` alone passes for a widget Textual never paints;
+    this drives a real app and looks for braille in the exported frame.
+    """
+    from textual.app import App, ComposeResult
+
+    from rigger.tui.widgets import BrailleGraph
+
+    class GraphApp(App):
+        CSS = "BrailleGraph { width: 40; height: 6; }"
+
+        def compose(self) -> ComposeResult:
+            yield BrailleGraph([float(i) for i in range(120)], id="g")
+
+    async def run():
+        app = GraphApp()
+        async with app.run_test(size=(60, 12)) as pilot:
+            await pilot.pause()
+            frame = app.export_screenshot()
+            assert sum(1 for ch in frame if 0x2800 <= ord(ch) <= 0x28FF) > 20
+
+    asyncio.run(run())
+
+
+def test_braille_graph_resolution_and_shape():
+    """The graph uses the whole box: 4 dot rows per cell, 2 sample columns."""
+    from rigger.tui.widgets import BrailleGraph
+
+    rising = BrailleGraph(list(range(100)))
+    rows = rising.rows(20, 4)
+    assert len(rows) == 4
+    assert all(len(row) == 20 for row in rows)
+    # A rising series ends high and starts low: the first cell of the top row
+    # is blank, the last is not, and the bottom row is the other way round.
+    assert rows[0][0] == BrailleGraph.EMPTY and rows[0][-1] != BrailleGraph.EMPTY
+    assert rows[-1][0] != BrailleGraph.EMPTY and rows[-1][-1] == BrailleGraph.EMPTY
+
+    # Filled draws every dot below the line, so a full box is denser than a line.
+    line = BrailleGraph(list(range(100)))
+    area = BrailleGraph(list(range(100)), fill=True)
+    dots = lambda g: sum(  # noqa: E731
+        bin(ord(ch) - 0x2800).count("1") for row in g.rows(20, 4) for ch in row
+    )
+    assert dots(area) > dots(line) * 3
+
+    # The widget must actually paint. Textual's Widget.BLANK means "render
+    # nothing", so a constant of that name on the subclass silently blanks it
+    # before render() is ever called — which is how this shipped broken once.
+    assert BrailleGraph.BLANK is False
+
+    # Degenerate input must not raise or divide by zero.
+    assert BrailleGraph([]).rows(10, 2) == [BrailleGraph.EMPTY * 10] * 2
+    assert BrailleGraph([5.0, 5.0, 5.0]).rows(10, 2)
+    assert BrailleGraph([1.0]).rows(0, 0) == []
