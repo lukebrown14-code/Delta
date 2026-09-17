@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from textual.app import ComposeResult
+from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.widgets import Collapsible, Static
 
@@ -15,6 +16,7 @@ from rigger.tui.widgets import Pane, PaneStack, Pill, RiggerTable, StatusDot
 
 class Config(RiggerScreen):
     name = "config"
+    BINDINGS = [Binding("d", "configure_source", "Source")]
 
     CSS = """
     #cfg-scroll {
@@ -58,6 +60,14 @@ class Config(RiggerScreen):
                     )
                 with Pane(title="plugins", icon="", classes="-auto"):
                     yield Vertical(id="cfg-plugins")
+                with Pane(title="data sources", icon="", classes="-auto"):
+                    yield RiggerTable(id="cfg-sources")
+                    yield Static(
+                        "press d to configure the selected source",
+                        id="cfg-sources-hint",
+                        markup=False,
+                        classes="empty-hint",
+                    )
                 with Pane(title="targets", icon="", classes="-auto"):
                     yield RiggerTable(id="cfg-targets")
                     yield Static(
@@ -80,6 +90,7 @@ class Config(RiggerScreen):
         self.query_one("#costs-table", RiggerTable).add_columns("Task", "Model", "Calls", "USD")
         self.query_one("#cfg-routing", RiggerTable).add_columns("Task", "Model")
         self.query_one("#cfg-targets", RiggerTable).add_columns("Name", "Kind", "Market", "Tickers")
+        self.query_one("#cfg-sources", RiggerTable).add_columns("Source", "Quality", "Status")
         await self.refresh_view()
 
     async def refresh_view(self) -> None:
@@ -104,6 +115,7 @@ class Config(RiggerScreen):
         for row in cost_rows:
             costs.add_row(row.task, row.model, str(row.calls), f"${row.cost_usd:.4f}")
         await self._refresh_plugins()
+        self._refresh_sources()
         cfg = self.rig.cfg
         self.query_one("#cfg-provider", Pill).update(str(getattr(cfg, "llm_provider", "") or "—"))
         routing = self.query_one("#cfg-routing", RiggerTable)
@@ -146,3 +158,28 @@ class Config(RiggerScreen):
                     classes="check-row",
                 )
             )
+
+    def _refresh_sources(self) -> None:
+        table = self.query_one("#cfg-sources", RiggerTable)
+        table.clear()
+        sources = services.data_provider_status(self.rig)
+        for source in sources:
+            table.add_row(
+                source.label,
+                "primary" if source.primary_disclosure else "secondary",
+                "ready" if source.configured and source.enabled else "needs setup",
+                key=source.name,
+            )
+        self.query_one("#cfg-sources-hint", Static).display = bool(sources)
+
+    async def action_configure_source(self) -> None:
+        from rigger.tui.screens.source_setup import configure_source
+
+        table = self.query_one("#cfg-sources", RiggerTable)
+        if table.cursor_row is None or table.row_count == 0:
+            self.app.notify("select a data source first", severity="warning")
+            return
+        row_key = table.coordinate_to_cell_key((table.cursor_row, 0)).row_key
+        if row_key is None:
+            return
+        await configure_source(self.app, self.rig, str(row_key.value), self.refresh_view)

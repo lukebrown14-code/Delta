@@ -92,6 +92,11 @@ class Rigger:
         self.settings, self.cfg = config_mod.load_config()
         self.llm = self._build_llm()
 
+    def reload_data_sources(self) -> None:
+        """Re-read source configuration without disturbing the LLM client."""
+        self.settings, self.cfg = config_mod.load_config()
+        apply_config(self.plugins, self.cfg.plugins)
+
     def universe(self) -> list[Instrument]:
         merged: dict[str, Instrument] = {}
         market_defaults = {

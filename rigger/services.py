@@ -49,6 +49,94 @@ class ExtractResult:
     instruments: int
 
 
+@dataclass(frozen=True)
+class DataProviderStatus:
+    name: str
+    label: str
+    configured: bool
+    enabled: bool
+    primary_disclosure: bool
+    notice: str
+
+
+def data_provider_status(rig: Any) -> list[DataProviderStatus]:
+    """Configured data plugins that declare a safe setup contract."""
+    from rigger.core.config import read_env_value
+    from rigger.core.plugin import DataPlugin
+
+    result: list[DataProviderStatus] = []
+    for name, plugin in rig.plugins.items():
+        if not isinstance(plugin, DataPlugin) or plugin.provider_spec is None:
+            continue
+        spec = plugin.provider_spec
+        table = dict(getattr(rig.cfg, "plugins", {}).get(name, {}))
+        configured = all(
+            not item.required
+            or (
+                bool(read_env_value(item.env_var))
+                if item.secret and item.env_var
+                else bool(table.get(item.name))
+            )
+            for item in spec.fields
+        )
+        result.append(
+            DataProviderStatus(
+                name=name,
+                label=spec.label,
+                configured=configured,
+                enabled=bool(plugin.enabled),
+                primary_disclosure=spec.primary_disclosure,
+                notice=spec.notice,
+            )
+        )
+    return sorted(result, key=lambda item: item.label)
+
+
+def configure_data_provider(rig: Any, name: str, values: dict[str, str]) -> None:
+    """Persist adapter settings and activate the source.
+
+    A secret field must declare its fixed environment-variable name; it goes
+    to `.env`, never to `config.toml`.
+    """
+    import tomli_w
+
+    from rigger.core import config as config_mod
+    from rigger.core.plugin import DataPlugin
+
+    plugin = rig.plugins.get(name)
+    if not isinstance(plugin, DataPlugin) or plugin.provider_spec is None:
+        raise ValueError(f"unknown configurable data provider: {name}")
+    fields = {field.name: field for field in plugin.provider_spec.fields}
+    unknown = set(values) - set(fields)
+    if unknown:
+        raise ValueError(f"unknown settings for {name}: {', '.join(sorted(unknown))}")
+    for field_name, value in values.items():
+        field = fields[field_name]
+        if field.secret and value.strip() and not field.env_var:
+            raise ValueError(f"{field.label} has no declared environment variable")
+    raw = config_mod.load_toml()
+    table = raw.setdefault("plugins", {}).setdefault(name, {})
+    for field_name, value in values.items():
+        field = fields[field_name]
+        value = value.strip()
+        if field.secret:
+            if field.required and not value:
+                raise ValueError(f"{field.label} is required")
+            continue
+        if field.required and not value:
+            raise ValueError(f"{field.label} is required")
+        table[field_name] = value
+    table["enabled"] = True
+    Path("config.toml").write_text(tomli_w.dumps(raw), encoding="utf-8")
+    for field_name, value in values.items():
+        field = fields[field_name]
+        if field.secret and value.strip():
+            config_mod.set_env_value(field.env_var, value.strip())
+    reload_sources = getattr(rig, "reload_data_sources", None)
+    if callable(reload_sources):
+        reload_sources()
+
+
 async def ingest(
     rig: Any,
     *,
