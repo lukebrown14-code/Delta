@@ -475,3 +475,61 @@ def test_promote_claim_creates_a_thesis_with_its_evidence(tmp_engine, tmp_path, 
             screen.promote_claim("nonsense")
 
     asyncio.run(run())
+
+
+def test_price_runs_fold_and_the_preview_never_dumps_raw(tmp_engine, tmp_path, monkeypatch):
+    """A run of closes is one row until asked for, and a bar reads as fields.
+
+    The pool is mostly price bars — folding them is what keeps the filings and
+    news that justify opening this pane on screen.
+    """
+    from tests.conftest import seed_bars
+
+    rig = setup_rig(tmp_engine, tmp_path, monkeypatch)
+    seed_bars(tmp_engine, INST, n=40, price_fn=lambda i: 200.0 + i)
+
+    class TestApp(App):
+        def on_mount(self):
+            self.push_screen(Data(rig))
+
+    async def run():
+        async with TestApp().run_test(size=(120, 40)) as pilot:
+            screen = pilot.app.screen
+            table = screen.query_one("#evidence-table", RiggerTable)
+            bars = [item for item in screen.items.values() if item.kind == "bar"]
+            assert len(bars) >= 40
+
+            # Folded: each run of closes stands behind one group row, and the
+            # runs together account for every bar.
+            assert screen.groups
+            # Only a real run folds: a lone bar stays an ordinary row rather
+            # than becoming a group of one.
+            assert all(len(run) > 1 for run in screen.groups.values())
+            grouped = sum(len(run) for run in screen.groups.values())
+            assert grouped >= len(bars) - len(screen.groups)
+            key, run = next(iter(screen.groups.items()))
+            assert table.row_count < len(screen.items)
+            group_row = table.get_row(key)[0]
+            assert "▸ prices" in group_row.plain
+            assert f"· {len(run)}" in group_row.plain
+
+            # The group row previews the run rather than a source.
+            table.move_cursor(row=table.get_row_index(key))
+            await pilot.pause()
+            assert "price bars" in str(screen.query_one("#source-body", Static).render())
+
+            # space unfolds it, and unfolding shows every bar.
+            folded = table.row_count
+            await pilot.press("space")
+            assert table.row_count == folded + len(run)
+            assert "▾ prices" in table.get_row(key)[0].plain
+            await pilot.press("space")
+            assert table.row_count == folded
+
+            # A bar has no body: its fields render aligned, with no dict repr.
+            screen.preview(bars[0])
+            body = str(screen.query_one("#source-body", Static).render())
+            assert "close" in body and "{" not in body and "'" not in body
+            assert "the stored fields are the evidence" in body
+
+    asyncio.run(run())

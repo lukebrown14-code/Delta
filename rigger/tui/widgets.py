@@ -63,6 +63,25 @@ def sentiment_variant(score: float) -> str:
     return "warn"
 
 
+def token_color(app: Any, token: str, default: str = "") -> str:
+    """A theme token as a colour Rich can use, or ``default``.
+
+    ``theme_variables`` carries values Rich cannot parse — Textual writes
+    ``auto 87%`` for tokens whose colour depends on the background, and a
+    screen mounted under a bare ``App`` (as the tests do) gets Textual's own
+    defaults rather than Rigger's. Passing one of those into a ``Text`` style
+    raises ``MissingStyle`` at render time, which is a crash in a cell.
+    """
+    value = str(getattr(app, "theme_variables", {}).get(token, "") or "")
+    if not value:
+        return default
+    try:
+        RichColor.parse(value.split()[0])
+    except Exception:
+        return default
+    return value
+
+
 class Pane(Vertical):
     """Bordered panel: hotkey and title in the top border, key hints in the bottom.
 

@@ -61,6 +61,14 @@ RIGGER_DARK = Theme(
         "markdown-h2-color": "#5b8def",
         "markdown-h3-color": "#5b8def",
         "button-color-foreground": "#ffffff",
+        # Evidence kinds. Five hues that are not the semantic four, so a
+        # filing never reads as a warning; all >= 9.8:1 on black. The quietest
+        # is ``price``, which is the noise kind.
+        "kind-news": "#5ccfe6",
+        "kind-filing": "#ffd580",
+        "kind-event": "#d7a1ff",
+        "kind-fundamental": "#7ee0c0",
+        "kind-price": "#a8b2c8",
     },
 )
 
@@ -79,7 +87,16 @@ RIGGER_LIGHT = Theme(
     dark=False,
     # Rich Text cells read these tokens as colours; Textual's derived
     # "auto 60%" is not one, so pin them here as well.
-    variables={"text-muted": "#6b6e74", "text-disabled": "#9a9da3"},
+    variables={
+        "text-muted": "#6b6e74",
+        "text-disabled": "#9a9da3",
+        # The same five hues, darkened for a light ground.
+        "kind-news": "#0f6d80",
+        "kind-filing": "#8a5a00",
+        "kind-event": "#7d3fa8",
+        "kind-fundamental": "#0a6b52",
+        "kind-price": "#5a6474",
+    },
 )
 
 THEMES = (RIGGER_DARK, RIGGER_LIGHT)

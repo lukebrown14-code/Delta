@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from asyncio import CancelledError
+from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -42,7 +43,27 @@ from rigger.tui.widgets import (
     StatusDot,
     hint_markup,
     sentiment_variant,
+    token_color,
 )
+
+#: Evidence kind -> the theme token that colours its Type cell. The colour
+#: sits on that cell alone, never the whole row, so the block cursor stays
+#: readable over it.
+KIND_TOKENS = {
+    "news": "kind-news",
+    "filing": "kind-filing",
+    "event": "kind-event",
+    "fundamental": "kind-fundamental",
+    "bar": "kind-price",
+}
+
+#: What a kind is called on screen. The store calls a daily close a ``bar``;
+#: nobody reading a research pane does.
+KIND_LABELS = {"bar": "price", "fundamental": "fundam."}
+
+#: Keys of ``EvidenceItem.raw`` that are plumbing, not evidence: they go to a
+#: dim provenance footer instead of the value table.
+INTERNAL_RAW = ("id", "content_hash", "extracted_by", "prompt_version", "evidence_ids")
 
 #: Evidence kinds in the order ``k`` cycles them; label, filter value.
 KINDS: tuple[tuple[str, str], ...] = (
@@ -59,6 +80,8 @@ KINDS: tuple[tuple[str, str], ...] = (
 class CompanyView:
     search: str = ""
     kind: str = "all"
+    #: Price runs the reader has unfolded, by the key of their group row.
+    expanded: set[str] = field(default_factory=set)
     limit: int = 200
     selected: str = ""
     inspected: str = ""
@@ -110,6 +133,7 @@ class Research(RiggerScreen):
         ("slash", "focus_search", "Search sources"),
         ("k", "cycle_kind", "Kind"),
         ("l", "load_more", "Load more"),
+        ("space", "fold_prices", "Fold prices"),
         ("t", "focus_targets", "Targets"),
         ("o", "open_source", "Open source"),
         ("v", "view_in_report", "View in report"),
@@ -147,6 +171,7 @@ class Research(RiggerScreen):
         self.tab = self.initial_tab
         self.report: Report | None = None
         self.items: dict[str, EvidenceItem] = {}
+        self.groups: dict[str, list[EvidenceItem]] = {}
         self.ready = False
         self.detail_open = False
         self.more_available = False
@@ -184,7 +209,7 @@ class Research(RiggerScreen):
             with Pane(
                 title="sources",
                 key="e",
-                hints=hint_markup(("/", "search"), ("k", "kind"), ("l", "more"), ("enter", "open")),
+                hints=hint_markup(("/", "search"), ("k", "kind"), ("space", "fold"), ("l", "more")),
                 id="evidence-list-pane",
             ):
                 with Horizontal(id="evidence-filters"):
@@ -218,7 +243,12 @@ class Research(RiggerScreen):
         companies = self.query_one("#research-companies", RiggerTable)
         for label in ("Company", "Symbol", "Target", "Report", "Live"):
             companies.add_column(label, key=label.casefold())
-        self.query_one("#evidence-table", RiggerTable).add_columns("Source", "Type", "Date")
+        # Fixed widths for the two narrow columns: a long row in Source must
+        # never push Type (which carries the kind colour) or Date off the pane.
+        table = self.query_one("#evidence-table", RiggerTable)
+        table.add_column("Source", key="source")
+        table.add_column("Type", key="type", width=11)
+        table.add_column("Date", key="date", width=10)
         self.ready = True
         self.set_interval(2, self.render_status)
         await self.refresh_view()
@@ -305,10 +335,10 @@ class Research(RiggerScreen):
             except ValueError:
                 return Text(newest.stem)
         label, state = age_text(datetime.now(UTC) - as_of)
-        tokens = self.app.theme_variables
-        colour = {"ok": tokens["foreground"], "warn": tokens["text-warning"]}.get(
-            state, tokens["text-error"]
-        )
+        colour = {
+            "ok": token_color(self.app, "foreground"),
+            "warn": token_color(self.app, "text-warning"),
+        }.get(state, token_color(self.app, "text-error"))
         return Text.assemble(f"{newest.stem} ", (label, colour))
 
     async def load_company(self) -> None:
@@ -350,6 +380,8 @@ class Research(RiggerScreen):
             self.view.selected = value
             self.view.inspected = ""
             self.preview(self.items[value])
+        elif value in self.groups:
+            self._preview_row(value)
 
     def on_data_table_row_selected(self, event: RiggerTable.RowSelected) -> None:
         if event.data_table.id == "evidence-table":
@@ -377,6 +409,44 @@ class Research(RiggerScreen):
             self.view.inspected = ""
             self.load_evidence()
 
+    def _fold_prices(self, rows: list[EvidenceItem]) -> list[tuple[str, Any]]:
+        """Collapse each run of consecutive price bars into one group row.
+
+        A company's pool is mostly closes — 180 of 200 rows on a seeded
+        target — and one colour of them buries the filings and news that are
+        the reason to open this pane. A run becomes a single row that says how
+        many and over what dates; ``space`` unfolds it.
+        """
+        folded: list[tuple[str, Any]] = []
+        run: list[EvidenceItem] = []
+
+        def flush() -> None:
+            if not run:
+                return
+            if len(run) == 1:
+                folded.append(("item", run[0]))
+            else:
+                key = f"prices:{run[0].id}"
+                folded.append(("group", (key, list(run))))
+                if key in self.view.expanded:
+                    folded.extend(("child", item) for item in run)
+            run.clear()
+
+        for item in rows:
+            if item.kind == "bar":
+                run.append(item)
+                continue
+            flush()
+            folded.append(("item", item))
+        flush()
+        return folded
+
+    def _kind_cell(self, kind: str) -> Text:
+        return Text(
+            KIND_LABELS.get(kind, kind),
+            style=token_color(self.app, KIND_TOKENS.get(kind, "text-muted")),
+        )
+
     def load_evidence(self) -> None:
         rows = (
             evidence(
@@ -390,12 +460,36 @@ class Research(RiggerScreen):
             else []
         )
         self.more_available = len(rows) > self.view.limit
-        self.items = {item.id: item for item in rows[: self.view.limit]}
+        page = rows[: self.view.limit]
+        self.items = {item.id: item for item in page}
+        self.groups = {}
         table = self.query_one("#evidence-table", RiggerTable)
         with self.prevent(RiggerTable.RowHighlighted):
             table.clear()
-            for item in self.items.values():
-                table.add_row(item.title, item.kind, item.ts.strftime("%Y-%m-%d"), key=item.id)
+            for role, payload in self._fold_prices(page):
+                if role == "group":
+                    key, run = payload
+                    self.groups[key] = run
+                    arrow = "▾" if key in self.view.expanded else "▸"
+                    table.add_row(
+                        Text.assemble(
+                            (f"{arrow} prices", token_color(self.app, "kind-price")),
+                            (f" · {len(run)}", token_color(self.app, "text-muted")),
+                        ),
+                        self._kind_cell("bar"),
+                        Text(f"{run[0].ts:%Y-%m-%d}", style=token_color(self.app, "text-muted")),
+                        key=key,
+                    )
+                    continue
+                item = payload
+                title = item.title if role == "item" else f"   {item.title}"
+                table.add_row(
+                    Text(title, no_wrap=True, overflow="ellipsis"),
+                    self._kind_cell(item.kind),
+                    Text(item.ts.strftime("%Y-%m-%d"), style=token_color(self.app, "text-muted")),
+                    key=item.id,
+                )
+        self._fit_columns(table)
         self.query_one("#evidence-list-pane", Pane).set_badge(
             f"{len(self.items)}+" if self.more_available else str(len(self.items))
         )
@@ -409,9 +503,64 @@ class Research(RiggerScreen):
         selected = self.items.get(self.view.selected) or next(iter(self.items.values()), None)
         if selected:
             self.view.selected = selected.id
-            with self.prevent(RiggerTable.RowHighlighted):
-                table.move_cursor(row=list(self.items).index(selected.id))
-        self.preview(selected)
+        # Put the cursor on the row that actually exists: a selection inside a
+        # folded run has no row of its own, so the run's group row stands for
+        # it. Preview whatever the cursor lands on, or the pane would describe
+        # a different row from the one highlighted.
+        row_key = selected.id if selected else ""
+        if selected and row_key not in self.groups:
+            folded = next(
+                (key for key, run in self.groups.items() if any(i.id == selected.id for i in run)),
+                "",
+            )
+            row_key = folded or row_key
+        if row_key:
+            with suppress(Exception):
+                with self.prevent(RiggerTable.RowHighlighted):
+                    table.move_cursor(row=table.get_row_index(row_key))
+        self._preview_row(row_key)
+
+    def _preview_row(self, key: str) -> None:
+        """Preview a row by its key, whether it is a source or a folded run."""
+        if key in self.groups:
+            self.preview(None, group=self.groups[key])
+        else:
+            self.preview(self.items.get(key))
+
+    def _fit_columns(self, table: RiggerTable) -> None:
+        """Give Source whatever the two fixed columns leave.
+
+        DataTable sizes a column to its longest cell, so a wide Source row
+        pushes Type — which carries the kind colour — off the pane behind a
+        horizontal scrollbar instead of truncating.
+        """
+        available = self.query_one("#evidence-list-pane").content_size.width
+        if available <= 0:
+            return
+        source = table.columns.get("source")
+        if source is not None:
+            # 21 columns for Type and Date, plus the cell padding between them.
+            source.width = max(12, available - 21 - 6)
+            source.auto_width = False
+        table.refresh()
+
+    def on_resize(self) -> None:
+        if self.ready:
+            self.layout_views()
+            with suppress(Exception):
+                self._fit_columns(self.query_one("#evidence-table", RiggerTable))
+
+    def action_fold_prices(self) -> None:
+        """Unfold or refold the highlighted price run."""
+        table = self.query_one("#evidence-table", RiggerTable)
+        row = table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value
+        key = str(row or "")
+        if key not in self.groups:
+            return
+        self.view.expanded ^= {key}
+        self.load_evidence()
+        with suppress(Exception):
+            table.move_cursor(row=table.get_row_index(key))
 
     def cited_ids(self) -> set[str]:
         return (
@@ -425,7 +574,7 @@ class Research(RiggerScreen):
             else set()
         )
 
-    def preview(self, item: EvidenceItem | None) -> None:
+    def preview(self, item: EvidenceItem | None, group: list[EvidenceItem] | None = None) -> None:
         self.can_open = bool(item and item.url and item.url.startswith(("https://", "http://")))
         self.can_view = bool(item and item.id in self.cited_ids())
         hints = [("o", "open source")] if self.can_open else []
@@ -433,21 +582,93 @@ class Research(RiggerScreen):
             hints.append(("v", "view in report"))
         hints.append(("esc", "back"))
         self.query_one("#evidence-preview-pane", Pane).set_hints(hint_markup(*hints))
-        if item is None:
-            self.query_one("#source-body", Static).update("Select a source.")
+        body = self.query_one("#source-body", Static)
+        if group is not None:
+            first, last = group[-1], group[0]
+            body.update(
+                Text.assemble(
+                    (f"{len(group)} price bars\n", f"bold {token_color(self.app, 'foreground')}"),
+                    (
+                        f"{first.ts:%-d %b %Y} – {last.ts:%-d %b %Y} · {last.source}\n\n",
+                        token_color(self.app, "text-muted"),
+                    ),
+                    ("space", f"bold {token_color(self.app, 'text-primary')}"),
+                    (" unfolds them into the list.", token_color(self.app, "text-muted")),
+                )
+            )
             return
-        cited = ("Yes" if item.id in self.cited_ids() else "No") if self.report else "Unavailable"
-        content = (
-            item.body
-            or "\n".join(f"{key}: {value}" for key, value in item.raw.items())
-            or "No source text available."
+        if item is None:
+            body.update("Select a source.")
+            return
+        body.update(self._preview_text(item))
+
+    def _preview_text(self, item: EvidenceItem) -> Text:
+        """The source as something to read, never a dict dumped at the reader."""
+        muted, fg = token_color(self.app, "text-muted"), token_color(self.app, "foreground")
+        text = Text()
+        text.append(f"{item.title}\n", style=f"bold {fg}")
+        text.append(
+            item.kind, style=token_color(self.app, KIND_TOKENS.get(item.kind, "text-muted"))
         )
-        if not item.body and item.kind in ("news", "filing"):
-            content = "No source text available.\n\n" + content
-        self.query_one("#source-body", Static).update(
-            f"{item.title}\n\n{item.kind} · {item.source}\n{item.ts.isoformat()}\n\n{content}\n\n"
-            f"Cited in latest report: {cited}\n{item.url or ''}"
+        text.append(f" · {item.source} · {item.ts:%-d %b %Y %H:%M UTC}\n\n", style=muted)
+        if item.body:
+            text.append(f"{item.body}\n\n", style=fg)
+        else:
+            text.append(
+                "No source text for this kind — the stored fields are the evidence.\n\n",
+                style=muted,
+            )
+            text.append(self._raw_table(item.raw))
+        if self.report is not None:
+            cited = item.id in self.cited_ids()
+            text.append("cited in report  ", style=muted)
+            if cited:
+                text.append("yes", style=token_color(self.app, "text-success"))
+                text.append(" · v jumps to it\n", style=muted)
+            else:
+                text.append("no\n", style=muted)
+        if item.url:
+            text.append("url  ", style=muted)
+            text.append(f"{item.url[:80]}\n", style=fg)
+        provenance = " · ".join(
+            f"{key} {self._short(value)}" for key in INTERNAL_RAW if (value := item.raw.get(key))
         )
+        if provenance:
+            text.append(f"\n{provenance}", style=token_color(self.app, "text-disabled"))
+        return text
+
+    @staticmethod
+    def _short(value: Any) -> str:
+        """Hashes and id lists are provenance, not reading: cut them down."""
+        if isinstance(value, list | tuple):
+            return f"{len(value)} ids"
+        text = str(value)
+        return f"{text[:8]}…" if len(text) > 12 else text
+
+    def _raw_table(self, raw: dict[str, Any]) -> Text:
+        """``raw`` as aligned rows: labels left, numbers on a shared right edge."""
+        pairs = [(key, value) for key, value in raw.items() if key not in INTERNAL_RAW]
+        if not pairs:
+            return Text()
+        label_width = max(len(key) for key, _ in pairs)
+        rendered = [
+            (
+                key,
+                f"{value:,.2f}"
+                if isinstance(value, float)
+                else f"{value:,}"
+                if isinstance(value, int)
+                else self._short(value),
+            )
+            for key, value in pairs
+        ]
+        value_width = max(len(value) for _, value in rendered)
+        text = Text()
+        for key, value in rendered:
+            text.append(f"{key:<{label_width}}  ", style=token_color(self.app, "text-muted"))
+            text.append(f"{value:>{value_width}}\n", style=token_color(self.app, "foreground"))
+        text.append("\n")
+        return text
 
     def start_quotes(self, company: str) -> None:
         """Stream live quotes for every company in the list.
@@ -509,17 +730,16 @@ class Research(RiggerScreen):
         if not self.feed:
             return
         table = self.query_one("#research-companies", RiggerTable)
-        tokens = self.app.theme_variables
         for company, quote in self.feed.quotes.items():
             if company not in table.rows:
                 continue
             pct = quote.change_pct
             colour = (
-                tokens["text-success"]
+                token_color(self.app, "text-success")
                 if pct and pct > 0
-                else tokens["text-error"]
+                else token_color(self.app, "text-error")
                 if pct and pct < 0
-                else tokens["text-muted"]
+                else token_color(self.app, "text-muted")
             )
             cell = Text.assemble(
                 f"{quote.price:,.2f} {quote.currency} ",
@@ -707,10 +927,6 @@ class Research(RiggerScreen):
             ("#report-generate", "generate", "generate report"),
         ):
             self.query_one(chip, ActionChip).set_text(short if narrow else long)
-
-    def on_resize(self) -> None:
-        if self.ready:
-            self.layout_views()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         self.dispatch(event.button.id or "")
