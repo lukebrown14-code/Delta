@@ -158,7 +158,7 @@ def test_screen_renders_health_badge(tmp_engine):
             # The per-side breakdown is the evidence pane's legend now, so it
             # is asserted where it is shown rather than twice on one screen.
             counts = str(screen.query_one("#thesis-counts").render())
-            assert "4 supporting" in counts
-            assert "0 against" in counts
+            assert "+4 support" in counts
+            assert "−0 against" in counts
 
     asyncio.run(run())

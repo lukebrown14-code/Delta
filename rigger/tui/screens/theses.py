@@ -6,29 +6,23 @@ import asyncio
 from datetime import UTC, datetime
 from typing import Any
 
+from rich.errors import StyleSyntaxError
+from rich.style import Style
 from rich.text import Text
 from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, VerticalScroll
+from textual.markup import escape
 from textual.widget import Widget
 from textual.widgets import Button, Input, Select, Static
 
 from rigger import theses, thesis_summary
 from rigger.core.time import to_utc
 from rigger.evidence import EvidenceItem, cite, evidence_by_ids
-from rigger.thesis_health import HealthResult, badge_text, compute_health
+from rigger.thesis_health import HealthResult, compute_health
 from rigger.tui.shell import RiggerScreen, age_text
-from rigger.tui.widgets import (
-    Dialog,
-    KeyStrip,
-    Pane,
-    PaneRow,
-    Pill,
-    RiggerTable,
-    health_variant,
-    shown_bindings,
-)
+from rigger.tui.widgets import Dialog, Pane, PaneRow, RiggerTable, hint_markup
 
 #: Per side: ledger glyph, the theme token that colours it, and the word the
 #: preview uses. One table so the ledger, the legend and the preview cannot
@@ -39,24 +33,35 @@ SIDE_MARKS: dict[str, tuple[str, str, str]] = {
     "neutral": ("?", "text-warning", "Neutral"),
 }
 
-#: Claims-list status marker: glyph plus the theme token that colours it.
-#: Shape carries the meaning as well as colour, so the three states stay
-#: distinguishable without relying on hue. Every glyph is verified single-cell
-#: so the claim text stays aligned down the column.
-STATUS_MARKS: dict[str, tuple[str, str]] = {
-    "active": ("●", "text-success"),
-    "paused": ("◐", "text-warning"),
-    "concluded": ("○", "foreground"),
+#: Claims-list health marker: glyph plus the theme token that colours it.
+#: Shape carries the state as well as hue, so the two reds (weakening,
+#: challenged) and the two hollow rings (emerging, idle) still read apart in
+#: a monochrome terminal. Keys are ``thesis_health.HealthState`` values plus
+#: ``concluded``, which is a thesis *status*: a concluded claim shows dimmed
+#: whatever its evidence says. Every glyph is single-cell so the claim text
+#: stays aligned down the column.
+HEALTH_MARKS: dict[str, tuple[str, str]] = {
+    "building": ("▲", "text-success"),
+    "weakening": ("▼", "text-error"),
+    "mixed": ("◆", "foreground"),
+    "challenged": ("✕", "text-error"),
+    "emerging": ("○", "text-muted"),
+    "idle": ("◌", "text-warning"),
+    "concluded": ("○", "text-muted"),
 }
 
-#: Pane widths. The claims and detail panes share the space left over in 2:3,
-#: so a wide terminal lengthens the claim column instead of padding the prose;
-#: the ledger is a fixed-shape table, so it keeps a fixed width. ``Theses.CSS``
-#: repeats these numbers because Textual CSS cannot read them —
-#: ``test_pane_width_constants_match_the_stylesheet`` holds the two in step.
-CLAIMS_MIN_WIDTH = 24
-EVIDENCE_WIDTH = 42
-DETAIL_MIN_WIDTH = 34
+#: Pane widths at the wide layout: the claims list and the ledger are
+#: fixed-shape tables, so they keep fixed widths and the thesis pane takes
+#: the rest (42 columns at 120). ``Theses.CSS`` repeats these numbers because
+#: Textual CSS cannot read them — ``test_pane_width_constants_match_the_stylesheet``
+#: holds the two in step.
+CLAIMS_WIDTH = 36
+EVIDENCE_WIDTH = 40
+
+#: Narrow-list columns (health word, tilt, queue).
+LIST_HEALTH_WIDTH = 10
+LIST_TILT_WIDTH = 5
+LIST_QUEUE_WIDTH = 9
 
 
 def _csv(value: str) -> tuple[str, ...]:
@@ -198,72 +203,80 @@ class ThesisForm(Dialog):
         self.dismiss(fields)
 
 
+class HealthPane(Pane):
+    """A ``Pane`` whose badge can carry a theme colour.
+
+    ``Pane`` paints every badge in ``$text-muted``; the thesis pane's badge
+    is the health glyph and state, which reads in its own colour everywhere
+    else on the screen. Local until ``Pane.set_badge`` grows a token argument.
+    """
+
+    def __init__(self, *children, **kwargs) -> None:
+        self._badge_token = "text-muted"
+        super().__init__(*children, **kwargs)
+
+    def set_badge(self, text: str, token: str = "text-muted") -> None:  # type: ignore[override]
+        self._badge_token = token
+        super().set_badge(text)
+
+    def _paint(self) -> None:
+        super()._paint()
+        if self._badge:
+            parts = []
+            if self._key:
+                parts.append(f"[bold]{escape(self._key)}[/bold]")
+            if self._title:
+                parts.append(escape(self._title))
+            parts.append(f"[${self._badge_token}]· {escape(self._badge)}[/]")
+            self.border_title = " ".join(parts)
+
+
 class Theses(RiggerScreen):
     name = "theses"
     BINDINGS = [
         Binding("n", "new_thesis", "new", tooltip="Create a thesis"),
         Binding("d", "edit_thesis", "edit", tooltip="Edit the claim and its framing"),
         Binding("f", "find_evidence", "find", tooltip="Ask the model for candidate evidence"),
-        Binding("s", "summarise", "summary", tooltip="Summarise the accepted evidence"),
-        Binding("e", "toggle_evidence", "evidence", tooltip="Move between detail and evidence"),
+        Binding("s", "summarise", "summarise", tooltip="Summarise the accepted evidence"),
+        Binding("t", "focus_thesis", "thesis", tooltip="Open the thesis"),
+        Binding("e", "focus_evidence", "evidence", tooltip="Open the evidence ledger"),
         Binding("a", "accept", "accept", tooltip="Accept the highlighted candidate"),
         Binding("x", "reject", "reject", tooltip="Drop the highlighted candidate"),
         Binding("u", "unaccept", "un-accept", tooltip="Return accepted evidence to pending"),
         Binding("slash", "filter_claims", "filter", tooltip="Filter the claims list"),
         Binding("escape", "back", "back", show=False),
-        # Offered in the evidence pane only when a note is taller than its box,
-        # so they stay out of the key strip.
+        # Offered in the ledger's hints only when a note is taller than its box.
         Binding("shift+down", "scroll_note_down", "scroll note", show=False),
         Binding("shift+up", "scroll_note_up", "scroll note", show=False),
     ]
 
-    #: The width at which all three panes fit side by side: both side panes,
-    #: the detail pane's minimum, plus the screen padding and pane gutters.
-    #: Derived rather than guessed so it cannot drift from the CSS, and it
-    #: stays well above ``PaneRow.NARROW_WIDTH`` — the screen therefore never
-    #: claims three columns while the row beneath it is stacking them.
-    WIDE_WIDTH = CLAIMS_MIN_WIDTH + EVIDENCE_WIDTH + DETAIL_MIN_WIDTH + 4
+    #: Below this terminal width the three panes no longer fit side by side:
+    #: the claims list takes the whole width and the thesis and the ledger
+    #: open full-width on demand (enter / e), esc stepping back.
+    NARROW_WIDTH = 100
 
     CSS = """
     #thesis-split { height: 1fr; }
-    #thesis-claims { width: 2fr; min-width: 24; }
-    #thesis-filter { height: 3; }
+    #thesis-claims { width: 36; }
+    #thesis-detail-pane { width: 1fr; min-width: 0; }
+    #thesis-evidence-pane { width: 40; }
+    Theses.-narrow #thesis-claims,
+    Theses.-narrow #thesis-detail-pane,
+    Theses.-narrow #thesis-evidence-pane { width: 1fr; }
+    #thesis-filter { height: 1; margin: 0; }
     #thesis-table { height: 1fr; }
-    #thesis-detail-pane { width: 3fr; min-width: 34; }
-    #thesis-evidence-pane { width: 42; }
-    #thesis-detail { height: 1fr; }
+    #thesis-list-foot { height: 1; padding: 0 1; color: $text-muted; }
+    #thesis-detail { height: 1fr; padding: 0 1; }
+    #thesis-detail > Static { height: auto; }
+    #thesis-counts { height: 1; padding: 0 1; }
     #thesis-ledger { height: 1fr; min-height: 4; }
-    /* The same separator PaneStack draws between stacked panes; the children
-       here are a table and a scroller rather than Panes, so the rule is
-       applied directly instead. */
-    #thesis-preview { height: 8; border-top: solid $panel; padding-top: 1; }
+    /* The read-out sits under a rule in the same pane: the ledger's note
+       column is a title, this is where the note and citation are read. */
+    #thesis-preview { height: 8; border-top: solid $border-blurred; padding: 0 1; }
     #thesis-preview-text { height: auto; }
-    #thesis-counts { height: auto; color: $text-muted; margin-bottom: 1; }
-    .thesis-claim { text-style: bold; margin-bottom: 1; height: auto; }
-    .thesis-meta { height: auto; margin-bottom: 1; }
-    .thesis-meta Pill { width: auto; height: 1; margin-right: 1; }
-    #thesis-health { width: auto; height: 1; }
-    .thesis-health-row { height: auto; margin-bottom: 1; }
-    .thesis-drivers { height: auto; color: $text-muted; margin-bottom: 1; }
-    .thesis-field { height: auto; }
-    /* Section rules are structure, not action: $primary stays reserved for
-       keys and the primary action, as on the research screen. */
-    .thesis-section { color: $text-muted; text-style: bold; margin-top: 1; height: 1; }
-    #thesis-actions { height: 1; color: $text-muted; }
-    /* Compact shows the claims list beside ONE content pane, so the list
-       takes a fixed slice and whichever pane is showing takes the rest —
-       sharing by fr would leave the content pane narrower than the list. */
-    Theses.-compact #thesis-claims { width: 26; }
-    Theses.-compact #thesis-detail-pane { width: 1fr; }
-    Theses.-compact #thesis-evidence-pane { width: 1fr; }
-    /* Last word on width: when the row stacks there are no columns to share,
-       so every pane takes the full width. rigger.tcss carries this rule too,
-       with !important, and that copy wins wherever the app stylesheet is
-       loaded. This one is for the standalone case — the panel screens are
-       built to mount under any App, and under a bare one the widths above
-       would otherwise multiply out past the row. It sits after the compact
-       rules because it is of equal specificity and has to be the last word. */
-    #thesis-split.-narrow > Pane { width: 1fr; min-width: 0; }
+    .thesis-claim { text-style: bold; }
+    .thesis-gap { height: 1; }
+    .thesis-line { height: 1; text-wrap: nowrap; text-overflow: ellipsis; }
     """
 
     def __init__(self, rig: Any) -> None:
@@ -271,27 +284,32 @@ class Theses(RiggerScreen):
         self.selected: str | None = None
         self.candidates: list[theses.ThesisEvidence] = []
         self._summary: thesis_summary.ThesisSummary | None = None
-        self._wide = True
-        self._show_evidence = False
+        self._result: HealthResult | None = None
+        self._narrow = False
+        #: Narrow only: which pane fills the screen. Wide shows all three.
+        self._view = "claims"
         self._rows: dict[str, theses.ThesisEvidence] = {}
         self._cites: dict[str, str] = {}
         self._ages: dict[str, str] = {}
         self._links: list[theses.ThesisEvidence] = []
         self._theses: list[theses.Thesis] = []
+        self._health: dict[str, HealthResult | None] = {}
+        self._pending: dict[str, int] = {}
         self._overflowing = False
         self._summarising = False
         self._finding = False
-        self._widths: tuple[int, int] | None = None
+        self._widths: tuple[bool, int, int] | None = None
         self._render_lock = asyncio.Lock()
 
     def compose_content(self) -> ComposeResult:
         with PaneRow(id="thesis-split"):
             with Pane(title="theses", id="thesis-claims"):
-                yield Input(placeholder="filter claims", id="thesis-filter")
+                yield Input(placeholder="/ filter claims", id="thesis-filter")
                 yield RiggerTable(id="thesis-table")
-            with Pane(title="thesis / detail", id="thesis-detail-pane"):
+                yield Static("", id="thesis-list-foot", markup=False)
+            with HealthPane(title="thesis", key="t", id="thesis-detail-pane"):
                 yield VerticalScroll(id="thesis-detail")
-            with Pane(title="evidence", id="thesis-evidence-pane"):
+            with Pane(title="evidence", key="e", id="thesis-evidence-pane"):
                 yield Static("", id="thesis-counts", markup=False)
                 yield RiggerTable(id="thesis-ledger")
                 # Not focusable: tab means "next pane", and a read-only note
@@ -302,31 +320,46 @@ class Theses(RiggerScreen):
                         id="thesis-preview-text",
                         markup=False,
                     )
-                yield Static("", id="thesis-actions", markup=False)
-        yield KeyStrip(self.BINDINGS, id="thesis-keys")
 
     async def on_mount(self) -> None:
         self.query_one("#thesis-filter").display = False
-        self._layout()
+        self.layout_views()
         self._sync_columns()
         await self.refresh_view()
         self.query_one("#thesis-table").focus()
 
     def on_resize(self) -> None:
         if self.is_mounted:
-            self._layout()
+            self.layout_views()
 
     # ---------- layout ----------
 
-    def _layout(self) -> None:
-        self._wide = self.size.width >= self.WIDE_WIDTH
-        self.set_class(not self._wide, "-compact")
-        self.query_one("#thesis-detail-pane").display = self._wide or not self._show_evidence
-        self.query_one("#thesis-evidence-pane").display = self._wide or self._show_evidence
+    def layout_views(self) -> None:
+        """Wide: three panes. Narrow: one pane at a time, ``self._view``."""
+        self._narrow = self.size.width < self.NARROW_WIDTH
+        self.set_class(self._narrow, "-narrow")
+        for pane, view in (
+            ("#thesis-claims", "claims"),
+            ("#thesis-detail-pane", "detail"),
+            ("#thesis-evidence-pane", "evidence"),
+        ):
+            self.query_one(pane).display = not self._narrow or self._view == view
+        self._paint_hints()
         # Showing a pane does not resize the screen, so the column widths are
         # re-measured once the new layout has been applied rather than now,
         # when the pane that was just revealed still reports its old size.
         self.call_after_refresh(self._resync_columns)
+
+    def _paint_hints(self) -> None:
+        """Every pane's bottom border: fixed keys plus what narrow adds."""
+        claims = [("n", "new"), ("d", "edit"), ("/", "filter")]
+        detail = [("s", "summarise"), ("d", "edit"), ("↑↓", "scroll")]
+        if self._narrow:
+            claims += [("enter", "thesis"), ("e", "evidence")]
+            detail.append(("esc", "back"))
+        self.query_one("#thesis-claims", Pane).set_hints(hint_markup(*claims))
+        self.query_one("#thesis-detail-pane", Pane).set_hints(hint_markup(*detail))
+        self._render_actions(self._current_row())
 
     def _resync_columns(self) -> None:
         if self._sync_columns():
@@ -337,24 +370,35 @@ class Theses(RiggerScreen):
         """Size the flexible columns to the panes; rebuild them only on change.
 
         A ``DataTable`` column cannot be ``1fr``, so the widths are recomputed
-        and the columns re-added when the terminal is resized. Returns whether
-        anything changed, so the caller knows to repopulate the rows.
+        and the columns re-added when the terminal is resized. The narrow
+        list adds health, tilt and queue columns the 36-column list has no
+        room for. Returns whether anything changed, so the caller knows to
+        repopulate the rows.
         """
-        claim_width = max(12, self.query_one("#thesis-claims").size.width - 6)
-        evidence_pane = self.query_one("#thesis-evidence-pane")
-        evidence_width = evidence_pane.size.width or EVIDENCE_WIDTH
-        note_width = max(12, evidence_width - 18)
-        if self._widths == (claim_width, note_width):
+        # A DataTable pads every cell by one column each side.
+        claims_inner = self.query_one("#thesis-claims").size.width or CLAIMS_WIDTH - 2
+        claim_width = claims_inner - 2
+        if self._narrow:
+            claim_width -= (LIST_HEALTH_WIDTH + 2) + (LIST_TILT_WIDTH + 2) + (LIST_QUEUE_WIDTH + 2)
+        claim_width = max(12, claim_width)
+        evidence_inner = self.query_one("#thesis-evidence-pane").size.width or EVIDENCE_WIDTH - 2
+        note_width = max(12, evidence_inner - (1 + 2) - (1 + 2) - (4 + 2) - 2)
+        if self._widths == (self._narrow, claim_width, note_width):
             return False
-        self._widths = (claim_width, note_width)
+        self._widths = (self._narrow, claim_width, note_width)
         table = self.query_one("#thesis-table", RiggerTable)
         table.clear(columns=True)
-        table.add_column("Claim", width=claim_width)
+        table.show_header = self._narrow
+        table.add_column("  Claim", width=claim_width)
+        if self._narrow:
+            table.add_column("Health", width=LIST_HEALTH_WIDTH)
+            table.add_column(Text("Tilt", justify="right"), width=LIST_TILT_WIDTH)
+            table.add_column(Text("Queue", justify="right"), width=LIST_QUEUE_WIDTH)
         ledger = self.query_one("#thesis-ledger", RiggerTable)
         ledger.clear(columns=True)
         ledger.add_column("", width=1)
         ledger.add_column("±", width=1)
-        ledger.add_column("age", width=5)
+        ledger.add_column("age", width=4)
         ledger.add_column("note", width=note_width)
         return True
 
@@ -367,25 +411,53 @@ class Theses(RiggerScreen):
         """
         return self.app.theme_variables
 
+    def _style(self, token: str) -> str:
+        """A theme token as a Rich style, for ``Text`` spans.
+
+        Under the Rigger theme every ``text-*`` token is a hex colour. Under a
+        bare App (the tests) ``text-muted`` is Textual's ``auto 60%`` blend,
+        which Rich cannot parse, so it degrades to ``dim`` rather than crash.
+        """
+        value = self._colours().get(token, "")
+        try:
+            Style.parse(value)
+        except StyleSyntaxError:
+            return "dim" if token == "text-muted" else ""
+        return value
+
     # ---------- navigation ----------
 
-    def action_toggle_evidence(self) -> None:
-        """Compact: swap the visible pane. Wide: alternate focus between them."""
-        if self._wide:
-            on_ledger = self.query_one("#thesis-ledger").has_focus
-            self.query_one("#thesis-detail" if on_ledger else "#thesis-ledger").focus()
-            return
-        self._show_evidence = not self._show_evidence
-        self._layout()
-        self.query_one("#thesis-ledger" if self._show_evidence else "#thesis-detail").focus()
+    def _open(self, view: str) -> None:
+        """Narrow: fill the screen with ``view``. Wide: just focus its pane."""
+        if self._narrow and self._view != view:
+            self._view = view
+            self.layout_views()
+        target = {
+            "claims": "#thesis-table",
+            "detail": "#thesis-detail",
+            "evidence": "#thesis-ledger",
+        }
+        self.query_one(target[view]).focus()
+
+    def action_focus_thesis(self) -> None:
+        self._open("detail")
+
+    def action_focus_evidence(self) -> None:
+        self._open("evidence")
 
     def action_filter_claims(self) -> None:
+        if self._narrow and self._view != "claims":
+            self._open("claims")
         self.query_one("#thesis-filter").display = True
         self.query_one("#thesis-filter").focus()
 
     def on_input_changed(self, event: Input.Changed) -> None:
         if event.input.id == "thesis-filter":
             self.refresh_list()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        if event.input.id == "thesis-filter":
+            self.query_one("#thesis-table").focus()
 
     def action_back(self) -> None:
         """Back out one step: a running job, then the filter, then the pane, then focus."""
@@ -394,7 +466,8 @@ class Theses(RiggerScreen):
             self.workers.cancel_group(self, "thesis-discover")
             self._summarising = False
             self._finding = False
-            self.query_one("#thesis-detail-pane", Pane).set_badge("")
+            self._paint_health_badge()
+            self._paint_ledger_badge()
             self.notify("cancelled")
             return
         filter_input = self.query_one("#thesis-filter", Input)
@@ -403,8 +476,10 @@ class Theses(RiggerScreen):
             filter_input.display = False
             self.query_one("#thesis-table").focus()
             return
-        if not self._wide and self._show_evidence:
-            self.action_toggle_evidence()
+        if self._narrow and self._view != "claims":
+            # Whether the ledger was reached from the thesis or from the
+            # list, back is the list: it is where the next thesis is.
+            self._open("claims")
             return
         self.query_one("#thesis-table").focus()
 
@@ -415,14 +490,45 @@ class Theses(RiggerScreen):
         await self.render_detail()
 
     def reload_theses(self) -> None:
-        """Re-read the claims from the database, then redraw the list.
+        """Re-read the claims and their health, then redraw the list.
 
         The only place that queries: filtering and resizing redraw from this
         cache, so neither a keystroke in the filter box nor a column of a drag
         resize costs a query.
         """
         self._theses = theses.list_theses(self.rig.engine)
+        now = datetime.now(UTC)
+        self._health = {}
+        self._pending = {}
+        for thesis in self._theses:
+            links = theses.evidence_for(self.rig.engine, thesis.id, accepted_only=False)
+            self._pending[thesis.id] = sum(1 for link in links if not link.accepted)
+            accepted_links = [link for link in links if link.accepted]
+            if not accepted_links:
+                self._health[thesis.id] = None
+                continue
+            by_id = {
+                item.id: item
+                for item in evidence_by_ids(
+                    self.rig.engine, [link.evidence_id for link in accepted_links]
+                )
+            }
+            accepted = [
+                (by_id[link.evidence_id], link.side)
+                for link in accepted_links
+                if link.evidence_id in by_id
+            ]
+            self._health[thesis.id] = (
+                compute_health(thesis, accepted, now=now) if accepted else None
+            )
         self.refresh_list()
+
+    def _health_state(self, thesis: theses.Thesis) -> str:
+        """The list glyph's key: a status when it overrides, else the health state."""
+        if thesis.status == "concluded":
+            return "concluded"
+        result = self._health.get(thesis.id)
+        return result.state if result else "emerging"
 
     def refresh_list(self) -> None:
         table = self.query_one("#thesis-table", RiggerTable)
@@ -433,26 +539,63 @@ class Theses(RiggerScreen):
             else self._theses
         )
         index = {row.id: position for position, row in enumerate(rows)}
-        colours = self._colours()
+        muted = self._style("text-muted")
         with self.prevent(RiggerTable.RowHighlighted, RiggerTable.RowSelected):
             table.clear()
             if self.selected not in index:
                 self.selected = rows[0].id if rows else None
                 self._summary = None
             for row in rows:
-                glyph, token = STATUS_MARKS.get(row.status, ("○", "foreground"))
-                cell = Text(glyph, style=colours.get(token, "white"))
-                cell.append(" " + row.claim, style="")
-                table.add_row(cell, key=row.id)
+                state = self._health_state(row)
+                glyph, token = HEALTH_MARKS[state]
+                dim = state == "concluded"
+                # Built span by span: a style on the constructor would be the
+                # base style and colour the claim text too.
+                cell = Text(no_wrap=True, overflow="ellipsis")
+                cell.append(glyph, style=self._style(token))
+                cell.append(" " + row.claim, style=muted if dim else "")
+                if not self._narrow:
+                    table.add_row(cell, key=row.id)
+                    continue
+                result = self._health.get(row.id)
+                tilt = f"{result.tilt:+.2f}" if result and state != "emerging" else ""
+                tilt_token = "text-muted"
+                if not dim and state not in ("idle", "emerging"):
+                    tilt_token = "text-success" if result and result.tilt >= 0 else "text-error"
+                pending = self._pending.get(row.id, 0)
+                table.add_row(
+                    cell,
+                    Text(state, style=muted),
+                    Text(tilt, style=self._style(tilt_token), justify="right"),
+                    Text(
+                        f"{pending} pending" if pending else "",
+                        style=self._style("text-warning"),
+                        justify="right",
+                    ),
+                    key=row.id,
+                )
             if self.selected is not None:
                 table.move_cursor(row=index[self.selected])
-        self.query_one("#thesis-claims", Pane).set_badge(str(len(rows)))
+        pending_total = sum(self._pending.get(row.id, 0) for row in rows)
+        badge = str(len(rows))
+        if pending_total:
+            badge += f" · {pending_total} pending"
+        self.query_one("#thesis-claims", Pane).set_badge(badge)
+        concluded = sum(1 for row in rows if row.status == "concluded")
+        foot = f"{len(rows)} thes{'is' if len(rows) == 1 else 'es'}"
+        if concluded:
+            foot += f" · {concluded} concluded"
+        if query:
+            foot += f" · of {len(self._theses)}"
+        self.query_one("#thesis-list-foot", Static).update(foot if rows else "")
 
     async def on_data_table_row_selected(self, event: RiggerTable.RowSelected) -> None:
         if event.data_table.id == "thesis-table" and event.row_key.value is not None:
             self.selected = str(event.row_key.value)
             self._summary = None
             await self.render_detail()
+            if self._narrow:
+                self._open("detail")
 
     def on_data_table_row_highlighted(self, event: RiggerTable.RowHighlighted) -> None:
         if event.data_table.id == "thesis-ledger":
@@ -509,7 +652,7 @@ class Theses(RiggerScreen):
             return
         selected = self.selected
         self._summarising = True
-        self.query_one("#thesis-detail-pane", Pane).set_badge("summarising…")
+        self.query_one("#thesis-detail-pane", HealthPane).set_badge("summarising…")
         try:
             summary = await thesis_summary.summarize_thesis(self.rig, selected)
             if self.selected == selected:
@@ -519,7 +662,7 @@ class Theses(RiggerScreen):
             self.notify(f"summary failed: {exc}", severity="error")
         finally:
             self._summarising = False
-            self.query_one("#thesis-detail-pane", Pane).set_badge("")
+            self._paint_health_badge()
 
     @work(exclusive=True, group="thesis-discover")
     async def action_find_evidence(self) -> None:
@@ -539,18 +682,20 @@ class Theses(RiggerScreen):
             found = await theses.propose_evidence(self.rig, selected)
             if self.selected != selected:
                 return
+            self.reload_theses()
             await self.render_detail()
             self.notify(
                 f"{len(found)} candidate{'' if len(found) == 1 else 's'} to review"
                 if found
                 else "no new candidates found"
             )
-            if found and (self._wide or self._show_evidence):
+            if found and (not self._narrow or self._view == "evidence"):
                 self.query_one("#thesis-ledger").focus()
         except Exception as exc:
             self.notify(f"discovery failed: {exc}", severity="error")
         finally:
             self._finding = False
+            self._paint_ledger_badge()
 
     # ---------- evidence review ----------
 
@@ -564,17 +709,27 @@ class Theses(RiggerScreen):
 
     def _preview(self) -> None:
         row = self._current_row()
-        text = "No evidence yet. Press f to find candidate evidence."
+        text: Text | str = "No evidence yet. Press f to find candidate evidence."
         if row:
-            side = SIDE_MARKS[row.side][2]
-            text = f"{side} · {'accepted' if row.accepted else 'pending review'}\n\n{row.note}\n\n{self._cites.get(row.evidence_id, row.evidence_id)}"
+            _glyph, token, side = SIDE_MARKS[row.side]
+            text = Text()
+            if row.accepted:
+                text.append("accepted", style=f"bold {self._style('text-success')}")
+            else:
+                text.append("pending review", style=f"bold {self._style('text-warning')}")
+            text.append(" · ", style=self._style("text-muted"))
+            text.append(side, style=self._style(token))
+            text.append(f"\n{row.note}\n\n")
+            text.append(
+                self._cites.get(row.evidence_id, row.evidence_id), style=self._style("text-muted")
+            )
         self.query_one("#thesis-preview-text", Static).update(text)
         # A new note starts at its top, not wherever the last one was left.
         self.query_one("#thesis-preview", VerticalScroll).scroll_home(animate=False)
         self._render_actions(row)
         # Whether the note overflows is only known once the new text has been
-        # laid out, so the line is checked again then — and re-rendered only if
-        # that answer changed, rather than unconditionally drawing it twice.
+        # laid out, so the hints are checked again then — and re-painted only
+        # if that answer changed, rather than unconditionally drawing twice.
         self.call_after_refresh(self._rerender_actions_if_overflow_changed, row)
 
     def _rerender_actions_if_overflow_changed(self, row: theses.ThesisEvidence | None) -> None:
@@ -582,43 +737,31 @@ class Theses(RiggerScreen):
             self._render_actions(row)
 
     def _render_actions(self, row: theses.ThesisEvidence | None) -> None:
-        """Say what applies to the highlighted row, rather than greying buttons.
+        """The ledger's hints say what applies to the highlighted row.
 
-        Buttons here were key hints in costume: they duplicated the keys and
-        the screen's key strip, and each one was a tab stop, so tab stopped
-        meaning "next pane". A line of text carries the same information and
-        changes with the row, which disabled buttons only hinted at by fading.
+        Contextual rather than greyed: ``a``/``x`` on a pending row, ``u`` on
+        an accepted one (accepted evidence is removed in two steps — un-accept,
+        then reject — so one stray keystroke cannot delete curated evidence),
+        ``f`` always, and the note-scroll keys only when the note overflows.
         """
         if row is None:
             wanted: tuple[str, ...] = ()
         elif row.accepted:
-            # Accepted evidence is removed in two steps — un-accept, then
-            # reject — so one stray keystroke cannot delete curated evidence.
             wanted = ("u",)
         else:
             wanted = ("a", "x")
-        # Labels come from BINDINGS rather than a second list, for the same
-        # reason the key strip is generated: two spellings of one key drift.
-        by_key = {b.key: b for b in shown_bindings(self.BINDINGS)}
-        keys = [(key, by_key[key].description) for key in wanted if key in by_key]
-        # Only the keys are styled here; the muted body colour comes from the
-        # widget's own CSS, because $text-muted resolves to a blend token that
-        # is not a colour Rich can parse.
-        key_style = f"bold {self._colours().get('text-primary', 'white')}"
-        line = Text(no_wrap=True, overflow="ellipsis")
-        if not keys:
-            line.append("nothing to review")
-        for index, (key, label) in enumerate(keys):
-            if index:
-                line.append("   ")
-            line.append(key, style=key_style)
-            line.append(f" {label}")
+        # Labels come from BINDINGS rather than a second list: two spellings
+        # of one key drift.
+        by_key = {b.key: b for b in self.BINDINGS if isinstance(b, Binding)}
+        pairs = [(key, by_key[key].description) for key in wanted if key in by_key]
+        pairs.append(("f", by_key["f"].description))
         self._overflowing = self._preview_overflows()
         if self._overflowing:
-            line.append("   ")
-            line.append("⇧↑↓", style=key_style)
-            line.append(" scroll note")
-        self.query_one("#thesis-actions", Static).update(line)
+            # One glyph for both arrows: four hints have to fit a 40-column border.
+            pairs.append(("⇧↕", "note"))
+        if self._narrow:
+            pairs.append(("esc", "back"))
+        self.query_one("#thesis-evidence-pane", Pane).set_hints(hint_markup(*pairs))
 
     def _preview_overflows(self) -> bool:
         """Whether the note is taller than the box, so scrolling is worth offering."""
@@ -650,7 +793,7 @@ class Theses(RiggerScreen):
 
     async def _resolve(self, action: str) -> None:
         # Hidden evidence must not be modified by a stray shortcut.
-        if not self._wide and not self._show_evidence:
+        if self._narrow and self._view != "evidence":
             self.notify("press e to review evidence first")
             return
         row = self._current_row()
@@ -671,6 +814,9 @@ class Theses(RiggerScreen):
             else:
                 theses.remove_evidence(self.rig.engine, row.thesis_id, row.evidence_id)
         self._summary = None
+        # Health and the queue count changed for this claim, so the list
+        # redraws too — its glyph and badge come from the same read.
+        self.reload_theses()
         await self.render_detail()
         self.query_one("#thesis-ledger").focus()
 
@@ -689,13 +835,15 @@ class Theses(RiggerScreen):
         self._ages = {}
         self._links = []
         self.candidates = []
+        self._result = None
         if self.selected is None:
             await detail.mount(
                 Static("No theses yet.\n\nPress n to create a claim to research.", markup=False)
             )
             self._fill_ledger()
             self.query_one("#thesis-counts", Static).update("No evidence")
-            self.query_one("#thesis-evidence-pane", Pane).set_badge("0")
+            self._paint_health_badge()
+            self._paint_ledger_badge()
             return
         thesis = theses.get_thesis(self.rig.engine, self.selected)
         self._links = theses.evidence_for(self.rig.engine, thesis.id, accepted_only=False)
@@ -710,18 +858,45 @@ class Theses(RiggerScreen):
             (by_id[r.evidence_id], r.side) for r in links if r.accepted and r.evidence_id in by_id
         ]
         result = compute_health(thesis, accepted, now=now) if accepted else None
-        await detail.mount(*self._detail_widgets(thesis, result, by_id, now))
+        self._result = result
+        await detail.mount(*self._detail_widgets(thesis, result, by_id, now, len(accepted)))
         self._fill_ledger()
         # The per-side counts are read off the health result rather than
-        # regrouped here, so the legend and the pill cannot disagree.
+        # regrouped here, so the legend and the badge cannot disagree.
         counts = (result.support, result.against, result.neutral) if result else (0, 0, 0)
-        self.query_one("#thesis-counts", Static).update(
-            f"+ {counts[0]} supporting  − {counts[1]} against  ? {counts[2]} neutral"
-        )
-        self.query_one("#thesis-evidence-pane", Pane).set_badge(
-            f"{len(self.candidates)} pending / {len(links)} total"
-        )
+        legend = Text(no_wrap=True, overflow="ellipsis")
+        for (glyph, token, _side), count, word in zip(
+            SIDE_MARKS.values(), counts, ("support", "against", "neutral"), strict=True
+        ):
+            if legend:
+                legend.append("  ")
+            legend.append(f"{glyph}{count}", style=self._style(token))
+            legend.append(f" {word}", style=self._style("text-muted"))
+        self.query_one("#thesis-counts", Static).update(legend)
+        self._paint_health_badge()
+        self._paint_ledger_badge()
         detail.scroll_to(y=offset, animate=False)
+
+    def _paint_health_badge(self) -> None:
+        pane = self.query_one("#thesis-detail-pane", HealthPane)
+        if self.selected is None:
+            pane.set_badge("")
+            return
+        state = self._result.state if self._result else "emerging"
+        glyph, token = HEALTH_MARKS[state]
+        pane.set_badge(f"{glyph} {state}", token)
+
+    def _paint_ledger_badge(self) -> None:
+        pane = self.query_one("#thesis-evidence-pane", Pane)
+        if self.selected is None:
+            pane.set_badge("0")
+            return
+        pane.set_badge(f"{len(self.candidates)} pending / {len(self._links)}")
+
+    def _field(self, label: str, value: str) -> Static:
+        text = Text(f"{label:<10}", style=self._style("text-muted"))
+        text.append(value)
+        return Static(text)
 
     def _detail_widgets(
         self,
@@ -729,77 +904,85 @@ class Theses(RiggerScreen):
         result: HealthResult | None,
         by_id: dict[str, EvidenceItem],
         now: datetime,
+        accepted_count: int,
     ) -> list[Widget]:
-        pill = (
-            Pill(badge_text(result), variant=health_variant(result.state), id="thesis-health")
-            if result is not None
-            else Pill("emerging · no accepted evidence", variant="dim", id="thesis-health")
+        muted = self._style("text-muted")
+        state = result.state if result else "emerging"
+        glyph, token = HEALTH_MARKS[state]
+        health = Text(f" {glyph} {state}", style=f"bold {self._style(token)}")
+        if result is not None:
+            health.append(f" · tilt {result.tilt:+.2f}", style=self._style(token))
+        health.append(" ")
+        health.stylize(f"on {self._style('panel')}")
+        health.append(
+            f"  {accepted_count} accepted" if accepted_count else "  no accepted evidence",
+            style=muted,
         )
+        meta = f"{thesis.status}"
+        if thesis.time_horizon:
+            meta += f" · horizon {thesis.time_horizon}"
+        meta += f" · opened {thesis.created_at:%d %b %Y}"
         widgets: list[Widget] = [
             Static(thesis.claim, classes="thesis-claim", markup=False),
-            Horizontal(
-                Pill(thesis.status),
-                Pill(thesis.time_horizon or "no horizon", variant="dim"),
-                Pill(f"opened {thesis.created_at:%d %b %Y}", variant="dim"),
-                classes="thesis-meta",
-            ),
-            Horizontal(pill, classes="thesis-health-row"),
+            Static("", classes="thesis-gap"),
+            Static(health, id="thesis-health"),
+            Static(Text(meta, style=muted)),
         ]
         if result is not None and result.drivers:
-            widgets.append(
-                Static("moved by  " + ", ".join(result.drivers), classes="thesis-drivers")
-            )
-        widgets.append(
-            Static(
-                f"{'targets':10}" + (", ".join(thesis.targets) or "all evidence"),
-                classes="thesis-field",
-                markup=False,
-            )
-        )
+            names = [
+                getattr(by_id.get(driver), "title", None) or driver for driver in result.drivers
+            ]
+            shown = ", ".join(names[:2])
+            if len(names) > 2:
+                shown += f", +{len(names) - 2} more"
+            # ``Static`` re-wraps a Rich ``Text`` regardless of ``no_wrap``,
+            # so the one-line rule lives in CSS (``.thesis-line``).
+            moved = Text("moved by  ", style=muted)
+            moved.append(shown)
+            widgets.append(Static(moved, classes="thesis-line"))
+        widgets.append(Static("", classes="thesis-gap"))
+        widgets.append(self._field("targets", ", ".join(thesis.targets) or "all evidence"))
         for label, value in (
             ("scope", thesis.scope),
             ("holds if", "; ".join(thesis.assumptions)),
             ("breaks if", "; ".join(thesis.falsifiers)),
         ):
             if value:
-                widgets.append(Static(f"{label:10}{value}", classes="thesis-field", markup=False))
+                widgets.append(self._field(label, value))
         if not thesis.falsifiers:
             widgets.append(
                 Static(
-                    "breaks if  not set — press d to say what would disprove this",
-                    classes="muted",
-                    markup=False,
+                    Text(
+                        "breaks if  not set — press d to say what would disprove this",
+                        style=muted,
+                    )
                 )
             )
-        widgets.append(Static("SUMMARY", classes="thesis-section"))
+        widgets.append(Static("", classes="thesis-gap"))
         widgets.extend(self._summary_widgets(by_id, now))
-        widgets.append(Static(f"REVIEW QUEUE  {len(self.candidates):02}", classes="thesis-section"))
-        widgets.append(
-            Static(
-                "Press e to review pending evidence."
-                if self.candidates
-                else "All caught up. Press f to find more.",
-                markup=False,
-            )
-        )
         return widgets
 
     def _fill_ledger(self) -> None:
         """Repopulate the ledger from the current links, keeping the cursor row."""
         table = self.query_one("#thesis-ledger", RiggerTable)
         cursor = table.cursor_row
-        colours = self._colours()
+        muted = self._style("text-muted")
         with self.prevent(RiggerTable.RowHighlighted, RiggerTable.RowSelected):
             table.clear()
             self._rows = {}
             for row in sorted(self._links, key=lambda r: r.accepted):
                 self._rows[row.evidence_id] = row
                 symbol, token, _label = SIDE_MARKS[row.side]
+                note = Text(row.note or row.evidence_id, no_wrap=True, overflow="ellipsis")
+                if not row.accepted:
+                    note.stylize("bold")
                 table.add_row(
-                    "✓" if row.accepted else "",
-                    Text(symbol, style=colours.get(token, "white")),
-                    self._ages.get(row.evidence_id, "—"),
-                    row.note or row.evidence_id,
+                    Text("✓", style=self._style("text-success"))
+                    if row.accepted
+                    else Text("•", style=self._style("text-warning")),
+                    Text(symbol, style=self._style(token)),
+                    Text(self._ages.get(row.evidence_id, "—"), style=muted),
+                    note,
                     key=row.evidence_id,
                 )
             if table.row_count:
@@ -807,9 +990,14 @@ class Theses(RiggerScreen):
         self._preview()
 
     def _summary_widgets(self, by_id: dict[str, EvidenceItem], now: datetime) -> list[Widget]:
+        muted = self._style("text-muted")
+        heading = Text("SUMMARY", style=f"bold {muted}")
         if self._summary is None:
             return [
-                Static("No summary yet. Press s to summarise accepted evidence.", classes="muted")
+                Static(heading),
+                Static(
+                    Text("No summary yet. Press s to summarise accepted evidence.", style=muted)
+                ),
             ]
         as_of = to_utc(self._summary.as_of)
         newest = max(
@@ -818,23 +1006,28 @@ class Theses(RiggerScreen):
         )
         stale = newest is not None and newest > as_of
         age = age_text(now - as_of)[0]
+        heading.append(
+            f"          {age} old · {len(self._summary.citations)} citations", style=muted
+        )
         widgets: list[Widget] = [
-            Static(
-                f"{age} old · {len(self._summary.citations)} citations"
-                + (" · evidence has moved since" if stale else ""),
-                classes="muted",
-                markup=False,
-            ),
-            Static(self._summary.summary, markup=False, classes="muted" if stale else ""),
+            Static(heading),
+            Static(Text(self._summary.summary, style=muted if stale else "")),
         ]
-        if self._summary.strongest_support:
-            widgets.append(
-                Static(f"support: {self._summary.strongest_support}", markup=False, classes="muted")
-            )
-        if self._summary.strongest_counter:
-            widgets.append(
-                Static(f"counter: {self._summary.strongest_counter}", markup=False, classes="muted")
-            )
-        for unknown in self._summary.unknowns:
-            widgets.append(Static(f"unknown: {unknown}", markup=False, classes="muted"))
+        strongest = [
+            ("support", "text-success", self._summary.strongest_support),
+            ("counter", "text-error", self._summary.strongest_counter),
+        ] + [("unknown", "text-warning", unknown) for unknown in self._summary.unknowns]
+        rows = [(label, token, value) for label, token, value in strongest if value]
+        if rows:
+            widgets.append(Static("", classes="thesis-gap"))
+        for label, token, value in rows:
+            line = Text(f"{label:<8} ", style=self._style(token))
+            line.append(value, style=muted)
+            widgets.append(Static(line))
+        if stale:
+            widgets.append(Static("", classes="thesis-gap"))
+            note = Text("summary is older than the newest accepted evidence — ", style=muted)
+            note.append("s", style=f"bold {self._style('text-primary')}")
+            note.append(" to refresh it", style=muted)
+            widgets.append(Static(note))
         return widgets
