@@ -316,7 +316,7 @@ class Theses(RiggerScreen):
                 # viewer is not a pane. It scrolls from the ledger instead.
                 with VerticalScroll(id="thesis-preview", can_focus=False):
                     yield Static(
-                        "Select evidence to read its note and citation.",
+                        "select evidence to read its note and citation",
                         id="thesis-preview-text",
                         markup=False,
                     )
@@ -587,7 +587,10 @@ class Theses(RiggerScreen):
             foot += f" · {concluded} concluded"
         if query:
             foot += f" · of {len(self._theses)}"
-        self.query_one("#thesis-list-foot", Static).update(foot if rows else "")
+        # Narrow shows the list alone, so the thesis pane's empty line is not
+        # on screen: the foot says it instead, rather than nothing at all.
+        empty = "no theses yet — press n to create one" if self._narrow else ""
+        self.query_one("#thesis-list-foot", Static).update(foot if rows else empty)
 
     async def on_data_table_row_selected(self, event: RiggerTable.RowSelected) -> None:
         if event.data_table.id == "thesis-table" and event.row_key.value is not None:
@@ -659,7 +662,7 @@ class Theses(RiggerScreen):
                 self._summary = summary
                 await self.render_detail()
         except Exception as exc:
-            self.notify(f"summary failed: {exc}", severity="error")
+            self.notify(f"summary failed: {exc} — press s to try again", severity="error")
         finally:
             self._summarising = False
             self._paint_health_badge()
@@ -687,12 +690,12 @@ class Theses(RiggerScreen):
             self.notify(
                 f"{len(found)} candidate{'' if len(found) == 1 else 's'} to review"
                 if found
-                else "no new candidates found"
+                else "no new evidence found"
             )
             if found and (not self._narrow or self._view == "evidence"):
                 self.query_one("#thesis-ledger").focus()
         except Exception as exc:
-            self.notify(f"discovery failed: {exc}", severity="error")
+            self.notify(f"could not find evidence: {exc} — press f to try again", severity="error")
         finally:
             self._finding = False
             self._paint_ledger_badge()
@@ -709,7 +712,7 @@ class Theses(RiggerScreen):
 
     def _preview(self) -> None:
         row = self._current_row()
-        text: Text | str = "No evidence yet. Press f to find candidate evidence."
+        text: Text | str = "no evidence yet — press f to find candidates"
         if row:
             _glyph, token, side = SIDE_MARKS[row.side]
             text = Text()
@@ -837,11 +840,9 @@ class Theses(RiggerScreen):
         self.candidates = []
         self._result = None
         if self.selected is None:
-            await detail.mount(
-                Static("No theses yet.\n\nPress n to create a claim to research.", markup=False)
-            )
+            await detail.mount(Static("no theses yet — press n to create one", markup=False))
             self._fill_ledger()
-            self.query_one("#thesis-counts", Static).update("No evidence")
+            self.query_one("#thesis-counts", Static).update("no evidence yet")
             self._paint_health_badge()
             self._paint_ledger_badge()
             return
@@ -953,7 +954,7 @@ class Theses(RiggerScreen):
             widgets.append(
                 Static(
                     Text(
-                        "breaks if  not set — press d to say what would disprove this",
+                        "breaks if  not set — press d to say what would disprove it",
                         style=muted,
                     )
                 )
@@ -991,13 +992,11 @@ class Theses(RiggerScreen):
 
     def _summary_widgets(self, by_id: dict[str, EvidenceItem], now: datetime) -> list[Widget]:
         muted = self._style("text-muted")
-        heading = Text("SUMMARY", style=f"bold {muted}")
+        heading = Text("summary", style=f"bold {muted}")
         if self._summary is None:
             return [
                 Static(heading),
-                Static(
-                    Text("No summary yet. Press s to summarise accepted evidence.", style=muted)
-                ),
+                Static(Text("no summary yet — press s to summarise", style=muted)),
             ]
         as_of = to_utc(self._summary.as_of)
         newest = max(
@@ -1026,7 +1025,7 @@ class Theses(RiggerScreen):
             widgets.append(Static(line))
         if stale:
             widgets.append(Static("", classes="thesis-gap"))
-            note = Text("summary is older than the newest accepted evidence — ", style=muted)
+            note = Text("summary is older than the newest accepted evidence — press ", style=muted)
             note.append("s", style=f"bold {self._style('text-primary')}")
             note.append(" to refresh it", style=muted)
             widgets.append(Static(note))

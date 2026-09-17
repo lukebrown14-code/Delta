@@ -1,4 +1,4 @@
-"""Company research: browse stored sources and follow report citations."""
+"""Company research: browse the evidence pool and follow report citations."""
 
 from __future__ import annotations
 
@@ -125,19 +125,19 @@ class Research(RiggerScreen):
     #: ``RiggerApp`` (1-5, c, h, m, p, g, q) so the global navigation still
     #: works from this screen — notably ``g``, which is the Go picker.
     BINDINGS = [
-        ("e", "show_evidence", "Evidence"),
-        ("r", "show_report", "Report"),
-        ("n", "generate_report", "Generate report"),
-        ("u", "update_evidence", "Refresh company"),
-        ("U", "gather_all", "Gather all targets"),
-        ("slash", "focus_search", "Search sources"),
-        ("k", "cycle_kind", "Kind"),
-        ("l", "load_more", "Load more"),
-        ("space", "fold_prices", "Fold prices"),
-        ("t", "focus_targets", "Targets"),
-        ("o", "open_source", "Open source"),
-        ("v", "view_in_report", "View in report"),
-        ("escape", "back", "Back"),
+        ("e", "show_evidence", "evidence"),
+        ("r", "show_report", "report"),
+        ("n", "generate_report", "generate report"),
+        ("u", "update_evidence", "gather company"),
+        ("U", "gather_all", "gather all targets"),
+        ("slash", "focus_search", "search evidence"),
+        ("k", "cycle_kind", "kind"),
+        ("l", "load_more", "load more"),
+        ("space", "fold_prices", "fold prices"),
+        ("t", "focus_targets", "company"),
+        ("o", "open_source", "open link"),
+        ("v", "view_in_report", "view in report"),
+        ("escape", "back", "back"),
     ]
     CSS = """
     /* Header: one company list, seven rows including its frame (four rows
@@ -202,28 +202,28 @@ class Research(RiggerScreen):
             yield ActionChip("e", "evidence", id="tab-evidence")
             yield ActionChip("r", "report", id="tab-report")
             yield Static("", classes="chip-gap")
-            yield ActionChip("u", "refresh company", id="research-refresh")
+            yield ActionChip("u", "gather company", id="research-refresh")
             yield ActionChip("U", "gather all", id="research-gather")
             yield ActionChip("n", "generate report", id="report-generate", classes="-primary")
         with PaneRow(id="evidence-layout"):
             with Pane(
-                title="sources",
+                title="evidence",
                 key="e",
                 hints=hint_markup(("/", "search"), ("k", "kind"), ("space", "fold"), ("l", "more")),
                 id="evidence-list-pane",
             ):
                 with Horizontal(id="evidence-filters"):
-                    yield Input(placeholder="/ search sources", id="evidence-search")
+                    yield Input(placeholder="/ search evidence", id="evidence-search")
                     yield Static("", id="evidence-kind")
                 yield RiggerTable(id="evidence-table")
                 yield Static("", id="evidence-count", markup=False)
             with Pane(
                 title="preview",
-                hints=hint_markup(("o", "open source"), ("v", "view in report"), ("esc", "back")),
+                hints=hint_markup(("o", "open link"), ("v", "view in report"), ("esc", "back")),
                 id="evidence-preview-pane",
             ):
                 with VerticalScroll(id="evidence-preview"):
-                    yield Static("Select a source.", id="source-body", markup=False)
+                    yield Static("select evidence to preview it", id="source-body", markup=False)
         with Pane(
             title="report",
             key="r",
@@ -243,10 +243,10 @@ class Research(RiggerScreen):
         companies = self.query_one("#research-companies", RiggerTable)
         for label in ("Company", "Symbol", "Target", "Report", "Live"):
             companies.add_column(label, key=label.casefold())
-        # Fixed widths for the two narrow columns: a long row in Source must
+        # Fixed widths for the two narrow columns: a long row in Evidence must
         # never push Type (which carries the kind colour) or Date off the pane.
         table = self.query_one("#evidence-table", RiggerTable)
-        table.add_column("Source", key="source")
+        table.add_column("Evidence", key="source")
         table.add_column("Type", key="type", width=11)
         table.add_column("Date", key="date", width=10)
         self.ready = True
@@ -493,13 +493,7 @@ class Research(RiggerScreen):
         self.query_one("#evidence-list-pane", Pane).set_badge(
             f"{len(self.items)}+" if self.more_available else str(len(self.items))
         )
-        self.query_one("#evidence-count", Static).update(
-            "No matching evidence — U gathers all targets, k changes kind."
-            if not rows
-            else f"{len(self.items)} shown · l loads more"
-            if self.more_available
-            else f"{len(self.items)} shown"
-        )
+        self.query_one("#evidence-count", Static).update(self._count_line(bool(rows)))
         selected = self.items.get(self.view.selected) or next(iter(self.items.values()), None)
         if selected:
             self.view.selected = selected.id
@@ -520,6 +514,20 @@ class Research(RiggerScreen):
                     table.move_cursor(row=table.get_row_index(row_key))
         self._preview_row(row_key)
 
+    def _count_line(self, any_rows: bool) -> str:
+        """What the list has, or why it is empty — the pane is 46 columns wide."""
+        if any_rows:
+            return (
+                f"{len(self.items)} shown — press l to load more"
+                if self.more_available
+                else f"{len(self.items)} shown"
+            )
+        if not self.state.company:
+            return "no companies yet — press 1 to add a target"
+        if self.view.search or self.view.kind != "all":
+            return "nothing matches this filter"
+        return "no evidence yet — press U to gather"
+
     def _preview_row(self, key: str) -> None:
         """Preview a row by its key, whether it is a source or a folded run."""
         if key in self.groups:
@@ -528,9 +536,9 @@ class Research(RiggerScreen):
             self.preview(self.items.get(key))
 
     def _fit_columns(self, table: RiggerTable) -> None:
-        """Give Source whatever the two fixed columns leave.
+        """Give the Evidence column whatever the two fixed columns leave.
 
-        DataTable sizes a column to its longest cell, so a wide Source row
+        DataTable sizes a column to its longest cell, so a wide evidence row
         pushes Type — which carries the kind colour — off the pane behind a
         horizontal scrollbar instead of truncating.
         """
@@ -577,7 +585,7 @@ class Research(RiggerScreen):
     def preview(self, item: EvidenceItem | None, group: list[EvidenceItem] | None = None) -> None:
         self.can_open = bool(item and item.url and item.url.startswith(("https://", "http://")))
         self.can_view = bool(item and item.id in self.cited_ids())
-        hints = [("o", "open source")] if self.can_open else []
+        hints = [("o", "open link")] if self.can_open else []
         if self.can_view:
             hints.append(("v", "view in report"))
         hints.append(("esc", "back"))
@@ -592,18 +600,19 @@ class Research(RiggerScreen):
                         f"{first.ts:%-d %b %Y} – {last.ts:%-d %b %Y} · {last.source}\n\n",
                         token_color(self.app, "text-muted"),
                     ),
+                    ("press ", token_color(self.app, "text-muted")),
                     ("space", f"bold {token_color(self.app, 'text-primary')}"),
-                    (" unfolds them into the list.", token_color(self.app, "text-muted")),
+                    (" to unfold them into the list", token_color(self.app, "text-muted")),
                 )
             )
             return
         if item is None:
-            body.update("Select a source.")
+            body.update("select evidence to preview it")
             return
         body.update(self._preview_text(item))
 
     def _preview_text(self, item: EvidenceItem) -> Text:
-        """The source as something to read, never a dict dumped at the reader."""
+        """The evidence as something to read, never a dict dumped at the reader."""
         muted, fg = token_color(self.app, "text-muted"), token_color(self.app, "foreground")
         text = Text()
         text.append(f"{item.title}\n", style=f"bold {fg}")
@@ -615,7 +624,7 @@ class Research(RiggerScreen):
             text.append(f"{item.body}\n\n", style=fg)
         else:
             text.append(
-                "No source text for this kind — the stored fields are the evidence.\n\n",
+                "no text for this kind — the stored fields are the evidence\n\n",
                 style=muted,
             )
             text.append(self._raw_table(item.raw))
@@ -624,7 +633,7 @@ class Research(RiggerScreen):
             text.append("cited in report  ", style=muted)
             if cited:
                 text.append("yes", style=token_color(self.app, "text-success"))
-                text.append(" · v jumps to it\n", style=muted)
+                text.append(" · press v to jump to it\n", style=muted)
             else:
                 text.append("no\n", style=muted)
         if item.url:
@@ -850,7 +859,7 @@ class Research(RiggerScreen):
         paths = sorted((self.reports_dir() / company).glob("*.md")) if company else []
         self.report = None
         legacy = ""
-        body = "# Research\n\nNo report yet. Select a company and Generate report."
+        body = "# Report\n\nNo report yet — press n to generate one."
         path = paths[-1] if paths else None
         if path is not None:
             body = path.read_text(encoding="utf-8")
@@ -863,7 +872,7 @@ class Research(RiggerScreen):
                 self.report = report
                 body = render_markdown(report, interactive=True)
             else:
-                legacy = "Regenerate this report to enable interactive citations."
+                legacy = "press n to regenerate this report and enable interactive citations"
         self.query_one("#report-legacy", Static).update(legacy)
         await self.query_one("#report-view", MarkdownViewer).document.update(body)
         badge = "no report"
@@ -879,7 +888,7 @@ class Research(RiggerScreen):
         self.status_text = " · ".join(
             part
             for part in (
-                company or "Select a company",
+                company or "select a company",
                 f"report: {path.stem} ({age_label})" if path else "report: none",
                 self.last_close(company),
             )
@@ -903,7 +912,8 @@ class Research(RiggerScreen):
         else:
             self.preview(None)
             self.query_one("#source-body", Static).update(
-                f"Source no longer available.\n\n{self.report.citations.get(evidence_id, evidence_id) if self.report else evidence_id}"
+                "this evidence is no longer available\n\n"
+                f"{self.report.citations.get(evidence_id, evidence_id) if self.report else evidence_id}"
             )
         self.query_one("#evidence-preview", VerticalScroll).scroll_home(animate=False)
 
@@ -922,7 +932,7 @@ class Research(RiggerScreen):
         # Narrow: two company rows instead of four, and shorter chip labels.
         self.query_one("#research-header", Pane).set_class(narrow, "-narrow")
         for chip, short, long in (
-            ("#research-refresh", "refresh", "refresh company"),
+            ("#research-refresh", "gather", "gather company"),
             ("#research-gather", "gather all", "gather all"),
             ("#report-generate", "generate", "generate report"),
         ):
@@ -1000,7 +1010,7 @@ class Research(RiggerScreen):
                 self.app.open_url(item.url)
         elif action == "report-generate":
             if not self.state.company:
-                self.notify("Select a company first", severity="error")
+                self.notify("select a company first", severity="error")
             elif not self.state.busy:
                 self.generate(self.state.company)
         elif action == "research-gather" and not self.state.busy:
@@ -1009,7 +1019,7 @@ class Research(RiggerScreen):
             if self.state.company:
                 self.gather_all(company=self.state.company)
             else:
-                self.notify("Select a company first", severity="error")
+                self.notify("select a company first", severity="error")
 
     def restore_report_position(self) -> None:
         # Show arrives after layout gives the previously hidden document a region.
@@ -1057,7 +1067,7 @@ class Research(RiggerScreen):
         field, _, index = ref.partition(":")
         claims = getattr(self.report, field, []) if self.report else []
         if not index.isdigit() or int(index) >= len(claims):
-            self.notify("That claim is no longer in the report", severity="error")
+            self.notify("that claim is no longer in the report", severity="error")
             return
         claim = claims[int(index)]
 
@@ -1083,7 +1093,9 @@ class Research(RiggerScreen):
                     f"from report {self.state.company}",
                     accepted=True,
                 )
-            self.notify(f"Thesis created with {len(claim.evidence_ids)} linked sources", timeout=6)
+            self.notify(
+                f"thesis created with {len(claim.evidence_ids)} linked evidence items", timeout=6
+            )
 
         self.app.push_screen(ThesisForm(claim=claim.text, targets=self.state.company), created)
 
@@ -1127,7 +1139,7 @@ class Research(RiggerScreen):
             self.notify(str(exc.args[0]), severity="error")
         else:
             self.notify(
-                f"{prefix}: {type(exc).__name__}. See the log for detail.", severity="error"
+                f"{prefix}: {type(exc).__name__} — see the log for detail", severity="error"
             )
         self.log.error(f"{prefix}: {exc!r}")
 
@@ -1135,40 +1147,40 @@ class Research(RiggerScreen):
     async def generate(self, company: str) -> None:
         self._job = get_current_worker()
         model = model_for(self.rig.cfg, "report")
-        self.set_busy(True, f"Generating report for {company} via {model} — esc to cancel…")
+        self.set_busy(True, f"generating report for {company} via {model} — esc to cancel…")
         before = self.spend()
         try:
             report = await build_report(self.rig, company)
             write_report(report, self.reports_dir())
             cost = self.spend() - before
-            self.notify(f"Report written for {company} (${cost:.2f})")
+            self.notify(f"report written for {company} (${cost:.2f})")
             for screen in self.research_screens():
                 if screen._rendered_company == company and self.state.company == company:
                     await screen.show_latest(company)
                     screen.preview(screen.items.get(screen.view.selected))
         except CancelledError:
-            self.notify(f"Report for {company} cancelled")
+            self.notify(f"report for {company} cancelled")
             raise
         except Exception as exc:
-            self.report_failure("Report failed", exc)
+            self.report_failure("report failed", exc)
         finally:
             self._job = None
             self.set_busy(False)
 
     @work
     async def gather_all(self, company: str = "") -> None:
-        """Refresh evidence for one company, or every configured target.
+        """Gather evidence for one company, or for every target.
 
         The scoped form exists because wanting fresher data on the company you
         are reading should not cost a full-universe ingest and extraction.
         """
         self._job = get_current_worker()
         instruments = [i for i in self.rig.universe() if i.id == company] if company else []
-        scope = company or "all configured targets"
-        self.set_busy(True, f"Gathering {scope} — esc to cancel…")
+        scope = company or "all targets"
+        self.set_busy(True, f"gathering evidence for {scope} — esc to cancel…")
         try:
             await services.ingest(self.rig, tickers=instruments[0].symbol if instruments else None)
-            self.set_busy(True, f"Extracting events for {scope} — esc to cancel…")
+            self.set_busy(True, f"extracting events for {scope} — esc to cancel…")
             await services.extract(self.rig, instruments=instruments or None)
             for screen in self.research_screens():
                 if screen._rendered_company == self.state.company:
@@ -1177,12 +1189,12 @@ class Research(RiggerScreen):
                     await screen.show_latest(self.state.company)
                     screen.load_evidence()
                     screen.call_after_refresh(screen.restore_position)
-            self.notify(f"Evidence refreshed for {scope}")
+            self.notify(f"evidence gathered for {scope}")
         except CancelledError:
-            self.notify("Gather cancelled")
+            self.notify("gather cancelled")
             raise
         except Exception as exc:
-            self.report_failure("Gather failed", exc)
+            self.report_failure("gather failed", exc)
         finally:
             self._job = None
             self.set_busy(False)
