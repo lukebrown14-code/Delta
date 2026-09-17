@@ -13,14 +13,12 @@ from typing import Any
 from urllib.parse import urlparse
 
 from textual.app import ComposeResult
-from textual.binding import Binding
-from textual.containers import Horizontal, Vertical
-from textual.screen import ModalScreen
-from textual.widgets import Button, DataTable, Input, Static
+from textual.widgets import DataTable, Input, Static
 
 from rigger.core.config import read_env_value, set_env_value
 from rigger.llm.catalog import set_llm_custom, set_llm_provider
 from rigger.llm.providers import PROVIDERS, ProviderSpec, verify_key
+from rigger.tui.widgets import Dialog, RiggerTable, hint_markup
 
 
 def provider_key_status(rig: Any) -> dict[str, bool]:
@@ -66,14 +64,21 @@ def _normalize_base_url(base_url: str) -> str:
     return base_url
 
 
-class ProviderPicker(ModalScreen[str | None]):
+class ProviderPicker(Dialog):
     """Browse providers with their key status; enter connects, escape cancels."""
 
-    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+    dialog_title = "select a provider"
+    dialog_hint = hint_markup(("enter", "connect"), ("esc", "cancel"))
 
     DEFAULT_CSS = """
-    ProviderPicker > Vertical {
-        width: 64;
+    ProviderPicker #pp-table {
+        height: auto;
+        max-height: 12;
+    }
+    ProviderPicker #pp-status {
+        height: 1;
+        margin: 1 0 0 0;
+        color: $text-muted;
     }
     """
 
@@ -82,16 +87,12 @@ class ProviderPicker(ModalScreen[str | None]):
         self.on_select = on_select
         self.key_status = key_status
 
-    def compose(self) -> ComposeResult:
-        yield Vertical(
-            Static("[bold]Select a provider[/bold]", id="pp-title"),
-            DataTable(id="pp-table"),
-            Static("keys are stored in .env · enter to connect", id="pp-status", markup=False),
-        )
+    def compose_dialog(self) -> ComposeResult:
+        yield RiggerTable(id="pp-table")
+        yield Static("keys are stored in .env, never in config.toml", id="pp-status", markup=False)
 
     def on_mount(self) -> None:
         table = self.query_one("#pp-table", DataTable)
-        table.cursor_type = "row"
         table.add_columns("Provider", "Endpoint", "Key")
         for name, spec in PROVIDERS.items():
             host = urlparse(spec.base_url).hostname or (
@@ -107,22 +108,21 @@ class ProviderPicker(ModalScreen[str | None]):
         if event.row_key.value:
             self._select(event.row_key.value)
 
-    def action_cancel(self) -> None:
-        self.dismiss(None)
-
     def _select(self, name: str) -> None:
         self.dismiss(None)
         self.on_select(name)
 
 
-class KeyEntryModal(ModalScreen[str | None]):
+class KeyEntryModal(Dialog):
     """Masked input for one provider's API key; dismisses with the key or None."""
 
-    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+    dialog_hint = hint_markup(("enter", "save"), ("esc", "skip"))
 
     DEFAULT_CSS = """
-    KeyEntryModal > Vertical {
-        width: 64;
+    KeyEntryModal #ke-hint {
+        height: auto;
+        margin: 0 0 1 0;
+        color: $text-muted;
     }
     """
 
@@ -130,32 +130,20 @@ class KeyEntryModal(ModalScreen[str | None]):
         super().__init__()
         self.spec = spec
         self.existing = existing
+        self.dialog_title = f"enter {spec.env_var}"
 
-    def compose(self) -> ComposeResult:
+    def compose_dialog(self) -> ComposeResult:
         hint = (
             f"existing: {mask_key(self.existing)} · enter a new key to overwrite"
             if self.existing
             else f"get one at {self.spec.name}.com — stored in .env, never config.toml"
         )
-        yield Vertical(
-            Static(f"[bold]Enter {self.spec.env_var}[/bold]", id="ke-title"),
-            Static(hint, id="ke-hint", markup=False),
-            Input(placeholder="api key", password=True, id="ke-input"),
-            Horizontal(
-                Button("Save", id="ke-save"),
-                Button("Skip", id="ke-skip"),
-            ),
-        )
+        yield Static(hint, id="ke-hint", markup=False)
+        yield Input(placeholder="api key", password=True, id="ke-input")
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         if event.input.id == "ke-input":
             self._save(event.value.strip())
-
-    async def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "ke-save":
-            self._save(self.query_one("#ke-input", Input).value.strip())
-        elif event.button.id == "ke-skip":
-            self.action_cancel()
 
     def _save(self, value: str) -> None:
         if not value:
@@ -163,47 +151,41 @@ class KeyEntryModal(ModalScreen[str | None]):
             return
         self.dismiss(value)
 
-    def action_cancel(self) -> None:
-        self.dismiss(None)
 
-
-class CustomFormModal(ModalScreen[tuple[str, str, str] | None]):
+class CustomFormModal(Dialog):
     """Three-field form for a custom OpenAI-compatible endpoint.
 
     Dismisses with ``(base_url, api_key_env, key)`` or None; the key is
     optional for local servers like Ollama.
     """
 
-    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+    dialog_title = "connect a custom endpoint"
+    dialog_hint = hint_markup(("enter", "save"), ("esc", "cancel"))
 
     DEFAULT_CSS = """
-    CustomFormModal > Vertical {
-        width: 72;
+    CustomFormModal #cf-blurb {
+        height: auto;
+        margin: 0 0 1 0;
+        color: $text-muted;
+    }
+    CustomFormModal Input {
+        margin: 0 0 1 0;
     }
     """
 
-    def compose(self) -> ComposeResult:
-        yield Vertical(
-            Static("[bold]Connect a custom endpoint[/bold]", id="cf-title"),
-            Static("any OpenAI-compatible server: Ollama, Groq, Together…", markup=False),
-            Input(placeholder="base URL, e.g. http://localhost:11434/v1", id="cf-base"),
-            Input(placeholder="env var name for the key (default CUSTOM_API_KEY)", id="cf-env"),
-            Input(placeholder="api key (optional for local servers)", password=True, id="cf-key"),
-            Horizontal(
-                Button("Save", id="cf-save"),
-                Button("Cancel", id="cf-cancel"),
-            ),
+    def compose_dialog(self) -> ComposeResult:
+        yield Static(
+            "any OpenAI-compatible server: Ollama, Groq, Together…",
+            id="cf-blurb",
+            markup=False,
         )
+        yield Input(placeholder="base URL, e.g. http://localhost:11434/v1", id="cf-base")
+        yield Input(placeholder="env var name for the key (default CUSTOM_API_KEY)", id="cf-env")
+        yield Input(placeholder="api key (optional for local servers)", password=True, id="cf-key")
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
-        if event.input.id == "cf-key":
-            self._save()
-
-    async def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "cf-save":
-            self._save()
-        elif event.button.id == "cf-cancel":
-            self.action_cancel()
+        """Enter saves from any field: two of the three are optional."""
+        self._save()
 
     def _save(self) -> None:
         base_url = self.query_one("#cf-base", Input).value.strip()
@@ -213,9 +195,6 @@ class CustomFormModal(ModalScreen[tuple[str, str, str] | None]):
         env_var = self.query_one("#cf-env", Input).value.strip() or "CUSTOM_API_KEY"
         key = self.query_one("#cf-key", Input).value.strip()
         self.dismiss((base_url, env_var, key))
-
-    def action_cancel(self) -> None:
-        self.dismiss(None)
 
 
 async def connect_provider(app: Any, rig: Any, name: str) -> None:

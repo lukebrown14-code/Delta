@@ -35,6 +35,14 @@ KEY_DISPLAY = {"question_mark": "?", "escape": "esc", "slash": "/"}
 
 DOT = "●"
 
+#: The one modal width. Every dialog is this wide, so a modal never reads as a
+#: different kind of window depending on what it holds.
+MODAL_WIDTH = 64
+#: The single documented exception: a four-column table (the model catalog's
+#: id, context and two prices) truncates the id to uselessness at 64. Still
+#: fits an 80-column terminal with the backdrop showing either side.
+MODAL_WIDTH_WIDE = 72
+
 _HEALTH_VARIANTS: dict[str, str] = {
     "emerging": "dim",
     "building": "ok",
@@ -310,10 +318,16 @@ class Pill(Static):
 
 
 class KeyHint(Static):
-    """A ``[ key ]`` chip for empty states and prompts (markup disabled)."""
+    """The key alone, as a chip for empty states, prompts and key grids.
+
+    The key is the bare keycap — no ``[ ]`` brackets, no ``<>``, no ``^``.
+    Padding and a panel background are what make it read as a chip, so the app
+    keeps exactly one key notation: the key, then what it does. ``hint_markup``
+    and ``ActionChip`` spell the same pair inline.
+    """
 
     def __init__(self, key: str, id: str | None = None) -> None:
-        super().__init__(f"[ {key} ]", id=id, markup=False)
+        super().__init__(key, id=id, markup=False)
 
 
 def shown_bindings(bindings: Sequence[Any]) -> list[Binding]:
@@ -448,8 +462,10 @@ class Dialog(ModalScreen):
     BINDINGS = [("escape", "dismiss_dialog", "Close")]
 
     dialog_title: str = ""
-    dialog_hint: str = "<Esc>: close"
-    dialog_width: int = 64
+    #: Console markup: build it with ``hint_markup`` so a dialog's hint row
+    #: spells keys exactly the way every pane's bottom border does.
+    dialog_hint: str = hint_markup(("esc", "close"))
+    dialog_width: int = MODAL_WIDTH
 
     DEFAULT_CSS = """
     Dialog {
@@ -457,7 +473,8 @@ class Dialog(ModalScreen):
         background: $background 60%;
     }
     Dialog > #dialog-frame {
-        width: 64;
+        /* Width is set inline from ``dialog_width`` (MODAL_WIDTH by default);
+           CSS cannot read the constant. */
         height: auto;
         max-height: 90%;
         padding: 1 2;
@@ -486,7 +503,7 @@ class Dialog(ModalScreen):
                 yield Static(self.dialog_title, id="dialog-title", markup=False)
             yield from self.compose_dialog()
             if self.dialog_hint:
-                yield Static(self.dialog_hint, id="dialog-hint", markup=False)
+                yield Static(self.dialog_hint, id="dialog-hint")
 
     def compose_dialog(self) -> ComposeResult:
         raise NotImplementedError

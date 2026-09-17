@@ -124,29 +124,8 @@ Button:focus, Button:hover {
 
 /* ---------- modals ---------- */
 
-/* Every modal is a centred dialog over a dimmed backdrop, with a quiet
-   border: the dim is what separates it, not a bright outline. */
-ModalScreen {
-    align: center middle;
-    background: $background 60%;
-}
-
-ModalScreen > Vertical {
-    padding: 1 2;
-    max-height: 90%;
-    background: $surface;
-    border: solid $border-blurred;
-}
-
-#mp-title, #pp-title, #ke-title, #cf-title {
-    color: $text-primary;
-    text-style: bold;
-}
-
-#mp-status, #pp-status, #ke-hint {
-    color: $text-muted;
-}
-
-#mp-table {
-    max-height: 20;
-}
+/* Every modal is a Dialog, and Dialog's own DEFAULT_CSS draws the centring,
+   the dimmed backdrop and the quiet frame. Nothing belongs here: an app-level
+   rule outranks every screen's DEFAULT_CSS regardless of specificity, so a
+   frame rule written here would stop any dialog sizing itself (the model
+   picker's table height, the help screen's full-height frame). */

@@ -7,12 +7,18 @@ from collections.abc import Callable
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical
-from textual.screen import ModalScreen
+from textual.containers import Horizontal
 from textual.widgets import Button, DataTable, Input, Static
 
 from rigger.llm.catalog import ModelInfo, cached_catalog, catalog
 from rigger.llm.providers import Provider
+from rigger.tui.widgets import (
+    MODAL_WIDTH_WIDE,
+    ActionChip,
+    Dialog,
+    RiggerTable,
+    hint_markup,
+)
 
 
 def _per_million(price: float) -> str:
@@ -28,23 +34,39 @@ def _price_style(price_per_million: float) -> str:
     return "error"
 
 
-class ModelPicker(ModalScreen[ModelInfo | None]):
+class ModelPicker(Dialog):
     """Browse and pick a model; enter selects, escape cancels, refresh refetches.
 
     Loads from the on-disk catalog cache so it opens instantly. An empty
     catalog degrades to free-text model entry.
     """
 
-    BINDINGS = [
-        Binding("escape", "cancel", "Cancel"),
-        Binding("ctrl+r", "refresh", "Refresh catalog"),
-    ]
+    BINDINGS = [Binding("ctrl+r", "refresh", "Refresh catalog")]
+
+    # ctrl+r is left to the chip: saying it twice on one dialog is noise.
+    dialog_hint = hint_markup(("enter", "select"), ("esc", "cancel"))
+    #: The documented exception to MODAL_WIDTH: four columns of catalog.
+    dialog_width = MODAL_WIDTH_WIDE
 
     DEFAULT_CSS = """
-    ModelPicker > Vertical {
-        width: 80;
+    ModelPicker #mp-filter {
+        margin: 0 0 1 0;
     }
-    ModelPicker #mp-table { max-height: 20; }
+    /* A header plus nine models is what is left once the frame, title, filter,
+       chip row and hint have taken their share of a 24-row terminal. One row
+       more and the hint disappears under the bottom border. */
+    ModelPicker #mp-table {
+        height: auto;
+        max-height: 9;
+    }
+    ModelPicker .modal-chips {
+        height: 1;
+        margin: 1 0 0 0;
+    }
+    ModelPicker #mp-status {
+        width: 1fr;
+        color: $text-muted;
+    }
     """
 
     def __init__(
@@ -60,16 +82,15 @@ class ModelPicker(ModalScreen[ModelInfo | None]):
         self.provider_name = provider_name or (provider.name if provider else "")
         self._models: list[ModelInfo] = []
         self._visible: list[ModelInfo] = []
+        self.dialog_title = f"select a model ({self.provider_name or 'any'})"
 
-    def compose(self) -> ComposeResult:
-        yield Vertical(
-            Static(f"[bold]Select a model ({self.provider_name or 'any'})[/bold]", id="mp-title"),
-            Input(placeholder="filter by id or name", id="mp-filter"),
-            DataTable(id="mp-table"),
-            Horizontal(
-                Button("Refresh", id="mp-refresh"),
-                Static("", id="mp-status"),
-            ),
+    def compose_dialog(self) -> ComposeResult:
+        yield Input(placeholder="filter by id or name", id="mp-filter")
+        yield RiggerTable(id="mp-table")
+        yield Horizontal(
+            ActionChip("ctrl+r", "refresh", id="mp-refresh"),
+            Static("", id="mp-status", markup=False),
+            classes="modal-chips",
         )
 
     def on_mount(self) -> None:
@@ -154,9 +175,6 @@ class ModelPicker(ModalScreen[ModelInfo | None]):
             self._load(cached_catalog(self.provider_name))
             return
         self._load(await catalog(self.provider, force=True))
-
-    def action_cancel(self) -> None:
-        self.dismiss(None)
 
     def _select(self, model: ModelInfo) -> None:
         self.dismiss(None)

@@ -11,7 +11,15 @@ from rigger import services
 from rigger.core.models import Instrument
 from rigger.tui.app import RiggerApp
 from rigger.tui.shell import ALL_ITEMS, OFF_BAR_ITEMS, ScreenFooter, StatusBar
-from rigger.tui.widgets import Pane
+from rigger.tui.widgets import (
+    MODAL_WIDTH,
+    MODAL_WIDTH_WIDE,
+    Dialog,
+    KeyHint,
+    Pane,
+    binding_key,
+    shown_bindings,
+)
 from tests.conftest import seed_bars
 
 AAPL = Instrument(id="US:AAPL", market="us", symbol="AAPL", currency="USD", sector="Tech")
@@ -703,3 +711,115 @@ def test_braille_graph_resolution_and_shape():
     assert BrailleGraph([]).rows(10, 2) == [BrailleGraph.EMPTY * 10] * 2
     assert BrailleGraph([5.0, 5.0, 5.0]).rows(10, 2)
     assert BrailleGraph([1.0]).rows(0, 0) == []
+
+
+# --- dialogs -------------------------------------------------------------------
+
+
+def _assert_dialog(screen, size: tuple[int, int], width: int) -> None:
+    """A dialog is framed, dimmed, centred and inside the terminal.
+
+    Checked against the laid-out regions rather than the widget tree: a green
+    tree has twice hidden a box that never painted a column.
+    """
+    frame = screen.query_one("#dialog-frame")
+    region = frame.region
+    assert region.width == width, (region, width)
+    assert region.height > 0
+    # Framed: a border on every edge, not a bare box of text.
+    edges = screen.query_one("#dialog-frame").styles.border
+    assert all(edge[0] == "solid" for edge in edges), edges
+    # Dimmed backdrop: the modal's own background is translucent.
+    assert screen.styles.background.a < 1.0
+    # Centred, and clipping nothing at either size.
+    w, h = size
+    assert region.x > 0 and region.right <= w
+    assert abs(region.x - (w - region.right)) <= 1, (region, w)
+    assert region.y >= 0 and region.bottom <= h, (region, h)
+    # The key hint is the last row inside the frame and the first thing a
+    # too-tall dialog loses: it slid under the bottom border once, with the
+    # frame itself still measuring as unclipped.
+    hint = screen.query_one("#dialog-hint")
+    assert frame.content_region.contains_region(hint.region), (hint.region, frame.content_region)
+
+
+@pytest.mark.parametrize(
+    ("key", "width"),
+    [("m", MODAL_WIDTH_WIDE), ("p", MODAL_WIDTH), ("g", MODAL_WIDTH), ("?", MODAL_WIDTH_WIDE)],
+)
+@pytest.mark.parametrize("size", [(80, 24), (120, 40)])
+def test_modals_are_framed_centred_and_escapable(rig, key, width, size):
+    """Every modal is a Dialog: framed, dimmed, centred, and closed by escape."""
+
+    async def run():
+        app = RiggerApp(rig)
+        async with app.run_test(size=size) as pilot:
+            await pilot.press(key)
+            await pilot.pause()
+            modal = app.screen
+            assert isinstance(modal, Dialog), modal
+            _assert_dialog(modal, size, width)
+            # The dialog owns escape: one press and the app is back home.
+            await pilot.press("escape")
+            await pilot.pause()
+            assert app.screen.name == "home"
+
+    asyncio.run(run())
+
+
+def test_provider_key_modals_are_dialogs(rig):
+    """The two provider forms are Dialogs too, framed and closed by escape.
+
+    Pushed onto the real app, not a bare one: the app stylesheet is what makes
+    an Input one row rather than Textual's three, and these forms hold three
+    of them.
+    """
+    from rigger.llm.providers import PROVIDERS
+    from rigger.tui.screens.provider_picker import CustomFormModal, KeyEntryModal
+
+    async def run():
+        app = RiggerApp(rig)
+        async with app.run_test(size=(80, 24)) as pilot:
+            for modal in (KeyEntryModal(PROVIDERS["openai"]), CustomFormModal()):
+                app.push_screen(modal)
+                await pilot.pause()
+                assert isinstance(app.screen, Dialog)
+                _assert_dialog(app.screen, (80, 24), MODAL_WIDTH)
+                await pilot.press("escape")
+                await pilot.pause()
+                assert app.screen is not modal
+
+    asyncio.run(run())
+
+
+def test_help_lists_per_screen_keys(rig):
+    """The keymap covers the screens, not just the app-level bindings."""
+    from rigger.tui.screens.theses import Theses
+    from rigger.tui.widgets import KeyGrid
+
+    async def run():
+        app = RiggerApp(rig)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.press("?")
+            await pilot.pause()
+            help_screen = app.screen
+            await pilot.press("k")
+            await pilot.pause()
+            assert help_screen.query_one("#help-tabs").active == "help-keys"
+            groups = [str(s.render()) for s in help_screen.query(".help-group")]
+            assert "Anywhere" in groups and "Theses" in groups
+            # A key only Theses binds must be on screen, and the grid painted.
+            keys = {
+                str(hint.render())
+                for grid in help_screen.query(KeyGrid)
+                for hint in grid.query(KeyHint)
+            }
+            thesis_keys = {binding_key(b) for b in shown_bindings(Theses.BINDINGS)}
+            assert thesis_keys and thesis_keys <= keys, thesis_keys - keys
+            assert all(grid.region.height > 0 for grid in help_screen.query(KeyGrid))
+            # t switches back to the tour.
+            await pilot.press("t")
+            await pilot.pause()
+            assert help_screen.query_one("#help-tabs").active == "help-tour"
+
+    asyncio.run(run())
