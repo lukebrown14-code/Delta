@@ -140,10 +140,13 @@ def hint_markup(*pairs: tuple[str, str]) -> str:
 class ActionChip(Button):
     """One-row ``[key] label`` button: the app's only button shape.
 
-    Subclasses ``Button`` so ``Button.Pressed`` handlers, ``disabled`` and
-    focus keep working; only the chrome changes. ``-active`` marks the
-    selected tab in a strip.
+    Subclasses ``Button`` so ``Button.Pressed`` handlers and ``disabled``
+    keep working; only the chrome changes. ``-active`` marks the selected
+    tab in a strip. Chips advertise a key, so they never take focus: tab
+    moves between panes, not across the hint row.
     """
+
+    can_focus = False
 
     DEFAULT_CSS = """
     ActionChip {
@@ -159,11 +162,6 @@ class ActionChip(Button):
     }
     ActionChip:hover {
         background: $panel-lighten-1;
-        border: none;
-    }
-    ActionChip:focus {
-        background: $panel-lighten-2;
-        text-style: none;
         border: none;
     }
     ActionChip.-active, ActionChip.-active:hover, ActionChip.-active:focus {
