@@ -265,6 +265,50 @@ def recent_closes(engine: Any, instrument_id: str, limit: int = 40) -> list[floa
     return [float(close) for close in reversed(rows)]
 
 
+@dataclass(frozen=True)
+class ReportStamp:
+    """The newest report written for a company, and the moment it describes.
+
+    ``as_of`` comes from the ``.json`` sidecar when there is one; without it the
+    filename (``YYYY-MM-DD.md``) is the only date on offer, and a name that is
+    not a date leaves ``as_of`` None rather than inventing an age.
+    """
+
+    path: Path
+    as_of: datetime | None
+
+
+def latest_report(reports_dir: str | Path, company: str) -> ReportStamp | None:
+    """The newest report on disk for ``company``, or None when there is none.
+
+    Read-side only: it walks ``<reports_dir>/<company>/*.md`` and never writes.
+    Lives here so every screen answers "how old is this company's report?" the
+    same way instead of each growing its own copy.
+    """
+    from rigger.reports import read_report
+
+    try:
+        paths = sorted((Path(reports_dir) / company).glob("*.md"))
+    except OSError:
+        return None
+    if not paths:
+        return None
+    newest = paths[-1]
+    report = read_report(newest.with_suffix(".json"))
+    if report is not None:
+        return ReportStamp(newest, report.as_of)
+    try:
+        return ReportStamp(newest, datetime.strptime(newest.stem, "%Y-%m-%d").replace(tzinfo=UTC))
+    except ValueError:
+        return ReportStamp(newest, None)
+
+
+def latest_report_age(reports_dir: str | Path, company: str) -> datetime | None:
+    """When the newest report for ``company`` was written, or None if unknown."""
+    stamp = latest_report(reports_dir, company)
+    return stamp.as_of if stamp else None
+
+
 @dataclass
 class CostRow:
     task: str

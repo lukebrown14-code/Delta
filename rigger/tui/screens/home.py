@@ -4,8 +4,9 @@ A ``RiggerScreen`` like every other panel, so the status bar is there where
 a new user lands and ``h`` round-trips cleanly. One header row (an inked
 ``RIGGER`` chip, "overview", the live clock) sits above three ``PaneRow``s:
 
-* top — ``watchlist`` (recent closes, 40-close sparks) and ``since you last
-  looked`` (new evidence, the pulse histogram, stale data);
+* top — ``watchlist`` (live quotes when the feed is up, last closes
+  otherwise, 40-close sparks) and ``since you last looked`` (new evidence,
+  the pulse histogram, stale bars and stale reports);
 * middle — ``upcoming`` (calendar events) and ``theses`` (fleet health);
 * bottom — ``go`` (every app hotkey) and ``system`` (plugins, data, spend).
 
@@ -19,6 +20,8 @@ arrows, enter and tab, so nothing here can shadow navigation.
 
 from __future__ import annotations
 
+import asyncio
+from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -35,6 +38,8 @@ from rigger import services
 from rigger.core.models import Instrument
 from rigger.core.state import read_last_seen
 from rigger.core.time import to_utc
+from rigger.plugins.data.yfinance import DEFAULT_SUFFIXES
+from rigger.quotes import Quote, YahooQuotes
 from rigger.tui.shell import RiggerScreen, age_text
 from rigger.tui.widgets import (
     BrailleGraph,
@@ -44,6 +49,7 @@ from rigger.tui.widgets import (
     binding_key,
     hint_markup,
     shown_bindings,
+    token_color,
 )
 
 PULSE_DAYS = 30
@@ -51,6 +57,10 @@ WATCH_ROWS = 7
 UPCOMING_ROWS = 5
 THESES_ROWS = 6
 SPARK_CLOSES = 40
+#: A report older than this is called out beside the stale-bar warnings.
+REPORT_STALE = timedelta(days=7)
+#: How often the watchlist repaints from the quote feed.
+QUOTE_PAINT_SECONDS = 0.5
 
 #: Below this width only the watchlist and go boxes are shown.
 NARROW_WIDTH = 100
@@ -135,6 +145,17 @@ def _price(value: float) -> str:
     return f"{value:,.2f}" if value >= 10 else f"{value:,.4f}"
 
 
+def _watch_head(*, live: bool) -> str:
+    """The watchlist column header, which names the price column it describes.
+
+    ``last`` plus a live dot once a quote has arrived; ``close`` and no dot
+    while the rows are still showing the newest stored bar.
+    """
+    price = "last" if live else "close"
+    head = f"{' Symbol':<11}{price:>11}{'chg%':>9}{'age':>6}  {SPARK_CLOSES} closes"
+    return escape(head) + ("  [$text-success]● live[/]" if live else "")
+
+
 def _symbol(watched: list[tuple[str, Instrument]], instrument_id: str) -> str:
     for _target, instrument in watched:
         if instrument.id == instrument_id:
@@ -149,7 +170,13 @@ class FocusBox(Vertical):
 
 
 class WatchRow(Horizontal):
-    """One instrument: symbol, last close, change vs the prior close, spark."""
+    """One instrument: symbol, price, change, quote age, spark.
+
+    The price cell is the live quote when one has arrived and the last stored
+    close otherwise — the age cell says which, so a price is never passed off
+    as fresher than it is. Cells are updated in place by ``paint`` rather than
+    remounted, because the quote feed repaints twice a second.
+    """
 
     def __init__(self, index: int, target_id: str, instrument: Instrument, closes: list[float]):
         super().__init__(classes="w-row")
@@ -157,24 +184,51 @@ class WatchRow(Horizontal):
         self.target_id = target_id
         self.instrument = instrument
         self.closes = closes
+        self.quote: Quote | None = None
 
     def compose(self) -> ComposeResult:
         yield Static(self.instrument.symbol, classes="w-sym", markup=False)
+        yield Static("", classes="w-close", markup=False)
+        yield Static("", classes="w-chg", markup=False)
+        yield Static("", classes="w-age", markup=False)
+        if self.closes:
+            yield BrailleGraph(self.closes, fill=True, classes="w-spark")
+        else:
+            yield Static("no bars", classes="w-none", markup=False)
+
+    def on_mount(self) -> None:
+        self.paint()
+
+    def set_quote(self, quote: Quote | None) -> None:
+        """Adopt the newest quote (or its absence) and repaint the three cells."""
+        self.quote = quote
+        self.paint()
+
+    def paint(self) -> None:
+        price, pct, age, state = self._cells()
+        with suppress(Exception):
+            self.query_one(".w-close", Static).update("—" if price is None else _price(price))
+            chg = self.query_one(".w-chg", Static)
+            chg.update("" if price is None else "—" if pct is None else f"{pct:+.2f}%")
+            chg.set_class(bool(pct and pct > 0), "-up")
+            chg.set_class(bool(pct and pct < 0), "-down")
+            cell = self.query_one(".w-age", Static)
+            cell.update(age)
+            cell.set_class(state == "warn" or state == "error", "-stale")
+
+    def _cells(self) -> tuple[float | None, float | None, str, str]:
+        """``(price, change %, age label, age state)`` for whatever evidence exists."""
+        if self.quote is not None:
+            pct = self.quote.change_pct
+            if pct is None and self.closes and self.closes[-1]:
+                pct = (self.quote.price - self.closes[-1]) / self.closes[-1] * 100
+            age, state = age_text(datetime.now(UTC) - self.quote.received_at)
+            return self.quote.price, pct, age, state
         if self.closes:
             last = self.closes[-1]
             prior = self.closes[-2] if len(self.closes) > 1 else None
-            pct = ((last - prior) / prior * 100) if prior else None
-            yield Static(_price(last), classes="w-close", markup=False)
-            if pct is None:
-                yield Static("—", classes="w-chg", markup=False)
-            else:
-                direction = "-up" if pct > 0 else "-down" if pct < 0 else ""
-                yield Static(f"{pct:+.2f}%", classes=f"w-chg {direction}".strip(), markup=False)
-            yield BrailleGraph(self.closes, fill=True, classes="w-spark")
-        else:
-            yield Static("—", classes="w-close", markup=False)
-            yield Static("", classes="w-chg", markup=False)
-            yield Static("no bars", classes="w-none", markup=False)
+            return last, ((last - prior) / prior * 100) if prior else None, "", "ok"
+        return None, None, "", "ok"
 
     def on_click(self) -> None:
         rows = self.parent
@@ -299,6 +353,8 @@ class Home(RiggerScreen):
     Home .w-chg { width: 9; text-align: right; color: $text-muted; }
     Home .w-chg.-up { color: $text-success; }
     Home .w-chg.-down { color: $text-error; }
+    Home .w-age { width: 6; text-align: right; color: $text-muted; }
+    Home .w-age.-stale { color: $text-warning; }
     Home .w-none { width: 1fr; margin-left: 2; color: $text-muted; }
     Home .w-spark { width: 1fr; height: 1; margin: 0 1 0 2; }
     Home .w-spark > .braille-graph--low-color { color: $text-primary 45%; }
@@ -383,6 +439,14 @@ class Home(RiggerScreen):
         self._watched_rows: list[tuple[str, Instrument]] = []
         self._events: list[services.Upcoming] | None = None
         self._fleet: list[services.ThesisHealth] = []
+        # Ephemeral quotes, exactly as the Watchlist runs them: one task owned
+        # by the screen, started on resume and cancelled on suspend/unmount.
+        self.feed: YahooQuotes | None = None
+        self.feed_task: asyncio.Task | None = None
+        self.active = False
+        self.signature: tuple = ()
+        #: Test seam: an alternative websocket client for ``YahooQuotes``.
+        self.quote_client_factory: Any = None
 
     # ----- layout ---------------------------------------------------------
 
@@ -398,11 +462,7 @@ class Home(RiggerScreen):
                     hints=hint_markup(("↑↓", "select"), ("enter", "open"), ("tab", "next box")),
                     id="watch-pane",
                 ):
-                    yield Static(
-                        f"{' Symbol':<11}{'close':>11}{'chg%':>9}  {SPARK_CLOSES} closes",
-                        id="watch-head",
-                        markup=False,
-                    )
+                    yield Static(_watch_head(live=False), id="watch-head")
                     yield WatchRows(id="watch-rows")
                     yield Static("", id="watch-note", markup=False)
                     yield Static("", id="watch-since")
@@ -467,6 +527,7 @@ class Home(RiggerScreen):
         self.layout_views()
         await self.refresh_view()
         self.set_interval(1, self._tick)
+        self.set_interval(QUOTE_PAINT_SECONDS, self._paint_quotes)
 
     def on_resize(self) -> None:
         if self.is_mounted:
@@ -501,11 +562,84 @@ class Home(RiggerScreen):
         )
 
     def _token(self, name: str) -> str:
-        """A theme colour for Rich text; empty (default colour) when unknown."""
+        """A theme colour Rich can parse; empty (default colour) when unknown.
+
+        Never the raw ``theme_variables`` value: Textual writes ``auto 87%``
+        for background-dependent tokens and Rich raises ``MissingStyle`` on it.
+        """
+        return token_color(self.app, name)
+
+    # ----- quotes ---------------------------------------------------------
+
+    def _sync_feed(self) -> None:
+        """Point the quote feed at the watched instruments, restarting if they changed."""
+        suffixes = DEFAULT_SUFFIXES | getattr(self.rig.cfg, "plugins", {}).get("yfinance", {}).get(
+            "suffixes", {}
+        )
+        instruments = [instrument for _target, instrument in self._watched_rows[:WATCH_ROWS]]
+        signature = (
+            tuple(sorted(i.id for i in instruments)),
+            tuple(sorted(suffixes.items())),
+        )
+        if self.feed_task and not self.feed_task.done() and signature == self.signature:
+            return
+        old_task = self.feed_task
+        if old_task:
+            old_task.cancel()
+        old_quotes = self.feed.quotes if self.feed else {}
+        self.signature = signature
+        self.feed = YahooQuotes(instruments, suffixes, self._quote_state, self.quote_client_factory)
+        self.feed.quotes.update({k: v for k, v in old_quotes.items() if k in signature[0]})
+        feed = self.feed
+
+        async def start() -> None:
+            if old_task:
+                with suppress(asyncio.CancelledError):
+                    await old_task
+            await feed.run()
+
+        self.feed_task = asyncio.create_task(start())
+
+    def _quote_state(self, state: str) -> None:
+        self._feed_state = state
+
+    def _quote_for(self, ident: str) -> Quote | None:
+        return self.feed.quotes.get(ident) if self.feed else None
+
+    def _paint_quotes(self) -> None:
+        """Repaint the watchlist from the feed. Reads cached quotes only — never the network."""
+        if not self.is_mounted:
+            return
         try:
-            return str(self.app.theme_variables.get(name, ""))
+            rows = self.query_one("#watch-rows", WatchRows).rows
+            head = self.query_one("#watch-head", Static)
         except Exception:
-            return ""
+            return
+        live = False
+        for row in rows:
+            quote = self._quote_for(row.instrument.id)
+            row.set_quote(quote)
+            live = live or quote is not None
+        head.update(_watch_head(live=live))
+
+    async def _stop_feed(self) -> None:
+        self.active = False
+        if self.feed_task:
+            self.feed_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await self.feed_task
+            self.feed_task = None
+
+    async def on_screen_resume(self) -> None:
+        self.active = True
+        await super().on_screen_resume()
+        self._sync_feed()
+
+    async def on_screen_suspend(self) -> None:
+        await self._stop_feed()
+
+    async def on_unmount(self) -> None:
+        await self._stop_feed()
 
     def _watched(self) -> list[tuple[str, Instrument]]:
         """Every ticker of every watch target, keyed by the target it belongs to.
@@ -575,19 +709,26 @@ class Home(RiggerScreen):
 
         Bar age is known only for universe instruments (``data_health`` walks
         the universe); a ticker outside it with bars is left alone rather than
-        called stale on no evidence.
+        called stale on no evidence. A company with no report at all is not a
+        warning — nothing is out of date until something has been written.
         """
         now = datetime.now(UTC)
+        reports_dir = str(getattr(self.rig.cfg, "reports_dir", "reports") or "reports")
         notes: list[str] = []
         for _target, instrument in watched:
             newest = health.latest_bar.get(instrument.id)
             if newest is None:
                 if not closes.get(instrument.id):
                     notes.append(f"{instrument.symbol} no bars")
-                continue
-            age = now - to_utc(newest)
-            if age > timedelta(days=1):
-                notes.append(f"{instrument.symbol} {age_text(age)[0]} old")
+            else:
+                age = now - to_utc(newest)
+                if age > timedelta(days=1):
+                    notes.append(f"{instrument.symbol} {age_text(age)[0]} old")
+            as_of = services.latest_report_age(reports_dir, instrument.id)
+            if as_of is not None:
+                report_age = now - to_utc(as_of)
+                if report_age > REPORT_STALE:
+                    notes.append(f"{instrument.symbol} report {age_text(report_age)[0]} old")
         plugins = getattr(self.rig, "plugins", {}) or {}
         notes.extend(
             f"{name} off"
@@ -604,6 +745,9 @@ class Home(RiggerScreen):
             for index, (target_id, instrument) in enumerate(watched[:WATCH_ROWS])
         ]
         await self.query_one("#watch-rows", WatchRows).set_rows(rows)
+        if self.active:
+            self._sync_feed()
+        self._paint_quotes()
         self.query_one("#watch-pane", Pane).set_badge(str(len(watched)) if watched else "")
         hidden = len(watched) - WATCH_ROWS
         note = self.query_one("#watch-note", Static)
@@ -612,7 +756,7 @@ class Home(RiggerScreen):
         elif hidden > 0:
             note.update(f"+{hidden} more · 1 watchlist")
         else:
-            note.update(f"spark: {SPARK_CLOSES} daily closes · chg%: close vs prior close")
+            note.update(f"spark: {SPARK_CLOSES} daily closes · chg%: move on the day")
 
     def _refresh_since(
         self, watched: list[tuple[str, Instrument]], pulse: services.Pulse, stale: list[str]
@@ -674,7 +818,7 @@ class Home(RiggerScreen):
         self.query_one("#since-stale", Static).update(
             f"[$text-warning]⚠ {escape(' · '.join(stale))}[/]"
             if stale
-            else "[$text-muted]✓ bars fresh · all plugins on[/]"
+            else "[$text-muted]✓ bars and reports fresh · all plugins on[/]"
         )
 
     def _refresh_upcoming(

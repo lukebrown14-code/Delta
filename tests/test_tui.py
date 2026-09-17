@@ -470,6 +470,179 @@ def test_home_refreshes_twice_without_duplicate_ids(rig, monkeypatch, tmp_path):
     asyncio.run(run())
 
 
+def _home_config(tmp_path, monkeypatch, rig):
+    """Chdir to a config with one watched ticker, so Home has a watchlist row."""
+    import tomli_w
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "config.toml").write_text(
+        tomli_w.dumps(
+            {"targets": {"apple": {"kind": "company", "market": "us", "tickers": ["AAPL"]}}}
+        ),
+        encoding="utf-8",
+    )
+    rig.cfg.reports_dir = str(tmp_path / "reports")
+    return tmp_path
+
+
+def _frame(app):
+    """The exported frame as plain text: the SVG writes spaces as ``&#160;``."""
+    return app.export_screenshot().replace("&#160;", " ")
+
+
+def _quote(price=1234.5, change_pct=2.5, age_seconds=0.0):
+    from datetime import UTC, datetime, timedelta
+
+    from rigger.quotes import Quote
+
+    now = datetime.now(UTC)
+    return Quote(
+        price=price,
+        currency="USD",
+        change_pct=change_pct,
+        timestamp=now,
+        received_at=now - timedelta(seconds=age_seconds),
+    )
+
+
+def test_home_watchlist_paints_a_live_quote(rig, monkeypatch, tmp_path):
+    """A quote reaches the screen, not just the feed dict.
+
+    Asserting on ``feed.quotes`` alone passes for a row that never repaints,
+    so this drives a real app and reads the exported frame: the live price,
+    the live dot and the ``last`` header must all be there.
+    """
+    _home_config(tmp_path, monkeypatch, rig)
+
+    async def run():
+        app = RiggerApp(rig)
+        async with app.run_test(size=(120, 40)) as pilot:
+            home = app.screen
+            head = home.query_one("#watch-head")
+            # The price column names what it holds: chars 11..22 of the header.
+            assert str(head.render())[11:22].strip() == "close"
+            assert "●" not in str(head.render())
+
+            home.feed.quotes["US:AAPL"] = _quote()
+            home._paint_quotes()
+            await pilot.pause()
+
+            assert str(head.render())[11:22].strip() == "last"
+            assert "● live" in str(head.render())
+            frame = _frame(app)
+            assert "1,234.50" in frame
+            assert "+2.50%" in frame
+            assert "● live" in frame
+            # The age column says how fresh the price is: the dot in the header
+            # and the row's own age cell are two separate "live"s on screen.
+            assert frame.count("live") >= 2
+
+    asyncio.run(run())
+
+
+def test_home_quote_age_falls_back_to_the_stored_close(rig, monkeypatch, tmp_path):
+    """No quote: the row shows the last stored bar under a ``close`` header, and
+    an old quote is marked stale rather than shown as live."""
+    from rigger.tui.screens.home import WatchRow
+
+    _home_config(tmp_path, monkeypatch, rig)
+
+    async def run():
+        app = RiggerApp(rig)
+        async with app.run_test(size=(120, 40)) as pilot:
+            home = app.screen
+            row = home.query_one(WatchRow)
+            assert row.quote is None
+            assert "100.00" in str(row.query_one(".w-close").render())
+            assert str(row.query_one(".w-age").render()) == ""
+
+            row.set_quote(_quote(age_seconds=60_000))
+            await pilot.pause()
+            assert str(row.query_one(".w-age").render()) == "16h"
+            assert row.query_one(".w-age").has_class("-stale")
+
+    asyncio.run(run())
+
+
+def test_home_quote_feed_starts_on_resume_and_is_cancelled_on_unmount(rig, monkeypatch, tmp_path):
+    """A leaked feed task keeps a websocket alive after the screen is gone."""
+    _home_config(tmp_path, monkeypatch, rig)
+
+    async def run():
+        app = RiggerApp(rig)
+        async with app.run_test(size=(120, 40)) as pilot:
+            home = app.screen
+            assert home.active
+            assert home.feed is not None
+            assert list(home.feed.symbols) == ["AAPL"]
+            task = home.feed_task
+            assert task is not None
+
+            # Leaving Home suspends the screen: the task must go with it.
+            await pilot.press("1")
+            await pilot.pause()
+            assert home.feed_task is None
+            assert task.cancelled() or task.done()
+            assert not home.active
+
+            await pilot.press("h")
+            await pilot.pause()
+            assert home.active and home.feed_task is not None
+
+    asyncio.run(run())
+
+
+def test_home_warns_that_a_company_report_is_stale(rig, monkeypatch, tmp_path):
+    """Per-company report age, which Home could not say before.
+
+    No report at all is not a warning — nothing is out of date until something
+    has been written.
+    """
+    _home_config(tmp_path, monkeypatch, rig)
+
+    async def run():
+        app = RiggerApp(rig)
+        async with app.run_test(size=(120, 40)) as pilot:
+            home = app.screen
+            stale = home.query_one("#since-stale")
+            assert "report" not in str(stale.render())
+
+            folder = tmp_path / "reports" / "US:AAPL"
+            folder.mkdir(parents=True)
+            (folder / "2020-01-01.md").write_text("# report\n", encoding="utf-8")
+            await home.refresh_view()
+            await pilot.pause()
+
+            assert "AAPL report" in str(stale.render())
+            assert "old" in str(stale.render())
+            assert "AAPL report" in _frame(app)
+
+    asyncio.run(run())
+
+
+def test_home_survives_several_seconds_of_ticks(rig, monkeypatch, tmp_path):
+    """The 1s clock and the 0.5s quote repaint must not race the box rebuild.
+
+    Home crashed with DuplicateIds once because ``remove_children`` is async;
+    a green helper test hid it, so this lets the real timers fire repeatedly.
+    """
+    _home_config(tmp_path, monkeypatch, rig)
+
+    async def run():
+        app = RiggerApp(rig)
+        async with app.run_test(size=(120, 40)) as pilot:
+            home = app.screen
+            home.feed.quotes["US:AAPL"] = _quote()
+            for _ in range(12):
+                await pilot.pause(0.25)
+            assert app._exception is None
+            assert len(app.screen.query("#system-db")) == 1
+            assert len(app.screen.query("#watch-head")) == 1
+            assert "1,234.50" in _frame(app)
+
+    asyncio.run(run())
+
+
 def test_braille_graph_paints_in_a_running_app():
     """The graph reaches the screen, not just the renderable.
 
