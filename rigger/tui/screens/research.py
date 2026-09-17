@@ -9,12 +9,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from rich.text import Text
 from textual import work
 from textual.app import ComposeResult
 from textual.containers import Horizontal, VerticalScroll
-from textual.widgets import Button, Input, Markdown, MarkdownViewer, OptionList, Static
+from textual.widgets import Button, Input, Markdown, MarkdownViewer, Static
 from textual.widgets._markdown import MarkdownBlock
-from textual.widgets.option_list import Option
 from textual.worker import Worker, get_current_worker
 
 from rigger import services, theses
@@ -116,17 +116,13 @@ class Research(RiggerScreen):
         ("escape", "back", "Back"),
     ]
     CSS = """
-    /* Header: targets and company side by side, six rows including frames.
-       Narrow terminals fold the company into the targets title (see
-       layout_views) and give the rows back to the sources list. */
-    #research-header { height: 6; }
-    #research-header.-narrow { height: 4; }
-    #report-targets { height: 1fr; width: 1fr; overflow-y: auto; }
-    #research-company { height: 1fr; margin: 0; border: none; background: transparent; }
-    #research-company > .option-list--option { padding: 0 1; }
-    #research-actions { height: 1; margin: 0 0 0 1; }
-    #research-actions .chip-gap { width: auto; height: 1; }
-    #research-status { height: 1; margin: 0 1; color: $text-muted; }
+    /* Header: one company list, seven rows including its frame (four rows
+       of companies at 120x40, two at 80x24 — see layout_views). */
+    #research-header { height: 7; }
+    #research-header.-narrow { height: 5; }
+    #research-companies { height: 1fr; width: 1fr; overflow-y: auto; }
+    #research-actions { height: 1; margin: 0 1; }
+    #research-actions .chip-gap { width: 1fr; height: 1; }
     #evidence-layout, #report-doc { height: 1fr; }
     #evidence-list-pane { width: 2fr; }
     #evidence-preview-pane { width: 3fr; }
@@ -162,7 +158,7 @@ class Research(RiggerScreen):
         self._job: Worker | None = None
         self.feed: YahooQuotes | None = None
         self.feed_task: asyncio.Task[None] | None = None
-        self.feed_company = ""
+        self.feed_company: tuple[str, ...] = ()
         self.quote_state = ""
 
     @property
@@ -170,26 +166,20 @@ class Research(RiggerScreen):
         return self.state.companies.setdefault(self.state.company, CompanyView())
 
     def compose_content(self) -> ComposeResult:
-        with PaneRow(id="research-header"):
-            with Pane(
-                title="targets",
-                key="t",
-                hints=hint_markup(("↑↓", "select"), ("tab", "company")),
-                id="research-targets-pane",
-            ):
-                yield RiggerTable(id="report-targets")
-            with Pane(
-                title="company", hints=hint_markup(("↑↓", "select")), id="research-company-pane"
-            ):
-                yield OptionList(id="research-company")
+        with Pane(
+            title="company",
+            key="t",
+            hints=hint_markup(("↑↓", "select"), ("enter", "open")),
+            id="research-header",
+        ):
+            yield RiggerTable(id="research-companies")
         with Horizontal(id="research-actions"):
             yield ActionChip("e", "evidence", id="tab-evidence")
             yield ActionChip("r", "report", id="tab-report")
-            yield Static("  ", classes="chip-gap")
+            yield Static("", classes="chip-gap")
             yield ActionChip("u", "refresh company", id="research-refresh")
             yield ActionChip("U", "gather all", id="research-gather")
             yield ActionChip("n", "generate report", id="report-generate", classes="-primary")
-        yield Static("", id="research-status", markup=False)
         with PaneRow(id="evidence-layout"):
             with Pane(
                 title="sources",
@@ -225,9 +215,9 @@ class Research(RiggerScreen):
             yield ResearchViewer(id="report-view", show_table_of_contents=True, open_links=False)
 
     async def on_mount(self) -> None:
-        self.query_one("#report-targets", RiggerTable).add_columns(
-            "Watch target", "Kind", "Report", "Age"
-        )
+        companies = self.query_one("#research-companies", RiggerTable)
+        for label in ("Company", "Symbol", "Target", "Report", "Live"):
+            companies.add_column(label, key=label.casefold())
         self.query_one("#evidence-table", RiggerTable).add_columns("Source", "Type", "Date")
         self.ready = True
         self.set_interval(2, self.render_status)
@@ -250,74 +240,76 @@ class Research(RiggerScreen):
         # through refresh_view -> load_company.
         self.stop_quotes()
 
+    def companies(self) -> list[Any]:
+        """Every instrument under a configured target, grouped by target.
+
+        You research a company, not a target: the target is a column here.
+        Sorting by target first keeps a sector's members adjacent.
+        """
+        specs = services.target_specs()
+        rows = [
+            (target, instrument)
+            for instrument in self.rig.universe()
+            for target in instrument.watchlists
+            if target in specs
+        ]
+        rows.sort(key=lambda row: (row[0], row[1].id))
+        seen: set[str] = set()
+        unique = []
+        for target, instrument in rows:
+            if instrument.id not in seen:
+                seen.add(instrument.id)
+                unique.append((target, instrument))
+        return unique
+
     async def refresh_view(self) -> None:
         if not self.ready:
             return
-        specs = sorted(services.target_specs().values(), key=lambda t: t.id)
-        table = self.query_one("#report-targets", RiggerTable)
+        specs = services.target_specs()
+        rows = self.companies()
+        table = self.query_one("#research-companies", RiggerTable)
         with self.prevent(RiggerTable.RowHighlighted):
             table.clear()
-            for target in specs:
-                stem, age = self.target_report_age(target.id)
-                table.add_row(target.id, target.kind, stem, age, key=target.id)
-        ids = [target.id for target in specs]
-        if self.state.target not in ids:
-            self.state.target = ids[0] if ids else ""
-        if self.state.target:
-            with self.prevent(RiggerTable.RowHighlighted):
-                table.move_cursor(row=ids.index(self.state.target))
-        await self.select_target(self.state.target)
-
-    def target_report_age(self, target: str) -> tuple[str, str]:
-        """Newest report date and age across a target's companies, for triage.
-
-        Scanning the list should answer "what is stale?" without opening each
-        company in turn.
-        """
-        base = self.reports_dir()
-        paths = [
-            path
-            for instrument in self.rig.universe()
-            if target in instrument.watchlists
-            for path in sorted((base / instrument.id).glob("*.md"))[-1:]
-        ]
-        if not paths:
-            return "none", ""
-        newest = max(paths, key=lambda path: path.stem)
-        # Prefer the sidecar's generation time, as the report pane does: a row
-        # saying 21h beside a pane saying 18h for the same report is noise.
-        report = read_report(newest.with_suffix(".json"))
-        if report is not None:
-            return newest.stem, age_text(datetime.now(UTC) - report.as_of)[0]
-        try:
-            as_of = datetime.strptime(newest.stem, "%Y-%m-%d").replace(tzinfo=UTC)
-        except ValueError:
-            return newest.stem, "?"
-        return newest.stem, age_text(datetime.now(UTC) - as_of)[0]
-
-    async def select_target(self, target: str) -> None:
-        self.state.target = target
-        instruments = sorted(
-            (i for i in self.rig.universe() if target in i.watchlists), key=lambda i: i.id
-        )
-        ids = [i.id for i in instruments]
+            for target, instrument in rows:
+                spec = specs[target]
+                table.add_row(
+                    getattr(instrument, "name", "") or instrument.symbol,
+                    instrument.id,
+                    f"{target} · {spec.kind}",
+                    self.company_report_age(instrument.id),
+                    "",
+                    key=instrument.id,
+                )
+        ids = [instrument.id for _target, instrument in rows]
         if self.state.company not in ids:
             self.state.company = ids[0] if ids else ""
-        selector = self.query_one("#research-company", OptionList)
-        with self.prevent(OptionList.OptionHighlighted):
-            selector.clear_options()
-            selector.add_options(
-                [
-                    Option(f"{getattr(i, 'name', '') or i.symbol} · {i.id}", id=i.id)
-                    for i in instruments
-                ]
-            )
-            if self.state.company in ids:
-                selector.highlighted = ids.index(self.state.company)
-        self.query_one("#research-company-pane", Pane).set_badge(
-            "" if len(ids) != 1 else "one company in this target"
-        )
+        self.state.target = next((t for t, i in rows if i.id == self.state.company), "")
+        self.query_one("#research-header", Pane).set_badge(str(len(ids)))
+        if self.state.company:
+            with self.prevent(RiggerTable.RowHighlighted):
+                table.move_cursor(row=ids.index(self.state.company))
         await self.load_company()
+
+    def company_report_age(self, company: str) -> Text:
+        """``date · age`` of the newest report, so the list answers "what is stale?"."""
+        paths = sorted((self.reports_dir() / company).glob("*.md"))
+        if not paths:
+            return Text("no report", style=self.app.theme_variables["text-muted"])
+        newest = paths[-1]
+        report = read_report(newest.with_suffix(".json"))
+        if report is not None:
+            as_of = report.as_of
+        else:
+            try:
+                as_of = datetime.strptime(newest.stem, "%Y-%m-%d").replace(tzinfo=UTC)
+            except ValueError:
+                return Text(newest.stem)
+        label, state = age_text(datetime.now(UTC) - as_of)
+        tokens = self.app.theme_variables
+        colour = {"ok": tokens["foreground"], "warn": tokens["text-warning"]}.get(
+            state, tokens["text-error"]
+        )
+        return Text.assemble(f"{newest.stem} ", (label, colour))
 
     async def load_company(self) -> None:
         self._rendered_company = self.state.company
@@ -346,10 +338,14 @@ class Research(RiggerScreen):
 
     async def on_data_table_row_highlighted(self, event: RiggerTable.RowHighlighted) -> None:
         value = str(event.row_key.value)
-        if event.data_table.id == "report-targets":
-            if value != self.state.target:
+        if event.data_table.id == "research-companies":
+            if value != self.state.company:
                 self.save_position()
-                await self.select_target(value)
+                self.state.company = value
+                self.state.target = next(
+                    (t for t, i in self.companies() if i.id == value), self.state.target
+                )
+                await self.load_company()
         elif value in self.items:
             self.view.selected = value
             self.view.inspected = ""
@@ -359,15 +355,6 @@ class Research(RiggerScreen):
         if event.data_table.id == "evidence-table":
             self.detail_open = True
             self.layout_views()
-
-    async def on_option_list_option_highlighted(self, event: OptionList.OptionHighlighted) -> None:
-        if not self.ready or event.option_list.id != "research-company":
-            return
-        company = str(event.option.id or "")
-        if company and company != self.state.company:
-            self.save_position()
-            self.state.company = company
-            await self.load_company()
 
     def render_kind(self) -> None:
         label = next((label for label, value in KINDS if value == self.view.kind), self.view.kind)
@@ -463,17 +450,18 @@ class Research(RiggerScreen):
         )
 
     def start_quotes(self, company: str) -> None:
-        """Stream a live quote for the company on screen.
+        """Stream live quotes for every company in the list.
 
-        Purely additive: the stored last close stays in the status line, so a
-        feed that never connects costs the reader nothing. Never awaited from
-        ``load_company`` — the panel must not block on the network.
+        Purely additive: the stored last close is what the report reads, so
+        a feed that never connects costs the reader nothing. Never awaited
+        from ``load_company`` — the panel must not block on the network.
         """
-        if self.feed_company == company and self.feed_task and not self.feed_task.done():
+        instruments = [instrument for _target, instrument in self.companies()]
+        signature = tuple(instrument.id for instrument in instruments)
+        if self.feed_company == signature and self.feed_task and not self.feed_task.done():
             return
         self.stop_quotes()
-        self.feed_company = company
-        instruments = [i for i in self.rig.universe() if i.id == company]
+        self.feed_company = signature
         if not instruments:
             return
         suffixes = DEFAULT_SUFFIXES | getattr(self.rig.cfg, "plugins", {}).get("yfinance", {}).get(
@@ -492,15 +480,16 @@ class Research(RiggerScreen):
             self.feed_task.cancel()
         self.feed_task = None
         self.feed = None
-        self.feed_company = ""
+        self.feed_company = ()
         self.quote_state = ""
 
     def on_quote_state(self, state: str) -> None:
         self.quote_state = state
 
-    def live_quote(self) -> str:
+    def live_quote(self, company: str | None = None) -> str:
         """The streamed price, when one has arrived; silent otherwise."""
-        quote = self.feed.quotes.get(self.feed_company) if self.feed else None
+        company = company or self.state.company
+        quote = self.feed.quotes.get(company) if self.feed else None
         if quote is None:
             return ""
         move = f" {quote.change_pct:+.2f}%" if quote.change_pct is not None else ""
@@ -508,13 +497,35 @@ class Research(RiggerScreen):
         return f"live: {quote.price:,.2f} {quote.currency}{move} ({age})"
 
     def render_status(self) -> None:
-        """One status line: activity while working, else the decision figures."""
+        """Live cells on the company rows; job progress in the pane's border."""
         if not self.is_mounted:
             return
-        text = self.state.activity or " · ".join(
-            part for part in (self.status_text, self.live_quote()) if part
+        header = self.query_one("#research-header", Pane)
+        header.set_hints(
+            f"[$text-warning]{self.state.activity}[/]"
+            if self.state.activity
+            else hint_markup(("↑↓", "select"), ("enter", "open"))
         )
-        self.query_one("#research-status", Static).update(text)
+        if not self.feed:
+            return
+        table = self.query_one("#research-companies", RiggerTable)
+        tokens = self.app.theme_variables
+        for company, quote in self.feed.quotes.items():
+            if company not in table.rows:
+                continue
+            pct = quote.change_pct
+            colour = (
+                tokens["text-success"]
+                if pct and pct > 0
+                else tokens["text-error"]
+                if pct and pct < 0
+                else tokens["text-muted"]
+            )
+            cell = Text.assemble(
+                f"{quote.price:,.2f} {quote.currency} ",
+                ("—" if pct is None else f"{pct:+.2f}%", colour),
+            )
+            table.update_cell(company, "live", cell, update_width=True)
 
     def reports_dir(self) -> Path:
         return Path(getattr(self.rig.cfg, "reports_dir", "reports"))
@@ -640,12 +651,15 @@ class Research(RiggerScreen):
             counts = section_counts(self.report) if self.report else ""
             badge = " · ".join(part for part in (path.stem, counts) if part)
         self.query_one("#report-doc", Pane).set_badge(badge)
+        companies = self.query_one("#research-companies", RiggerTable)
+        if company in companies.rows:
+            companies.update_cell(company, "report", self.company_report_age(company))
         self.show_report_meta(company, path)
         age_label = self.report_age(path)[0] if path else ""
         self.status_text = " · ".join(
             part
             for part in (
-                company or "Select a watch target and company",
+                company or "Select a company",
                 f"report: {path.stem} ({age_label})" if path else "report: none",
                 self.last_close(company),
             )
@@ -685,13 +699,8 @@ class Research(RiggerScreen):
         self.query_one("#report-doc").display = self.tab == "report"
         self.query_one("#evidence-list-pane").display = not (narrow and self.detail_open)
         self.query_one("#evidence-preview-pane").display = not narrow or self.detail_open
-        # Narrow: the company pane folds into the targets title so the header
-        # costs four rows, not twelve stacked.
-        header = self.query_one("#research-header", PaneRow)
-        header.set_class(narrow, "-narrow")
-        self.query_one("#research-company-pane").display = not narrow
-        targets_pane = self.query_one("#research-targets-pane", Pane)
-        targets_pane.set_badge(self.state.company if narrow else "")
+        # Narrow: two company rows instead of four, and shorter chip labels.
+        self.query_one("#research-header", Pane).set_class(narrow, "-narrow")
         for chip, short, long in (
             ("#research-refresh", "refresh", "refresh company"),
             ("#research-gather", "gather all", "gather all"),
@@ -727,7 +736,7 @@ class Research(RiggerScreen):
         self.dispatch("evidence-more")
 
     def action_focus_targets(self) -> None:
-        self.query_one("#report-targets", RiggerTable).focus()
+        self.query_one("#research-companies", RiggerTable).focus()
 
     def action_open_source(self) -> None:
         self.dispatch("evidence-open")

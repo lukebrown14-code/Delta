@@ -8,7 +8,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from sqlmodel import Session
 from textual.app import App
-from textual.widgets import Button, Input, Markdown, MarkdownViewer, OptionList, Static
+from textual.widgets import Button, Input, Markdown, MarkdownViewer, Static
 
 from rigger.core.db import NewsItemTable
 from rigger.core.json import to_json
@@ -19,14 +19,15 @@ from rigger.tui.screens.data import Data
 from rigger.tui.screens.reports import Reports
 from rigger.tui.screens.research import ResearchState
 from rigger.tui.theme import THEMES
+from rigger.tui.widgets import RiggerTable
 from tests.conftest import FakeLLM
 from tests.test_reports import INST, ScreenRig, _draft, _seed
 
 
 def pick_company(screen, company: str) -> None:
-    """Highlight a company in the header list, as the arrow keys would."""
-    companies = screen.query_one("#research-company", OptionList)
-    companies.highlighted = companies.get_option_index(company)
+    """Move the company-list cursor onto a row, as the arrow keys would."""
+    companies = screen.query_one("#research-companies", RiggerTable)
+    companies.move_cursor(row=companies.get_row_index(company))
 
 
 def setup_rig(tmp_engine, tmp_path, monkeypatch):
