@@ -12,7 +12,7 @@ theses, chat) keep their shape when mounted under any App.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any, ClassVar
 
@@ -29,6 +29,8 @@ from textual.reactive import reactive
 from textual.screen import ModalScreen
 from textual.widget import Widget
 from textual.widgets import Button, DataTable, Static
+
+from delta.tui.axes import nice_ticks, x_ticks
 
 #: Keys whose Textual name is not what a user would recognise on a keycap.
 KEY_DISPLAY = {"question_mark": "?", "escape": "esc", "slash": "/"}
@@ -631,6 +633,243 @@ class _BrailleRender:
             # vanishes — so it stays on the bright colour throughout.
             ratio = 1.0 if not self.fill or len(rows) == 1 else 1 - index / (len(rows) - 1)
             yield Segment(row, Style(color=low.blend(high, ratio).rich_color))
+            yield Segment.line()
+
+
+def _default_y_format(value: float) -> str:
+    """The default Y tick label: thousands-separated, two decimals."""
+    return f"{value:,.2f}"
+
+
+class PriceChart(BrailleGraph):
+    """A braille price line with a right-hand Y gutter and an X date axis.
+
+    The inspector's chart: the same dot grid as :class:`BrailleGraph` plus the
+    axes a price needs — Y ticks in a right gutter, a faint rule across the
+    middle tick's dot row, and up to three date labels on a ``┬`` rule. There
+    is deliberately no "now"/last-price marker: the pane's figures carry the
+    current price, and a dotted marker would fight the line for the same dots.
+
+    Callers set ``times`` and ``y_format`` first, then assign ``data`` (or call
+    ``refresh()``): the ``data`` assignment is the reactive that repaints, so a
+    series set before its labels would repaint once under stale settings.
+    ``times`` are ISO stamps aligned with ``data`` and may be empty (the rule
+    row goes plain).
+
+    Sizing: ``H`` rows of height give ``H - 2`` braille rows plus the rule and
+    label rows; under three rows it degrades to a bare braille line. The
+    gutter is ``2 + widest tick label`` cells wide and hides before it would
+    squeeze the plot under 12 cells. The line reuses BrailleGraph's component
+    classes; ``price-chart--grid`` draws the faint gridline and unused gutter
+    rules, ``price-chart--axis`` the rule row and its labels.
+    """
+
+    COMPONENT_CLASSES: ClassVar[set[str]] = {
+        "price-chart--grid",
+        "price-chart--axis",
+    }
+
+    DEFAULT_CSS = """
+    PriceChart {
+        height: 8;
+    }
+    PriceChart > .braille-graph--low-color { color: $primary; }
+    PriceChart > .braille-graph--high-color { color: $text-primary; }
+    PriceChart > .price-chart--grid { color: $text-disabled; }
+    PriceChart > .price-chart--axis { color: $text-muted; }
+    """
+
+    def __init__(
+        self,
+        data: Sequence[float] | None = None,
+        *,
+        id: str | None = None,
+        classes: str = "",
+    ) -> None:
+        super().__init__(id=id, classes=classes)
+        self.times: list[str] = []
+        self.y_format: Callable[[float], str] = _default_y_format
+        # Last: the reactive assignment is what schedules the first repaint.
+        self.data = list(data or [])
+
+    def _plot_cells(self, columns: int, rows: int, low: float, span: float) -> list[list[int]]:
+        """Braille bitmaps for the line: one sampled point per dot column.
+
+        BrailleGraph's grid build, but mapped on the scale the ticks name
+        rather than the sampled extremes: with labels on the axis, a tick and
+        the dots it describes cannot afford to disagree by a bucket mean.
+        """
+        dot_rows = rows * 4
+        grid = [[0] * columns for _ in range(rows)]
+        for x, value in enumerate(self._sample(columns * 2)):
+            top = dot_rows - 1 - int(round((value - low) / span * (dot_rows - 1)))
+            for y in range(top, dot_rows) if self.fill else (top,):
+                grid[y // 4][x // 2] |= self.DOTS[x % 2][y % 4]
+        return grid
+
+    def rows(self, width: int, height: int) -> list[str]:
+        """The chart as ``height`` strings of ``width`` columns.
+
+        Unlike :class:`BrailleGraph` (whose width is braille cells), width
+        here is widget columns: the braille plot plus the gutter when shown.
+        """
+        return ["".join(text for text, _ in row) for row in self._runs(width, height)]
+
+    def _runs(self, width: int, height: int) -> list[list[tuple[str, str]]]:
+        """Layout as per-line ``(text, style kind)`` runs, ready to paint.
+
+        Pure — no app state — so tests assert layout without mounting an App.
+        Kinds: ``line`` (the price line), ``grid`` (faint gridline and unused
+        gutter rules), ``axis`` (rule row, tick labels) and ``blank`` (empty
+        cells, styled but invisible).
+        """
+        if width < 1 or height < 1:
+            return []
+        if height < 3:
+            # No room for the rule and label rows: a bare line, BrailleGraph's
+            # own shape.
+            if not self.data:
+                return [[(self.EMPTY * width, "line")] for _ in range(height)]
+            low, high = min(self.data), max(self.data)
+            cells = self._plot_cells(width, height, low, (high - low) or 1.0)
+            return [[("".join(chr(0x2800 + cell) for cell in row), "line")] for row in cells]
+
+        plot_rows = height - 2
+        dot_rows = plot_rows * 4
+        if not self.data:
+            # Nothing to scale: blank rows over a bare rule keep the pane's
+            # height rhythm instead of inventing an axis for nothing.
+            return (
+                [[(self.EMPTY * width, "blank")] for _ in range(plot_rows)]
+                + [[("└" + "─" * max(width - 2, 0) + "┘", "axis")]]
+                + [[(" " * width, "blank")]]
+            )
+
+        low, high = min(self.data), max(self.data)
+        span = (high - low) or 1.0
+        ticks = nice_ticks(low, high, 3)
+        labels = [self.y_format(tick) for tick in ticks]
+        gutter = 2 + max(map(len, labels))
+        plot = width - gutter
+        if plot < 12:
+            # A gutter that starves the line hides entirely: the shape carries
+            # the meaning, the labels are secondary. Real price labels make
+            # this every width under 20.
+            plot, gutter = width, 0
+        cells = self._plot_cells(plot, plot_rows, low, span)
+        # One label per text row: a tick owns the gutter row its dot lands on.
+        tick_rows: dict[int, str] = {}
+        for tick, label in zip(ticks, labels, strict=True):
+            row = (dot_rows - 1 - int(round((tick - low) / span * (dot_rows - 1)))) // 4
+            tick_rows[row] = label
+        # Only the middle tick draws a rule across its dot row: the outer
+        # ticks sit on the box edges, where dots would read as a border.
+        grid_dot_row = -1
+        if len(ticks) > 2:
+            grid_dot_row = dot_rows - 1 - int(round((ticks[1] - low) / span * (dot_rows - 1)))
+        grid_mask = (
+            self.DOTS[0][grid_dot_row % 4] | self.DOTS[1][grid_dot_row % 4]
+            if 0 <= grid_dot_row < dot_rows
+            else 0
+        )
+        runs: list[list[tuple[str, str]]] = []
+        for index in range(plot_rows):
+            on_grid = bool(grid_mask) and grid_dot_row // 4 == index
+            row_runs: list[tuple[str, str]] = []
+            parts: list[str] = []
+            kind = ""
+            for cell in cells[index]:
+                # A braille cell is one glyph with one style, so a cell the
+                # line dotted yields to the line whole: the gridline stops at
+                # those cells rather than repainting line dots as grid.
+                text, cell_kind = (
+                    (chr(0x2800 + cell), "line")
+                    if cell
+                    else ((chr(0x2800 + grid_mask), "grid") if on_grid else (self.EMPTY, "blank"))
+                )
+                if cell_kind == kind:
+                    parts.append(text)
+                    continue
+                if parts:
+                    row_runs.append(("".join(parts), kind))
+                parts, kind = [text], cell_kind
+            if parts:
+                row_runs.append(("".join(parts), kind))
+            if gutter:
+                label = tick_rows.get(index)
+                row_runs.append(
+                    ("┤ " + label.rjust(gutter - 2), "axis")
+                    if label is not None
+                    else ("│" + " " * (gutter - 1), "grid")
+                )
+            runs.append(row_runs)
+        # Rule and label rows. Without the gutter the rule shrinks to fit the
+        # widget; the line stays full width.
+        xaxis = x_ticks(self.times, plot)
+        rule_cells = plot if gutter else max(width - 2, 0)
+        rule = ["─"] * rule_cells
+        for column, _ in xaxis:
+            if column < rule_cells:
+                rule[column] = "┬"
+        rule_row = "└" + "".join(rule) + "┘"
+        runs.append([(rule_row, "axis"), (" " * max(width - len(rule_row), 0), "blank")])
+        canvas: list[str] = [" "] * plot
+        cursor = 0
+        for column, label in xaxis:
+            # Centre each label on its tick, clamped inside the plot and past
+            # the label before it; x_ticks spaces ticks so this rarely bites.
+            start = max(min(column - len(label) // 2, plot - len(label)), cursor)
+            canvas[start : start + len(label)] = label
+            cursor = start + len(label)
+        runs.append([("".join(canvas) + " " * max(width - plot, 0), "axis")])
+        return runs
+
+    def render(self) -> RenderResult:
+        base = self.background_colors[1]
+        return _PriceChartRender(
+            self._runs(self.size.width, self.size.height),
+            low=(base + self.get_component_styles("braille-graph--low-color").color).rich_color,
+            high=(base + self.get_component_styles("braille-graph--high-color").color).rich_color,
+            grid=(base + self.get_component_styles("price-chart--grid").color).rich_color,
+            axis=(base + self.get_component_styles("price-chart--axis").color).rich_color,
+            fill=self.fill,
+        )
+
+
+@dataclass
+class _PriceChartRender:
+    """Segments for :class:`PriceChart`.
+
+    The same per-line convention as :class:`_BrailleRender` — one segment run
+    per styled span, one ``Segment.line()`` per row — because Textual paints a
+    widget line by line and only that survives. Rows carry ``(text, kind)``
+    runs: a gridline breaking around the line means a braille row can need two
+    differently-styled runs, which a single-colour string cannot express.
+    """
+
+    rows: list[list[tuple[str, str]]]
+    low: RichColor
+    high: RichColor
+    grid: RichColor
+    axis: RichColor
+    fill: bool
+
+    def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
+        low, high = Color.from_rich_color(self.low), Color.from_rich_color(self.high)
+        flat = {
+            "grid": Style(color=self.grid),
+            "axis": Style(color=self.axis),
+            "blank": Style(),
+        }
+        for index, row in enumerate(self.rows):
+            # BrailleGraph's per-row blend; a bare line has no mass to shade,
+            # so it rides the bright end unless filled.
+            ratio = (
+                1.0 if not self.fill or len(self.rows) == 1 else 1 - index / (len(self.rows) - 1)
+            )
+            line = Style(color=low.blend(high, ratio).rich_color)
+            for text, kind in row:
+                yield Segment(text, flat.get(kind, line))
             yield Segment.line()
 
 

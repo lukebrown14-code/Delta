@@ -18,6 +18,9 @@ class AssetMetrics:
     values: dict[str, str] = field(default_factory=dict)
     groups: dict[str, dict[str, str]] = field(default_factory=dict)
     series: list[float] = field(default_factory=list)
+    # ISO timestamps parallel to `series` (same length, same order) so the
+    # chart can label its X axis without re-fetching history.
+    series_times: list[str] = field(default_factory=list)
     change_label: str = ""
     fetched_at: datetime | None = None
     source: str = "Yahoo Finance"
@@ -61,21 +64,37 @@ def fetch_asset_metrics(
         if range_name == "day" and (history is None or history.empty):
             history = ticker.history(period="5d", interval="1d", auto_adjust=True)
         closes: list[float] = []
-        if range_name == "all" and engine is not None:
+        times: list[str] = []
+        if history is not None and not history.empty:
+            # Build closes and times in one pass over the dropped-NaN column,
+            # so the two lists can never desync.
+            clean = history["Close"].dropna()
+            for ts, value in zip(clean.index, clean.tolist(), strict=True):
+                times.append(str(ts))
+                closes.append(float(value))
+        elif range_name == "all" and engine is not None:
+            # The provider gave nothing: fall back to the locally stored bars
+            # rather than showing an empty chart. They must never be merged
+            # into a non-empty provider series — provider "max" already spans
+            # those dates, and prepending recent bars would corrupt the
+            # first-to-last change and the chart's time order.
             from sqlmodel import Session, select
 
             with Session(engine) as session:
                 local = session.exec(
-                    select(BarTable.close)
+                    select(BarTable.ts, BarTable.close)
                     .where(BarTable.instrument_id == instrument.id)
                     .order_by(BarTable.ts)
                 ).all()
-            closes.extend(float(value) for value in local if value is not None)
+            # One loop appends ts and close together, so they stay parallel.
+            for ts, close in local:
+                if close is None:
+                    continue
+                times.append(str(ts))
+                closes.append(float(close))
         result.series = closes
-        if history is not None and not history.empty:
-            closes.extend(float(value) for value in history["Close"].dropna().tolist())
-            result.series = closes
-            result.series = closes
+        result.series_times = times
+        if closes:
             if len(closes) > 1:
                 returns = [
                     current / previous - 1
@@ -87,15 +106,14 @@ def fetch_asset_metrics(
                     result.volatility = (
                         sum((value - mean) ** 2 for value in returns) / len(returns)
                     ) ** 0.5
-            result.period_high = max(closes) if closes else None
-            result.period_low = min(closes) if closes else None
-            if len(history.index):
+            result.period_high = max(closes)
+            result.period_low = min(closes)
+            if history is not None and not history.empty and len(history.index):
                 result.history_start = str(history.index[0])
                 result.history_end = str(history.index[-1])
-            if closes:
-                result.values["Current yield" if result.profile == "bond" else "Current price"] = (
-                    f"{closes[-1]:,.2f}"
-                )
+            result.values["Current yield" if result.profile == "bond" else "Current price"] = (
+                f"{closes[-1]:,.2f}"
+            )
             if len(closes) > 1:
                 if result.profile == "bond":
                     result.change_label = f"{(closes[-1] - closes[0]) * 100:+.1f} bps"
@@ -236,5 +254,13 @@ def _group_values(profile: str, info: dict[str, Any]) -> dict[str, dict[str, str
     return grouped
 
 
-def chart_window(series: list[float], days: int | None = 30) -> list[float]:
-    return series if days is None else series[-days:]
+def chart_window(
+    series: list[float], days: int | None = 30, times: list[str] | None = None
+) -> tuple[list[float], list[str]]:
+    """The trailing window of the series, slicing values and timestamps together."""
+    window = series if days is None else series[-days:]
+    # Times ride along only when complete and aligned with `series`; a partial
+    # or absent list would mislabel the chart's X axis, so it is dropped whole.
+    if times is None or len(times) != len(series):
+        return window, []
+    return window, (times if days is None else times[-days:])

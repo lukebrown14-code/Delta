@@ -98,8 +98,9 @@ class DeltaApp(App):
     TITLE = "Delta"
     CSS_PATH = "delta.tcss"
     BINDINGS = [
-        Binding("1", "switch_screen('targets')", "Watchlist", tooltip="Manage what is watched"),
-        Binding("2", "switch_screen('data')", "Research", tooltip="Read reports and evidence"),
+        Binding("1", "switch_screen('home')", "Home", tooltip="Desk overview"),
+        Binding("2", "switch_screen('targets')", "Watchlist", tooltip="Manage what is watched"),
+        Binding("3", "switch_screen('data')", "Research", tooltip="Read reports and evidence"),
         Binding("4", "switch_screen('theses')", "Theses", tooltip="Track claims and evidence"),
         Binding("5", "switch_screen('chat')", "Ask", tooltip="Grounded Q&A over evidence"),
         Binding("6", "switch_screen('decisions')", "Decisions", tooltip="Record and review decision context"),

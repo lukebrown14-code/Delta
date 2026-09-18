@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from contextlib import suppress
 from datetime import UTC, datetime
+from functools import partial
 from typing import Any
 
 from rich.table import Table
@@ -12,21 +13,29 @@ from rich.text import Text
 from textual import work
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
-from textual.widgets import Button, Input, Label, OptionList, Static
+from textual.widgets import Button, Input, Label, OptionList, Select, Static
 from textual.widgets.option_list import Option
 
 from delta import services
-from delta.asset_metrics import AssetMetrics, chart_window, fetch_asset_metrics
+from delta.asset_metrics import (
+    AssetMetrics,
+    chart_window,
+    fetch_asset_metrics,
+    profile_for,
+)
 from delta.core.models import Instrument
+from delta.core.plugin import MarketPlugin, discover_plugins
 from delta.plugins.data.yfinance import DEFAULT_SUFFIXES
 from delta.quotes import SearchResult, YahooQuotes, canonical_symbol, yahoo_search
+from delta.targets import DEFAULT_KIND, KNOWN_KINDS
+from delta.tui.axes import format_price
 from delta.tui.shell import DeltaScreen, age_text
 from delta.tui.widgets import (
     MODAL_WIDTH,
-    BrailleGraph,
     Dialog,
     Pane,
     PaneRow,
+    PriceChart,
     hint_markup,
     token_color,
 )
@@ -62,31 +71,64 @@ def _friendly_date_range(start: str | None, end: str | None) -> str:
 
 
 class TargetAddModal(Dialog):
-    """Centred terminal form for adding one target to the watchlist."""
+    """Centred search-first form for adding one target to the watchlist.
+
+    Type in the name field and suggestions browse *without leaving the
+    input*: arrows move the highlight, typing keeps filtering, enter picks
+    and enter again saves. Kind, asset class, market and tickers are derived
+    from the picked result; ctrl+t unfolds the advanced fields to override
+    them or add more tickers and tags.
+    """
 
     dialog_title = "add to watchlist"
-    dialog_hint = hint_markup(("enter", "save"), ("esc", "cancel"))
+    dialog_hint = hint_markup(
+        ("↑↓", "choose"), ("enter", "pick · save"), ("ctrl+t", "more"), ("esc", "cancel")
+    )
     dialog_width = MODAL_WIDTH
 
-    DEFAULT_CSS = """
-    TargetAddModal #tg-form { height: auto; }
-    TargetAddModal .tg-field { height: 3; }
-    TargetAddModal .tg-field Label { width: 10; padding: 1 0; color: $text-muted; }
-    TargetAddModal .tg-field Input { width: 1fr; margin: 0; }
-    TargetAddModal #tg-network { height: 1; color: $text-muted; content-align-horizontal: center; }
-    TargetAddModal #tg-network.-online { color: $text-success; }
-    TargetAddModal #tg-network.-offline { color: $text-warning; }
-    TargetAddModal #tg-suggestions { display: none; height: auto; max-height: 6; margin: 0 0 1 10; background: $panel; }
-    TargetAddModal #tg-modal-actions { height: 1; margin-top: 1; }
-    TargetAddModal #tg-modal-actions Button { height: 1; min-width: 0; border: none; padding: 0 1; margin: 0 1 0 0; }
+    BINDINGS = [("ctrl+t", "toggle_more", "More fields")]
+
+    #: Seconds to let the user finish a thought before asking Yahoo.
+    SEARCH_DEBOUNCE = 0.3
+    #: Suggestion rows kept in reserve even while empty, so the form never
+    #: reflows under the cursor when the dropdown appears or closes.
+    SUGGESTION_ROWS = 4
+    #: Suggestions shown at most; local matches are pinned ahead of remote.
+    RESULT_CAP = 8
+
+    DEFAULT_CSS = f"""
+    TargetAddModal #tg-form {{ height: auto; }}
+    TargetAddModal .tg-field {{ height: 3; }}
+    TargetAddModal .tg-field Label {{ width: 10; padding: 1 0; color: $text-muted; }}
+    TargetAddModal .tg-field Input {{ width: 1fr; margin: 0; }}
+    TargetAddModal .tg-field Select {{ width: 1fr; margin: 0; }}
+    TargetAddModal #tg-network {{ height: 1; color: $text-muted; content-align-horizontal: center; }}
+    TargetAddModal #tg-network.-online {{ color: $text-success; }}
+    TargetAddModal #tg-network.-offline {{ color: $text-warning; }}
+    TargetAddModal #tg-suggestions {{
+        height: {SUGGESTION_ROWS};
+        margin: 0 0 0 10;
+        border: none;
+        background: $panel;
+        scrollbar-size-horizontal: 0;
+    }}
+    TargetAddModal #tg-summary {{ height: 1; margin: 0 0 0 10; color: $text-muted; }}
+    TargetAddModal #tg-advanced {{ display: none; }}
+    TargetAddModal.-more #tg-advanced {{ display: block; }}
+    TargetAddModal #tg-modal-actions {{ height: 1; margin-top: 1; }}
+    TargetAddModal #tg-modal-actions Button {{
+        height: 1; min-width: 0; border: none; padding: 0 1; margin: 0 1 0 0;
+    }}
     """
 
     def __init__(self, delta: Any) -> None:
         super().__init__()
         self.delta = delta
         self._search_task: asyncio.Task | None = None
+        self._search_timer: Any = None
         self._search_generation = 0
-        self._results_by_symbol: dict[str, SearchResult] = {}
+        self._results_by_key: dict[str, SearchResult] = {}
+        self._highlight = 0
         self._suppress_name_search = False
         self._suffixes = DEFAULT_SUFFIXES | getattr(self.delta.cfg, "plugins", {}).get(
             "yfinance", {}
@@ -97,49 +139,110 @@ class TargetAddModal(Dialog):
                 for name, profile in getattr(self.delta.cfg, "markets", {}).items()
             }
         )
+        self._watched = self._watched_pairs()
+        # Configured market profiles and discovered market plugins are both
+        # real markets; a target may name either.
+        configured = set(getattr(self.delta.cfg, "markets", {}) or {})
+        plugin_markets = {
+            name for name, plugin in discover_plugins().items() if isinstance(plugin, MarketPlugin)
+        }
+        self._markets = sorted(plugin_markets | configured) or ["us"]
 
     def _currency(self, market: str) -> str:
         profile = getattr(self.delta.cfg, "markets", {}).get(market.lower())
         return profile.currency if profile else ""
 
     def compose_dialog(self) -> ComposeResult:
-        fields = []
-        for field, label, placeholder in (
-            ("name", "Name", "company or ticker"),
-            ("kind", "Kind", "company"),
-            ("asset-class", "Asset", "equity / crypto / etf"),
-            ("market", "Market", "us / asx"),
-            ("tickers", "Tickers", "BHP,RIO"),
-            ("tags", "Tags", "resources,income"),
-        ):
-            fields.append(
-                Horizontal(
-                    Label(label),
-                    Input(placeholder=placeholder, id=f"tg-{field}"),
-                    classes="tg-field",
-                )
-            )
-            if field == "name":
-                fields.append(OptionList(id="tg-suggestions"))
         yield Static("◌ Yahoo lookup ready", id="tg-network", markup=False)
-        yield Vertical(*fields, id="tg-form")
+        yield Vertical(
+            Horizontal(
+                Label("Name"),
+                Input(placeholder="company or ticker — type to search", id="tg-name"),
+                classes="tg-field",
+            ),
+            OptionList(id="tg-suggestions"),
+            Static("", id="tg-summary", markup=False),
+            Vertical(
+                Horizontal(
+                    Label("Kind"),
+                    Select(
+                        [(kind.title(), kind) for kind in KNOWN_KINDS],
+                        value=DEFAULT_KIND,
+                        allow_blank=False,
+                        id="tg-kind",
+                    ),
+                    classes="tg-field",
+                ),
+                Horizontal(
+                    Label("Asset"),
+                    Select(
+                        [(asset.title(), asset) for asset in ASSET_CLASS_ORDER],
+                        value="equity",
+                        allow_blank=False,
+                        id="tg-asset-class",
+                    ),
+                    classes="tg-field",
+                ),
+                Horizontal(
+                    Label("Market"),
+                    Select(
+                        [(market.upper(), market) for market in self._markets],
+                        value="us" if "us" in self._markets else self._markets[0],
+                        allow_blank=False,
+                        id="tg-market",
+                    ),
+                    classes="tg-field",
+                ),
+                Horizontal(
+                    Label("Tickers"),
+                    Input(placeholder="BHP,RIO", id="tg-tickers"),
+                    classes="tg-field",
+                ),
+                Horizontal(
+                    Label("Tags"),
+                    Input(placeholder="resources,income", id="tg-tags"),
+                    classes="tg-field",
+                ),
+                id="tg-advanced",
+            ),
+            id="tg-form",
+        )
         yield Horizontal(
             Button("Save", id="tg-add", variant="primary"),
             Button("Cancel", id="tg-close"),
             id="tg-modal-actions",
         )
 
+    # ----- lookups --------------------------------------------------------
+
     def _value(self, field: str) -> str:
         return self.query_one(f"#tg-{field}", Input).value.strip()
 
-    def on_mount(self) -> None:
-        self.query_one("#tg-name", Input).focus()
+    def _select_value(self, field: str) -> str:
+        value = self.query_one(f"#tg-{field}", Select).value
+        return str(value) if value is not None else ""
 
-    def _set_network(self, text: str, state: str) -> None:
-        indicator = self.query_one("#tg-network", Static)
-        indicator.remove_class("-online", "-offline", "-pending")
-        indicator.add_class(f"-{state}")
-        indicator.update(text)
+    def _set_select(self, field: str, value: str) -> None:
+        """Adopt a searched value when the select offers it; never guess."""
+        with suppress(Exception):
+            self.query_one(f"#tg-{field}", Select).value = value
+
+    def _watched_pairs(self) -> set[tuple[str, str]]:
+        """``(market, canonical ticker)`` for every ticker already watched."""
+        pairs: set[tuple[str, str]] = set()
+        with suppress(Exception):
+            for target in services.target_specs().values():
+                for market in target.markets:
+                    for symbol in target.tickers:
+                        pairs.add((market.casefold(), symbol.upper()))
+        return pairs
+
+    def _result_key(self, result: SearchResult) -> str:
+        return f"{result.market.casefold()}:{result.symbol.casefold()}"
+
+    def _is_watched(self, result: SearchResult) -> bool:
+        canonical = canonical_symbol(result.symbol, result.market, self._suffixes)
+        return (result.market.casefold(), canonical) in self._watched
 
     def _local_results(self, query: str) -> list[SearchResult]:
         needle = query.casefold()
@@ -173,24 +276,41 @@ class TargetAddModal(Dialog):
                         asset_class=getattr(inst, "asset_class", "equity"),
                     )
                 )
-        return results[:8]
+        return results[: self.RESULT_CAP]
+
+    def _merged_results(self, remote: list[SearchResult], query: str) -> list[SearchResult]:
+        """Local matches pinned first, remote appended, de-duped by listing."""
+        seen: set[str] = set()
+        merged: list[SearchResult] = []
+        for result in (*self._local_results(query), *remote):
+            key = self._result_key(result)
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(result)
+        return merged[: self.RESULT_CAP]
 
     def _show_results(self, results: list[SearchResult]) -> None:
         options = self.query_one("#tg-suggestions", OptionList)
         options.clear_options()
-        self._results_by_symbol = {result.symbol: result for result in results}
+        self._results_by_key = {self._result_key(result): result for result in results}
         for result in results:
             exchange = f" · {result.exchange}" if result.exchange else ""
-            options.add_option(
-                Option(
-                    f"{result.symbol} — {result.name} · {result.market.upper()}{exchange}",
-                    id=result.symbol,
-                )
-            )
-        options.display = bool(results)
+            prompt = Text(f"{result.symbol} — {result.name} · {result.market.upper()}{exchange}")
+            if self._is_watched(result):
+                prompt.append("  ✓ watched", style=token_color(self.app, "text-success"))
+            options.add_option(Option(prompt, id=self._result_key(result)))
+        self._highlight = 0
+        if results:
+            options.highlighted = 0
+
+    def _set_network(self, text: str, state: str) -> None:
+        indicator = self.query_one("#tg-network", Static)
+        indicator.remove_class("-online", "-offline", "-pending")
+        indicator.add_class(f"-{state}")
+        indicator.update(text)
 
     async def _search(self, query: str, generation: int) -> None:
-        self._show_results(self._local_results(query))
         try:
             results = await yahoo_search(query)
         except Exception:
@@ -199,73 +319,140 @@ class TargetAddModal(Dialog):
             return
         if generation != self._search_generation:
             return
-        self._set_network("● online · Yahoo", "online")
-        supported = [result for result in results if result.market in self._suffixes]
-        self._show_results(supported or self._local_results(query))
+        merged = self._merged_results(results, query)
+        self._set_network(f"● online · Yahoo · {len(merged)} matches", "online")
+        self._show_results(merged)
+
+    def on_mount(self) -> None:
+        self.query_one("#tg-name", Input).focus()
+        # Suggestions are browsed through the name field's arrows; the list
+        # itself must never steal focus or tab stops.
+        self.query_one("#tg-suggestions", OptionList).can_focus = False
+        self._update_summary()
+
+    # ----- reactions ------------------------------------------------------
 
     def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id == "tg-tickers":
+            self._update_summary()
+            return
         if event.input.id != "tg-name":
             return
         if self._suppress_name_search:
             self._suppress_name_search = False
             return
         self._search_generation += 1
-        if self._search_task:
-            self._search_task.cancel()
+        generation = self._search_generation
+        if self._search_timer:
+            self._search_timer.stop()
+            self._search_timer = None
         query = event.value.strip()
-        if not query:
-            self.query_one("#tg-suggestions", OptionList).display = False
-            self._set_network("◌ Yahoo lookup ready", "pending")
-            return
         if len(query) < 2:
-            self.query_one("#tg-suggestions", OptionList).display = False
+            self._show_results([])
             self._set_network("◌ type 2+ characters", "pending")
             return
-        # Show local matches immediately while the debounced Yahoo lookup runs.
-        self._show_results(self._local_results(query))
+        # Local matches paint instantly; the debounced Yahoo lookup follows.
+        self._show_results(self._merged_results([], query))
         self._set_network("◌ searching Yahoo…", "pending")
-        self._search_task = asyncio.create_task(self._search(query, self._search_generation))
+        self._search_timer = self.set_timer(
+            self.SEARCH_DEBOUNCE, lambda: self._kick_search(query, generation)
+        )
 
-    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
-        symbol = event.option.id
-        if not symbol:
-            return
-        selected = self._results_by_symbol.get(str(symbol))
-        if selected is None:
-            # A remote-only result is represented by its symbol; the market
-            # defaults to US until the user changes it.
-            self.query_one("#tg-tickers", Input).value = str(symbol)
-            self.query_one("#tg-market", Input).value = "us"
-            self.query_one("#tg-asset-class", Input).value = "equity"
-        else:
-            self._suppress_name_search = True
-            self.query_one("#tg-name", Input).value = selected.name
-            self.query_one("#tg-tickers", Input).value = selected.symbol
-            self.query_one("#tg-market", Input).value = selected.market
-            self.query_one("#tg-asset-class", Input).value = selected.asset_class
-        self.query_one("#tg-suggestions", OptionList).display = False
-        self.query_one("#tg-kind", Input).focus()
+    def _kick_search(self, query: str, generation: int) -> None:
+        if self._search_task:
+            self._search_task.cancel()
+        self._search_task = asyncio.create_task(self._search(query, generation))
+
+    def on_select_changed(self, event: Select.Changed) -> None:
+        self._update_summary()
 
     def on_key(self, event: Any) -> None:
-        control = getattr(event, "control", None) or self.focused
-        if (
-            event.key in {"down", "up"}
-            and getattr(control, "id", None) == "tg-name"
-            and self.query_one("#tg-suggestions", OptionList).display
-        ):
-            event.stop()
+        """Arrows browse the suggestions while the name input keeps focus."""
+        if getattr(self.focused, "id", None) != "tg-name":
+            return
+        options = self.query_one("#tg-suggestions", OptionList)
+        count = len(options.options)
+        if not count or event.key not in {"down", "up"}:
+            return
+        event.stop()
+        event.prevent_default()
+        delta = 1 if event.key == "down" else -1
+        self._highlight = (self._highlight + delta) % count
+        options.highlighted = self._highlight
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        if getattr(event.option_list, "id", None) != "tg-suggestions":
+            return
+        if not event.option.id:
+            return
+        event.stop()
+        self._pick(str(event.option.id))
+
+    def _pick(self, key: str) -> None:
+        """Adopt a suggestion: name, tickers, market and asset class fill in."""
+        result = self._results_by_key.get(key)
+        if result is None:
+            # Results refreshed mid-flight and the object is gone; recover the
+            # market from the option key rather than silently defaulting to US.
+            market, _, symbol = key.partition(":")
+            result = SearchResult(symbol.upper(), symbol.upper(), market or "us", "")
+        self._suppress_name_search = True
+        self.query_one("#tg-name", Input).value = result.name or result.symbol
+        self.query_one("#tg-tickers", Input).value = canonical_symbol(
+            result.symbol, result.market, self._suffixes
+        )
+        self._set_select("market", result.market)
+        self._set_select("asset-class", result.asset_class)
+        self._close_suggestions()
+        self.query_one("#tg-name", Input).focus()
+
+    def _close_suggestions(self) -> None:
+        self._show_results([])
+        self._set_network("◌ Yahoo lookup ready", "pending")
+
+    def _update_summary(self) -> None:
+        """One honest line under the field: exactly what save will write."""
+        market = self._select_value("market")
+        tickers = ", ".join(
+            canonical_symbol(token, market, self._suffixes)
+            for token in self._value("tickers").split(",")
+            if token.strip()
+        )
+        title = self._value("name") or "untitled"
+        self.query_one("#tg-summary", Static).update(
+            f"→ {title} · {self._select_value('kind') or DEFAULT_KIND}"
+            f" · {market.upper() if market else '—'}:{tickers or '—'}"
+            f" · {self._select_value('asset-class') or 'equity'}"
+        )
+
+    # ----- keys and lifecycle ---------------------------------------------
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        event.stop()
+        # Pick, then confirm: enter with suggestions open adopts one; the
+        # next enter (or enter on an empty dropdown) saves.
+        if event.input.id == "tg-name" and self._results_by_key:
             options = self.query_one("#tg-suggestions", OptionList)
-            options.highlighted = 0 if event.key == "down" else max(0, len(options.options) - 1)
-            options.focus()
+            index = min(self._highlight, len(options.options) - 1)
+            option = options.options[index]
+            if option.id:
+                self._pick(str(option.id))
+                return
+        self._save()
+
+    def action_toggle_more(self) -> None:
+        self.set_class(not self.has_class("-more"), "-more")
 
     async def on_unmount(self) -> None:
+        if self._search_timer:
+            self._search_timer.stop()
         if self._search_task:
             self._search_task.cancel()
 
     def _save(self) -> None:
         name = self._value("name")
-        market = self._value("market")
-        asset_class = self._value("asset-class").casefold() or "equity"
+        market = self._select_value("market")
+        asset_class = self._select_value("asset-class") or "equity"
         if not name or not market:
             self.notify("name and market are required", severity="error")
             return
@@ -275,9 +462,10 @@ class TargetAddModal(Dialog):
                 for s in self._value("tickers").split(",")
                 if s.strip()
             ]
+            duplicates = sorted({t for t in tickers if (market.casefold(), t) in self._watched})
             services.add_target(
                 name,
-                kind=self._value("kind") or "company",
+                kind=self._select_value("kind") or DEFAULT_KIND,
                 market=market,
                 tickers=tickers,
                 tags=[s.strip() for s in self._value("tags").split(",") if s.strip()],
@@ -286,13 +474,14 @@ class TargetAddModal(Dialog):
         except (ValueError, KeyError) as exc:
             self.notify(str(exc), severity="error")
             return
+        if duplicates:
+            self.notify(
+                f"{' , '.join(duplicates)} already watched elsewhere",
+                severity="warning",
+            )
         self.dismiss(name)
 
-    def on_input_submitted(self, event: Input.Submitted) -> None:
-        event.stop()
-        self._save()
-
-    async def on_button_pressed(self, event: Button.Pressed) -> None:
+    def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "tg-add":
             self._save()
         elif event.button.id == "tg-close":
@@ -306,10 +495,9 @@ class TargetAddModal(Dialog):
             self.dismiss(None)
 
     def action_dismiss_dialog(self) -> None:
-        suggestions = self.query_one("#tg-suggestions", OptionList)
-        focused = self.focused
-        if suggestions.display or getattr(focused, "id", None) == "tg-name":
-            suggestions.display = False
+        """Escape: close the suggestions first, the dialog second."""
+        if self._results_by_key:
+            self._close_suggestions()
             self.query_one("#tg-name", Input).focus()
             return
         self.dismiss(None)
@@ -353,8 +541,7 @@ class Targets(DeltaScreen):
     #target-chart-change { width: auto; text-style: bold; }
     #target-chart-change.-up { color: $text-success; }
     #target-chart-change.-down { color: $text-error; }
-    #target-chart { width: 1fr; height: 6; padding: 0 1; background: $panel; }
-    #target-chart-axis { width: 1fr; height: 1; color: $text-muted; margin: 0 0 1 0; }
+    #target-chart { width: 1fr; height: 8; padding: 0 1; background: $panel; }
     #target-metric-grid { width: 1fr; height: auto; layout: grid; grid-size: 2; grid-columns: 1fr 1fr; grid-gutter: 0 1; }
     Targets.-narrow #target-metric-grid { grid-size: 1; grid-columns: 1fr; }
     .metric-card { height: auto; padding: 0 1; }
@@ -407,8 +594,7 @@ class Targets(DeltaScreen):
                     with Horizontal(id="target-chart-header"):
                         yield Static("price · month", id="target-chart-label", markup=False)
                         yield Static("", id="target-chart-change", markup=False)
-                    yield BrailleGraph([], id="target-chart")
-                    yield Static("", id="target-chart-axis", markup=False)
+                    yield PriceChart([], id="target-chart")
                     with Vertical(id="target-metric-grid"):
                         for index in range(4):
                             with Pane(classes="metric-card -auto", id=f"metric-card-{index}"):
@@ -613,7 +799,6 @@ class Targets(DeltaScreen):
         status = self.query_one("#target-inspector-status", Static)
         hero = self.query_one("#target-inspector-hero", Static)
         chart_change = self.query_one("#target-chart-change", Static)
-        axis = self.query_one("#target-chart-axis", Static)
         source = self.query_one("#target-inspector-source", Static)
         cards = [
             (
@@ -623,6 +808,7 @@ class Targets(DeltaScreen):
             for i in range(4)
         ]
         self.query_one("#target-inspector-pane", Pane).set_hints(self._metric_hints())
+        self.query_one("#target-chart-label", Static).update(self._chart_label())
 
         def clear_cards() -> None:
             for card, body in cards:
@@ -632,8 +818,9 @@ class Targets(DeltaScreen):
         def clear_chart() -> None:
             chart_change.update("")
             chart_change.set_classes("")
-            self.query_one("#target-chart", BrailleGraph).data = []
-            axis.update("")
+            chart = self.query_one("#target-chart", PriceChart)
+            chart.times = []
+            chart.data = []
             source.update("")
 
         selected = self._selected()
@@ -713,13 +900,16 @@ class Targets(DeltaScreen):
         chart_change.update(metric.change_label or "—")
         chart_change.set_class(metric.change_label.startswith("+"), "-up")
         chart_change.set_class(metric.change_label.startswith("-"), "-down")
-        self.query_one("#target-chart", BrailleGraph).data = chart_window(
-            metric.series, None if self._range == "all" else 30
+        chart = self.query_one("#target-chart", PriceChart)
+        window, window_times = chart_window(
+            metric.series, None if self._range == "all" else 30, metric.series_times
         )
+        chart.times = window_times
+        chart.y_format = partial(
+            format_price, kind="yield" if metric.profile == "bond" else "price"
+        )
+        chart.data = window
         history = _friendly_date_range(metric.history_start, metric.history_end)
-        axis.update(
-            history.replace(" – ", " " * 20 + "→" + " " * 20) if " – " in history else history
-        )
         groups = metric.groups or ({"Available Metrics": metric.values} if metric.values else {})
         clear_cards()
         for index, (card, body) in enumerate(cards):
@@ -738,9 +928,9 @@ class Targets(DeltaScreen):
         source.update(f"{metric.source} · live {quote_stamp} · history {history}")
 
     def _sync_feed(self) -> None:
-        suffixes = DEFAULT_SUFFIXES | getattr(self.delta.cfg, "plugins", {}).get("yfinance", {}).get(
-            "suffixes", {}
-        )
+        suffixes = DEFAULT_SUFFIXES | getattr(self.delta.cfg, "plugins", {}).get(
+            "yfinance", {}
+        ).get("suffixes", {})
         signature = (
             tuple(sorted(i.id for i in self._instruments)),
             tuple(sorted(suffixes.items())),
@@ -934,10 +1124,26 @@ class Targets(DeltaScreen):
     def _range_label(self) -> str:
         return {"day": "day", "month": "month", "all": "all time"}[self._range]
 
+    def _chart_label(self) -> str:
+        """The chart header: what the line is, its window, and the currency.
+
+        The kind follows the selected instrument's asset class — the same
+        mapping the metrics profile uses — so the header is right while the
+        metrics are still loading and when ``r`` cycles the range.
+        """
+        instrument = self._selected_instrument
+        parts = [
+            "yield" if instrument is not None and profile_for(instrument) == "bond" else "price",
+            self._range_label(),
+        ]
+        if instrument is not None and instrument.currency:
+            parts.append(instrument.currency)
+        return " · ".join(parts)
+
     def action_cycle_range(self) -> None:
         self._range = {"month": "all", "all": "day", "day": "month"}[self._range]
         self.query_one("#target-inspector-pane", Pane).set_hints(self._metric_hints())
-        self.query_one("#target-chart-label", Static).update(f"price · {self._range_label()}")
+        self.query_one("#target-chart-label", Static).update(self._chart_label())
         self._metrics.clear()
         self._select_instrument(force=True)
 

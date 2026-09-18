@@ -75,3 +75,11 @@ asset_class = "crypto"
 tickers = [
     "BTC-USD",
 ]
+
+[targets.GOOGL]
+kind = "company"
+market = "us"
+asset_class = "equity"
+tickers = [
+    "GOOGL",
+]

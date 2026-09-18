@@ -162,7 +162,7 @@ class Config(DeltaScreen):
                 with Pane(
                     title="targets",
                     key="t",
-                    hints=hint_markup(("1", "watchlist")),
+                    hints=hint_markup(("2", "watchlist")),
                     id="cfg-targets-pane",
                 ):
                     yield DeltaTable(id="cfg-targets")

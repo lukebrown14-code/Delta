@@ -53,7 +53,7 @@ to buy or sell. The point is clarity, not tips.
 
 ## 1. Tell it what you care about
 
-Press 1 for Watchlist.
+Press 2 for Watchlist.
 
 A watchlist entry is anything you want watched — one company, a whole
 sector, or a theme. Press a to open the entry form, fill in the fields,
@@ -83,7 +83,7 @@ Open the command palette (ctrl+p) and run **Gather evidence**.
 `ingest` pulls prices, news, filings and earnings dates into a local database,
 and `extract` turns the news into structured facts. Gather runs both.
 
-Press 2 for Research. Its three columns keep the selected company, its report,
+Press 3 for Research. Its three columns keep the selected company, its report,
 and the supporting evidence visible together. Database counts and model spend
 are under Settings → Diagnostics.
 

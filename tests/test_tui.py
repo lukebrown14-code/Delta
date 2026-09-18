@@ -6,10 +6,13 @@ import asyncio
 from types import SimpleNamespace
 
 import pytest
+from textual.widgets import Input, OptionList, Select
 
 from delta import services
 from delta.core.models import Instrument
+from delta.quotes import SearchResult
 from delta.tui.app import DeltaApp
+from delta.tui.screens.targets import TargetAddModal
 from delta.tui.shell import ALL_ITEMS, OFF_BAR_ITEMS, ScreenFooter, StatusBar
 from delta.tui.widgets import (
     MODAL_WIDTH,
@@ -79,9 +82,11 @@ def test_app_mounts_and_navigates(delta):
             # Research is the one shared desk: no Reports route remains, by
             # key, by Go picker entry, or in the installed screens.
             assert "reports" not in app.screens_by_name
-            assert not any(key == "3" for key, _name, _label in ALL_ITEMS)
-            await pilot.press("3")
-            assert app.screen.name != "reports"
+            assert any(
+                key == "4" and name == "theses" for key, name, _label in ALL_ITEMS
+            )
+            await pilot.press("4")
+            assert app.screen.name == "theses"
 
     asyncio.run(run())
 
@@ -91,7 +96,7 @@ def test_status_bar_is_one_row(delta):
         app = DeltaApp(delta)
         async with app.run_test(size=(120, 24)) as pilot:
             # Home is a DeltaScreen like every panel: the bar is there where a
-            # new user lands, so the 1/2/4/5 rail never disappears.
+            # new user lands, so the 1/2/3/4/5/6 rail never disappears.
             assert app.screen.name == "home"
             bar = app.screen.query_one(StatusBar)
             assert not app.screen.query("#nav-console")
@@ -141,7 +146,7 @@ def test_targets_panel_adds_target(delta, monkeypatch, tmp_path):
     async def run():
         app = DeltaApp(delta)
         async with app.run_test() as pilot:
-            await pilot.press("1")
+            await pilot.press("2")
             assert app.screen.name == "targets"
             await pilot.press("a")
             assert app.screen.query_one("#tg-form").display
@@ -177,7 +182,7 @@ def test_targets_panel_remove_with_no_targets_notifies(delta, monkeypatch, tmp_p
     async def run():
         app = DeltaApp(delta)
         async with app.run_test() as pilot:
-            await pilot.press("1")
+            await pilot.press("2")
             assert app.screen.query_one("#target-table").row_count == 0
             await pilot.press("d")
             await pilot.pause()
@@ -241,7 +246,7 @@ def test_ledger_groups_quotes_and_focus(delta, monkeypatch, tmp_path, size, them
         app = DeltaApp(delta)
         async with app.run_test(size=size) as pilot:
             app.theme = theme
-            await pilot.press("1")
+            await pilot.press("2")
             screen = app.screen
             table = screen.query_one("#target-table")
             assert table.row_count == 2
@@ -272,14 +277,14 @@ def test_ledger_groups_quotes_and_focus(delta, monkeypatch, tmp_path, size, them
             assert table.row_count == 1
             assert table.region.right <= size[0]
             task = screen.feed_task
-            await pilot.press("2")
+            await pilot.press("1")
             assert task.done()
             assert screen.feed_task is None
 
     asyncio.run(run())
 
 
-@pytest.mark.parametrize("field", ["name", "kind", "market", "tickers", "tags"])
+@pytest.mark.parametrize("field", ["name", "tickers", "tags"])
 def test_company_form_enter_submits(delta, monkeypatch, tmp_path, field):
     monkeypatch.chdir(tmp_path)
     (tmp_path / "config.toml").write_text("", encoding="utf-8")
@@ -287,7 +292,7 @@ def test_company_form_enter_submits(delta, monkeypatch, tmp_path, field):
     async def run():
         app = DeltaApp(delta)
         async with app.run_test() as pilot:
-            await pilot.press("1", "a")
+            await pilot.press("2", "a")
             screen = app.screen
             screen.query_one("#tg-name").value = "apple"
             screen.query_one("#tg-market").value = "us"
@@ -309,7 +314,7 @@ def test_company_form_enter_keeps_invalid_form_open(delta, monkeypatch, tmp_path
     async def run():
         app = DeltaApp(delta)
         async with app.run_test() as pilot:
-            await pilot.press("1", "a")
+            await pilot.press("2", "a")
             app.screen.query_one("#tg-name").value = "apple"
             await pilot.press("enter")
             assert not services.target_specs()
@@ -319,10 +324,19 @@ def test_company_form_enter_keeps_invalid_form_open(delta, monkeypatch, tmp_path
     asyncio.run(run())
 
 
+def _fake_yahoo(results: list[SearchResult], calls: list[str] | None = None):
+    async def search(query: str, max_results: int = 8) -> list[SearchResult]:
+        if calls is not None:
+            calls.append(query)
+        return list(results)
+
+    return search
+
+
 def test_add_modal_yahoo_dropdown_keyboard_and_online_state(delta, monkeypatch, tmp_path):
+    """Arrows browse the dropdown without leaving the name field, enter picks
+    the canonical ticker, and escape closes the dialog itself."""
     from delta import tui
-    from delta.quotes import SearchResult
-    from delta.tui.screens.targets import TargetAddModal
 
     monkeypatch.chdir(tmp_path)
     (tmp_path / "config.toml").write_text("", encoding="utf-8")
@@ -332,28 +346,176 @@ def test_add_modal_yahoo_dropdown_keyboard_and_online_state(delta, monkeypatch, 
         return [SearchResult("BHP.AX", "BHP Group Limited", "asx", "AUD", "ASX")]
 
     monkeypatch.setattr(tui.screens.targets, "yahoo_search", yahoo)
+    monkeypatch.setattr(TargetAddModal, "SEARCH_DEBOUNCE", 0.01)
 
     async def run():
         app = DeltaApp(delta)
         async with app.run_test() as pilot:
-            await pilot.press("1", "a")
-            assert isinstance(app.screen, TargetAddModal)
-            app.screen.query_one("#tg-name").value = "bhp"
-            await pilot.pause()
-            suggestions = app.screen.query_one("#tg-suggestions")
-            assert suggestions.display
-            assert app.screen.query_one("#tg-network").has_class("-online")
-            await pilot.press("down")
-            assert suggestions.has_focus
-            await pilot.press("enter")
-            assert app.screen.query_one("#tg-tickers").value == "BHP.AX"
-            assert app.screen.query_one("#tg-market").value == "asx"
-            app.screen.query_one("#tg-name").value = "manual"
-            app.screen.query_one("#tg-name").focus()
+            await pilot.press("2", "a")
+            modal = app.screen
+            assert isinstance(modal, TargetAddModal)
+            name = modal.query_one("#tg-name", Input)
+            name.focus()
+            for char in "bhp":
+                await pilot.press(char)
             await pilot.pause(0.2)
-            await pilot.press("escape")
-            assert isinstance(app.screen, TargetAddModal)
-            assert not app.screen.query_one("#tg-suggestions").display
+            suggestions = modal.query_one("#tg-suggestions", OptionList)
+            assert len(suggestions.options) == 1
+            assert modal.query_one("#tg-network").has_class("-online")
+            await pilot.press("down")
+            assert modal.focused is name  # browsing never steals the input
+            await pilot.press("enter")  # pick
+            assert modal.query_one("#tg-tickers", Input).value == "BHP"
+            assert modal.query_one("#tg-market", Select).value == "asx"
+            assert not suggestions.options  # dropdown closed after the pick
+            await pilot.press("escape")  # nothing left to close: the dialog goes
+            assert app.screen.name == "targets"
+
+    asyncio.run(run())
+
+
+def test_add_modal_browse_keeps_focus_then_pick_saves(delta, monkeypatch, tmp_path):
+    """The full pick-then-confirm flow writes the target the result named."""
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "config.toml").write_text("", encoding="utf-8")
+    monkeypatch.setattr(
+        "delta.tui.screens.targets.yahoo_search",
+        _fake_yahoo([SearchResult("BHP.AX", "BHP Group", "asx", "AUD", "ASX")]),
+    )
+    monkeypatch.setattr(TargetAddModal, "SEARCH_DEBOUNCE", 0.01)
+
+    async def run():
+        app = DeltaApp(delta)
+        async with app.run_test() as pilot:
+            await pilot.press("2", "a")
+            modal = app.screen
+            name = modal.query_one("#tg-name", Input)
+            name.focus()
+            for char in "bhp":
+                await pilot.press(char)
+            await pilot.pause(0.2)
+            assert len(modal.query_one("#tg-suggestions", OptionList).options) == 1
+            await pilot.press("down", "enter")  # pick
+            assert modal.query_one("#tg-tickers", Input).value == "BHP"
+            assert modal.query_one("#tg-market", Select).value == "asx"
+            assert modal.query_one("#tg-asset-class", Select).value == "equity"
+            await pilot.press("enter")  # confirm
+            specs = services.target_specs()
+            assert specs["BHP Group"].markets == ("asx",)
+            assert specs["BHP Group"].tickers == ("BHP",)
+
+    asyncio.run(run())
+
+
+def test_add_modal_debounces_the_yahoo_lookup(delta, monkeypatch, tmp_path):
+    """One lookup per finished thought, never one per keystroke."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "config.toml").write_text("", encoding="utf-8")
+    calls: list[str] = []
+    monkeypatch.setattr("delta.tui.screens.targets.yahoo_search", _fake_yahoo([], calls))
+    monkeypatch.setattr(TargetAddModal, "SEARCH_DEBOUNCE", 0.5)
+
+    async def run():
+        app = DeltaApp(delta)
+        async with app.run_test() as pilot:
+            await pilot.press("2", "a")
+            name = app.screen.query_one("#tg-name", Input)
+            name.focus()
+            for char in "bhp":
+                await pilot.press(char)
+                await pilot.pause(0.05)
+            assert calls == []  # the thought is not finished yet
+            await pilot.pause(0.7)
+            assert calls == ["bhp"]
+
+    asyncio.run(run())
+
+
+def test_add_modal_merges_local_and_remote_results(delta, monkeypatch, tmp_path):
+    """Remote answers join local matches instead of replacing them."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "config.toml").write_text("", encoding="utf-8")
+    monkeypatch.setattr(
+        "delta.tui.screens.targets.yahoo_search",
+        _fake_yahoo(
+            [
+                SearchResult("AAPL", "Apple Inc.", "us", "USD", "NASDAQ"),
+                SearchResult("MSFT", "Microsoft", "us", "USD", "NASDAQ"),
+            ]
+        ),
+    )
+    monkeypatch.setattr(TargetAddModal, "SEARCH_DEBOUNCE", 0.01)
+
+    async def run():
+        app = DeltaApp(delta)
+        async with app.run_test() as pilot:
+            await pilot.press("2", "a")
+            name = app.screen.query_one("#tg-name", Input)
+            name.focus()
+            for char in "aapl":
+                await pilot.press(char)
+            await pilot.pause(0.2)
+            options = app.screen.query_one("#tg-suggestions", OptionList)
+            ids = [str(option.id) for option in options.options]
+            assert ids == ["us:aapl", "us:msft"]  # local pinned, remote added, no dup
+
+    asyncio.run(run())
+
+
+def test_add_modal_stale_pick_keeps_the_result_market(delta, monkeypatch, tmp_path):
+    """A pick whose result object is gone recovers from the option key —
+    it must never silently write a US target for a non-US listing."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "config.toml").write_text("", encoding="utf-8")
+
+    async def run():
+        app = DeltaApp(delta)
+        async with app.run_test() as pilot:
+            await pilot.press("2", "a")
+            modal = app.screen
+            modal._results_by_key.clear()
+            modal._pick("asx:BHP")
+            assert modal.query_one("#tg-tickers", Input).value == "BHP"
+            assert modal.query_one("#tg-market", Select).value == "asx"
+
+    asyncio.run(run())
+
+
+def test_add_modal_marks_watched_and_saves_dupes_anyway(delta, monkeypatch, tmp_path):
+    import tomli_w
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "config.toml").write_text(
+        tomli_w.dumps(
+            {"targets": {"bhp": {"kind": "company", "market": "asx", "tickers": ["BHP"]}}}
+        ),
+        encoding="utf-8",
+    )
+
+    async def fake_search(query: str, max_results: int = 8) -> list[SearchResult]:
+        raise ConnectionError("offline")
+
+    monkeypatch.setattr("delta.tui.screens.targets.yahoo_search", fake_search)
+
+    async def run():
+        app = DeltaApp(delta)
+        async with app.run_test() as pilot:
+            await pilot.press("2", "a")
+            modal = app.screen
+            name = modal.query_one("#tg-name", Input)
+            name.focus()
+            for char in "bhp":
+                await pilot.press(char)
+            await pilot.pause(0.1)
+            options = modal.query_one("#tg-suggestions", OptionList)
+            assert len(options.options) == 1
+            assert "watched" in str(options.options[0].prompt)
+            # Warn, allow: the duplicate ticker still saves under a new target.
+            modal.query_one("#tg-name", Input).value = "big australian"
+            modal.query_one("#tg-tickers", Input).value = "BHP"
+            await pilot.press("enter")
+            assert "big australian" in services.target_specs()
 
     asyncio.run(run())
 
@@ -605,7 +767,7 @@ def test_home_quote_feed_starts_on_resume_and_is_cancelled_on_unmount(delta, mon
             assert task is not None
 
             # Leaving Home suspends the screen: the task must go with it.
-            await pilot.press("1")
+            await pilot.press("2")
             await pilot.pause()
             assert home.feed_task is None
             assert task.cancelled() or task.done()
@@ -866,7 +1028,7 @@ def test_space_folds_and_reopens_an_asset_class_group(delta, monkeypatch, tmp_pa
     async def run():
         app = DeltaApp(delta)
         async with app.run_test(size=(120, 40)) as pilot:
-            await pilot.press("1")
+            await pilot.press("2")
             screen = app.screen
             table = screen.query_one("#target-table")
             table.highlighted = table.get_option_index("group:equity")
@@ -883,5 +1045,199 @@ def test_space_folds_and_reopens_an_asset_class_group(delta, monkeypatch, tmp_pa
             await pilot.pause()
             assert screen._collapsed_groups == set()
             assert table.option_count == expanded
+
+    asyncio.run(run())
+
+
+# --- watchlist inspector chart ---------------------------------------------------
+
+
+def _stub_fetch(monkeypatch, metric) -> None:
+    """Pin the inspector's metrics fetch to a canned :class:`AssetMetrics`."""
+
+    from delta import tui
+
+    def fetch(instrument, range_name="month", engine=None, suffixes=None):
+        return metric
+
+    monkeypatch.setattr(tui.screens.targets, "fetch_asset_metrics", fetch)
+
+
+async def _await_metric(pilot, screen) -> None:
+    """The fetch runs on a worker over ``to_thread``; wait for it to land."""
+    for _ in range(40):
+        if screen._metrics:
+            return
+        await pilot.pause(0.05)
+    raise AssertionError("metrics never rendered")
+
+
+def _series_with_times(count=40, first_day=10):
+    """A rising daily series with parallel ISO stamps ending 2026-09-18."""
+    from datetime import UTC, datetime, timedelta
+
+    start = datetime(2026, 8, first_day, tzinfo=UTC)
+    series = [100.0 + float(i) for i in range(count)]
+    times = [(start + timedelta(days=i)).isoformat() for i in range(count)]
+    return series, times
+
+
+def test_targets_inspector_paints_price_chart_with_axes(delta, monkeypatch, tmp_path):
+    """The inspector chart is a PriceChart fed the windowed series and its times."""
+    from delta.asset_metrics import AssetMetrics
+    from delta.tui.widgets import PriceChart
+
+    _home_config(tmp_path, monkeypatch, delta)
+    series, times = _series_with_times()
+    _stub_fetch(
+        monkeypatch,
+        AssetMetrics(
+            "US:AAPL",
+            "equity",
+            values={"Current price": "139.00"},
+            series=series,
+            series_times=times,
+            change_label="+39.0%",
+            history_start=times[0],
+            history_end=times[-1],
+            period_high=139.0,
+            period_low=100.0,
+        ),
+    )
+
+    async def run():
+        app = DeltaApp(delta)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.press("2", "enter")
+            screen = app.screen
+            chart = screen.query_one("#target-chart")
+            assert isinstance(chart, PriceChart)
+            await _await_metric(pilot, screen)
+            assert chart.data == series[-30:]
+            assert chart.times == times[-30:]
+            assert chart.y_format(1234.5) == "1,234.50"
+            frame = _frame(app)
+            # The first windowed date is an X tick label; 120 is a Y gutter tick.
+            assert "20 Aug" in frame
+            assert "120.00" in frame
+
+    asyncio.run(run())
+
+
+def test_targets_inspector_header_names_currency_and_range(delta, monkeypatch, tmp_path):
+    """The header is ``price · range · CURRENCY``, and ``r`` rewrites both parts."""
+    from delta.asset_metrics import AssetMetrics
+
+    _home_config(tmp_path, monkeypatch, delta)
+    series, times = _series_with_times()
+    _stub_fetch(
+        monkeypatch,
+        AssetMetrics(
+            "US:AAPL",
+            "equity",
+            values={"Current price": "139.00"},
+            series=series,
+            series_times=times,
+        ),
+    )
+
+    async def run():
+        app = DeltaApp(delta)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.press("2", "enter")
+            screen = app.screen
+            await _await_metric(pilot, screen)
+            label = screen.query_one("#target-chart-label")
+            assert str(label.render()) == "price · month · USD"
+            await pilot.press("r")
+            assert str(label.render()) == "price · all time · USD"
+            await _await_metric(pilot, screen)
+            chart = screen.query_one("#target-chart")
+            assert chart.data == series
+            assert chart.times == times
+
+    asyncio.run(run())
+
+
+def test_targets_inspector_bond_chart_labels_yield(delta, monkeypatch, tmp_path):
+    """A bond plots yield: the header says so and Y labels skip the separator."""
+    import tomli_w
+
+    from delta.asset_metrics import AssetMetrics
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "config.toml").write_text(
+        tomli_w.dumps(
+            {
+                "targets": {
+                    "letters": {
+                        "kind": "company",
+                        "market": "us",
+                        "tickers": ["TLT"],
+                        "asset_class": "bond",
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    series, times = _series_with_times(count=30)
+    _stub_fetch(
+        monkeypatch, AssetMetrics("US:TLT", "bond", values={"Current yield": "4.35"}, series=series)
+    )
+
+    async def run():
+        app = DeltaApp(delta)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.press("2", "enter")
+            screen = app.screen
+            await _await_metric(pilot, screen)
+            assert str(screen.query_one("#target-chart-label").render()) == "yield · month"
+            chart = screen.query_one("#target-chart")
+            assert chart.y_format(1234.5) == "1234.50"
+
+    asyncio.run(run())
+
+
+def test_targets_inspector_empty_metrics_leave_a_blank_chart(delta, monkeypatch, tmp_path):
+    """Metrics with no series clear the chart instead of crashing the pane."""
+    from delta.asset_metrics import AssetMetrics
+
+    _home_config(tmp_path, monkeypatch, delta)
+    _stub_fetch(monkeypatch, AssetMetrics("US:AAPL", "equity"))
+
+    async def run():
+        app = DeltaApp(delta)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.press("2", "enter")
+            screen = app.screen
+            await _await_metric(pilot, screen)
+            chart = screen.query_one("#target-chart")
+            assert chart.data == []
+            assert chart.times == []
+            assert app._exception is None
+            _frame(app)
+
+    asyncio.run(run())
+
+
+def test_targets_inspector_without_selection_resets_the_header(delta, monkeypatch, tmp_path):
+    """No targets: the bare chart stays and the header keeps its default label."""
+    from delta.tui.widgets import PriceChart
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "config.toml").write_text("", encoding="utf-8")
+
+    async def run():
+        app = DeltaApp(delta)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.press("2")
+            screen = app.screen
+            chart = screen.query_one("#target-chart")
+            assert isinstance(chart, PriceChart)
+            assert chart.data == []
+            assert chart.times == []
+            assert str(screen.query_one("#target-chart-label").render()) == "price · month"
+            assert "no targets yet" in str(screen.query_one("#target-inspector-empty").render())
 
     asyncio.run(run())

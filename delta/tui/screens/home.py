@@ -70,11 +70,12 @@ TALL_HEIGHT = 40
 #: Short labels for the go grid, keyed by the Textual key name; anything not
 #: listed falls back to the binding's own description.
 GO_LABELS: dict[str, str] = {
-    "1": "watchlist",
-    "2": "evidence",
-    "3": "report",
+    "1": "home",
+    "2": "watchlist",
+    "3": "research",
     "4": "theses",
     "5": "ask",
+    "6": "decisions",
     "c": "settings",
     "m": "model",
     "p": "provider",
@@ -470,7 +471,7 @@ class Home(DeltaScreen):
                     yield Static("", id="watch-next")
                 with Pane(
                     title="since you last looked",
-                    hints=hint_markup(("2", "evidence")),
+                    hints=hint_markup(("3", "research")),
                     id="since-pane",
                 ):
                     with FocusBox(id="since-body"):

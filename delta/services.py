@@ -204,11 +204,11 @@ async def extract(
     events = await extract_events(
         delta.context(delta.universe() if instruments is None else instruments), parse_date(since)
     )
-    instruments = len({event.instrument_id for event in events})
+    instrument_count = len({event.instrument_id for event in events})
     log(
-        f"[green]Extracted {len(events)} events across {instruments} instruments since {since}.[/green]"
+        f"[green]Extracted {len(events)} events across {instrument_count} instruments since {since}.[/green]"
     )
-    return ExtractResult(len(events), instruments)
+    return ExtractResult(len(events), instrument_count)
 
 
 def set_plugin_enabled(delta: Any, name: str, value: bool) -> None:

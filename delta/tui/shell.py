@@ -26,8 +26,9 @@ from delta import services
 from delta.tui.widgets import StatusDot
 
 NAV_ITEMS: list[tuple[str, str, str]] = [
-    ("1", "targets", "Watchlist"),
-    ("2", "data", "Research"),
+    ("1", "home", "Home"),
+    ("2", "targets", "Watchlist"),
+    ("3", "data", "Research"),
     ("4", "theses", "Theses"),
     ("5", "chat", "Ask"),
     ("6", "decisions", "Decisions"),
@@ -39,12 +40,9 @@ CHROME_ITEMS: list[tuple[str, str, str]] = [
     ("c", "config", "Settings"),
 ]
 
-# Reachable by hotkey, ``g`` and the palette, but not shown on the bar: Home is
-# the screen you land on, so a permanent entry pointing at it earns no columns.
+# Reachable by hotkey, ``g`` and the palette, but not shown on the bar.
 # Same 3-tuple shape again — ALL_ITEMS is what navigation should iterate.
-OFF_BAR_ITEMS: list[tuple[str, str, str]] = [
-    ("h", "home", "Home"),
-]
+OFF_BAR_ITEMS: list[tuple[str, str, str]] = []
 
 ALL_ITEMS: list[tuple[str, str, str]] = NAV_ITEMS + CHROME_ITEMS + OFF_BAR_ITEMS
 
@@ -123,16 +121,16 @@ class StatusBar(Horizontal):
     is not repeated among the status cells — the highlight already names it.
     """
 
-    #: Everything labelled needs 109 columns: five panel entries (53), the
-    #: status cells (30), ``c Config`` (10) and the chrome hint (16). Below
-    #: that every panel entry but the active one drops to its hotkey alone,
-    #: which buys back up to 28.
-    COMPACT_WIDTH = 109
+    #: Everything labelled needs 123 columns: seven panel entries (76), the
+    #: status cells (30) and the chrome hint (16; ``c Settings`` is counted
+    #: with the panels). Below that every panel entry but the active one
+    #: drops to its hotkey alone, which buys back up to 39.
+    COMPACT_WIDTH = 123
 
-    #: Even fully compacted the row still wants 81 columns. Below that the
+    #: Even fully compacted the row still wants 87 columns. Below that the
     #: hint and the provider name give up theirs, in that order: the hint is a
     #: reminder you need once, and the provider is the least urgent cell.
-    MINIMAL_WIDTH = 81
+    MINIMAL_WIDTH = 87
 
     DEFAULT_CSS = """
     StatusBar {
