@@ -7,3 +7,10 @@ __pycache__/
 *.pyc
 .claude/
 /data/.rigger_state.json
+/tui-shots/
+/tui-shots-live/
+/tui-shots-real/
+shots_local.py
+/copy-final/
+/copy-empty/
+shots_empty.py

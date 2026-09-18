@@ -8,7 +8,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from sqlmodel import Session
 from textual.app import App
-from textual.widgets import Button, Input, Markdown, MarkdownViewer, Select, Static
+from textual.widgets import Button, Input, Markdown, MarkdownViewer, Static
 
 from rigger.core.db import NewsItemTable
 from rigger.core.json import to_json
@@ -19,8 +19,15 @@ from rigger.tui.screens.data import Data
 from rigger.tui.screens.reports import Reports
 from rigger.tui.screens.research import ResearchState
 from rigger.tui.theme import THEMES
+from rigger.tui.widgets import RiggerTable
 from tests.conftest import FakeLLM
 from tests.test_reports import INST, ScreenRig, _draft, _seed
+
+
+def pick_company(screen, company: str) -> None:
+    """Move the company-list cursor onto a row, as the arrow keys would."""
+    companies = screen.query_one("#research-companies", RiggerTable)
+    companies.move_cursor(row=companies.get_row_index(company))
 
 
 def setup_rig(tmp_engine, tmp_path, monkeypatch):
@@ -92,7 +99,9 @@ def test_structured_report_round_trip_and_legacy(tmp_engine, tmp_path, monkeypat
             path.with_suffix(".json").unlink()
             await screen.show_latest(INST)
             assert screen.report is None
-            assert "Regenerate" in str(screen.query_one("#report-legacy", Static).render())
+            assert "press n to regenerate" in str(
+                screen.query_one("#report-legacy", Static).render()
+            )
             assert "A sourced summary" in screen.query_one(MarkdownViewer).document.source
 
     asyncio.run(run())
@@ -120,17 +129,17 @@ def test_company_filters_and_citation_round_trip(tmp_engine, tmp_path, monkeypat
             assert opened == []
             assert screen.view.search == "close"
             assert "Both companies" in str(screen.query_one("#source-body", Static).render())
-            assert not screen.query_one("#evidence-report", Button).disabled
-            await pilot.click("#evidence-report")
+            assert screen.can_view
+            await pilot.press("v")
             assert screen.tab == "report"
             await screen.inspect_evidence("news:deleted")
             assert "no longer available" in str(screen.query_one("#source-body", Static).render())
-            screen.query_one("#research-company", Select).value = "US:MSFT"
+            pick_company(screen, "US:MSFT")
             await pilot.pause()
             assert screen.state.company == "US:MSFT"
             assert not screen.items
             assert screen.report is None
-            screen.query_one("#research-company", Select).value = INST
+            pick_company(screen, INST)
             await pilot.pause()
             assert screen.view.search == "close"
             assert screen.report.target_id == INST
@@ -164,7 +173,7 @@ def test_aliases_share_state_and_narrow_details(tmp_engine, tmp_path, monkeypatc
             assert not screen.query_one("#evidence-list-pane").display
             assert screen.query_one("#evidence-preview-pane").display
             await pilot.pause()
-            await pilot.click("#evidence-back")
+            await pilot.press("escape")
             assert screen.query_one("#evidence-list-pane").display
             pilot.app.switch_screen("reports")
             await pilot.pause()
@@ -199,13 +208,13 @@ def test_generation_captures_company_and_handles_failure(tmp_engine, tmp_path, m
             worker = screen.generate(INST)
             await started.wait()
             assert screen.query_one("#report-generate", Button).disabled
-            screen.query_one("#research-company", Select).value = "US:MSFT"
+            pick_company(screen, "US:MSFT")
             await pilot.pause()
             release.set()
             await worker.wait()
             assert screen.state.company == "US:MSFT"
             assert "Updated" not in screen.query_one(MarkdownViewer).document.source
-            screen.query_one("#research-company", Select).value = INST
+            pick_company(screen, INST)
             await pilot.pause()
             assert "Updated" in screen.query_one(MarkdownViewer).document.source
 
@@ -250,7 +259,7 @@ def test_report_scroll_returns_and_first_citing_claim(tmp_engine, tmp_path, monk
             assert viewer.scroll_y == position
             await screen.inspect_evidence("news:news-1")
             await pilot.pause()
-            await pilot.click("#evidence-report")
+            await pilot.press("v")
             await pilot.pause()
             assert viewer.scroll_y > position
             viewer.scroll_to(y=20, animate=False)
@@ -265,8 +274,6 @@ def test_report_scroll_returns_and_first_citing_claim(tmp_engine, tmp_path, monk
 
 
 def test_settings_diagnostics_and_gather_refresh(tmp_engine, tmp_path, monkeypatch):
-    from textual.widgets import Collapsible
-
     from rigger.tui.screens.config import Config
 
     rig = setup_rig(tmp_engine, tmp_path, monkeypatch)
@@ -297,7 +304,9 @@ def test_settings_diagnostics_and_gather_refresh(tmp_engine, tmp_path, monkeypat
             pilot.app.switch_screen("config")
             await pilot.pause()
             settings = pilot.app.screen
-            assert settings.query_one(Collapsible).collapsed
+            # 80 columns: diagnostics starts folded to its summary line.
+            assert settings.query_one("#cfg-diag-summary").display
+            assert not settings.query_one("#cfg-diag-body").display
             assert settings.query_one("#health-table").row_count > 0
             assert "US:AAPL" in str(settings.query_one("#health-latest", Static).render())
 
@@ -334,7 +343,7 @@ def test_report_age_and_section_counts_surface_staleness(tmp_engine, tmp_path, m
             assert "-0.50" in str(screen.query_one("#report-sentiment").render())
             assert screen.query_one("#report-sentiment").has_class("-error")
             # The badge says how much substance the report has.
-            badge = str(screen.query_one("#report-doc")._bar._badge.render())
+            badge = screen.query_one("#report-doc")._badge
             assert "bull 1" in badge and "bear 1" in badge
             # A claim's source count is visible without counting cite lines.
             assert "(1 source)" in screen.query_one(MarkdownViewer).document.source
@@ -423,14 +432,9 @@ def test_every_action_is_reachable_from_the_keyboard(tmp_engine, tmp_path, monke
             assert screen.tab == "evidence"
             await pilot.press("r")
             assert screen.tab == "report"
-            # The active tab is marked by class, leaving one primary button.
+            # Exactly one tab chip reads as active.
             assert screen.query_one("#tab-report", Button).has_class("-tab-active")
-            primaries = [
-                button
-                for button in screen.query(Button)
-                if button.variant == "primary" and button.display
-            ]
-            assert [button.id for button in primaries] == ["report-generate"]
+            assert not screen.query_one("#tab-evidence", Button).has_class("-tab-active")
             await pilot.press("slash")
             assert screen.tab == "evidence"
             assert screen.query_one("#evidence-search", Input).has_focus
@@ -471,5 +475,85 @@ def test_promote_claim_creates_a_thesis_with_its_evidence(tmp_engine, tmp_path, 
             # A claim reference that no longer resolves must not raise.
             screen.promote_claim("bull:99")
             screen.promote_claim("nonsense")
+
+    asyncio.run(run())
+
+
+def test_price_runs_fold_and_the_preview_never_dumps_raw(tmp_engine, tmp_path, monkeypatch):
+    """A run of closes is one row until asked for, and a bar reads as fields.
+
+    The pool is mostly price bars — folding them is what keeps the filings and
+    news that justify opening this pane on screen.
+    """
+    from tests.conftest import seed_bars
+
+    rig = setup_rig(tmp_engine, tmp_path, monkeypatch)
+    seed_bars(tmp_engine, INST, n=40, price_fn=lambda i: 200.0 + i)
+
+    class TestApp(App):
+        def on_mount(self):
+            self.push_screen(Data(rig))
+
+    async def run():
+        async with TestApp().run_test(size=(120, 40)) as pilot:
+            screen = pilot.app.screen
+            table = screen.query_one("#evidence-table", RiggerTable)
+            bars = [item for item in screen.items.values() if item.kind == "bar"]
+            assert len(bars) >= 40
+
+            # Folded: each run of closes stands behind one group row, and the
+            # runs together account for every bar.
+            assert screen.groups
+            # Only a real run folds: a lone bar stays an ordinary row rather
+            # than becoming a group of one.
+            assert all(len(run) > 1 for run in screen.groups.values())
+            grouped = sum(len(run) for run in screen.groups.values())
+            assert grouped >= len(bars) - len(screen.groups)
+            key, run = next(iter(screen.groups.items()))
+            assert table.row_count < len(screen.items)
+            group_row = table.get_row(key)[0]
+            assert "▸ prices" in group_row.plain
+            assert f"· {len(run)}" in group_row.plain
+
+            # The group row previews the run rather than a source.
+            table.move_cursor(row=table.get_row_index(key))
+            await pilot.pause()
+            assert "price bars" in str(screen.query_one("#source-body", Static).render())
+
+            # space unfolds it, and unfolding shows every bar.
+            folded = table.row_count
+            await pilot.press("space")
+            assert table.row_count == folded + len(run)
+            assert "▾ prices" in table.get_row(key)[0].plain
+            await pilot.press("space")
+            assert table.row_count == folded
+
+            # A bar has no body: its fields render aligned, with no dict repr.
+            screen.preview(bars[0])
+            body = str(screen.query_one("#source-body", Static).render())
+            assert "close" in body and "{" not in body and "'" not in body
+            assert "the stored fields are the evidence" in body
+
+    asyncio.run(run())
+
+
+def test_fold_key_on_an_empty_evidence_list_is_a_no_op(tmp_engine, tmp_path, monkeypatch):
+    """``space`` is pressable with nothing in the list; the cursor has no cell there."""
+    rig = setup_rig(tmp_engine, tmp_path, monkeypatch)
+
+    class TestApp(App):
+        def on_mount(self):
+            self.push_screen(Data(rig))
+
+    async def run():
+        async with TestApp().run_test(size=(120, 40)) as pilot:
+            screen = pilot.app.screen
+            screen.view.search = "nothing matches this"
+            screen.load_evidence()
+            await pilot.pause()
+            assert screen.query_one("#evidence-table", RiggerTable).row_count == 0
+            await pilot.press("space")
+            await pilot.pause()
+            assert pilot.app._exception is None
 
     asyncio.run(run())
