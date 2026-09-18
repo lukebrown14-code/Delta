@@ -8,9 +8,9 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from sqlmodel import Session
 
-from rigger.core.db import NewsItemTable
-from rigger.theses import add_evidence, create_thesis
-from rigger.thesis_summary import summarize_thesis
+from delta.core.db import NewsItemTable
+from delta.theses import add_evidence, create_thesis
+from delta.thesis_summary import summarize_thesis
 from tests.conftest import FakeConfig
 
 NOW = datetime.now(UTC)
@@ -50,8 +50,8 @@ def _make_thesis(engine, *, targets=("US:AAPL",), accept=4):
     return thesis
 
 
-def _run(rig, thesis_id):
-    return asyncio.run(summarize_thesis(rig, thesis_id))
+def _run(delta, thesis_id):
+    return asyncio.run(summarize_thesis(delta, thesis_id))
 
 
 def test_summarize_cites_only_accepted_ids(tmp_engine, fake_llm):
@@ -93,15 +93,15 @@ def test_summarize_prompt_contains_state_and_items(tmp_engine, fake_llm):
 
 def test_summarize_unrouted_task_raises(tmp_engine, fake_llm):
     thesis = _make_thesis(tmp_engine, accept=4)
-    rig = FakeRig(tmp_engine, fake_llm, cfg=FakeConfig({}))
+    delta = FakeRig(tmp_engine, fake_llm, cfg=FakeConfig({}))
     with pytest.raises(KeyError, match="thesis_summary"):
-        _run(rig, thesis.id)
+        _run(delta, thesis.id)
 
 
 def test_screen_summarise_button_renders_summary(tmp_engine, fake_llm):
     from textual.app import App
 
-    from rigger.tui.screens.theses import Theses
+    from delta.tui.screens.theses import Theses
 
     thesis = _make_thesis(tmp_engine, accept=4)
     fake_llm._responses = {

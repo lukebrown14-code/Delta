@@ -4,22 +4,22 @@ from __future__ import annotations
 
 import pytest
 
-from rigger import services
-from rigger.core.config import build_config
-from rigger.core.ids import make_instrument_id
-from rigger.core.models import Instrument
-from rigger.core.plugin import discover_targets
-from rigger.plugins.data.yfinance import YFinanceData
-from rigger.plugins.markets.asx import ASXMarket
-from rigger.plugins.markets.us import USMarket
-from rigger.plugins.targets.tickers import (
+from delta import services
+from delta.core.config import build_config
+from delta.core.ids import make_instrument_id
+from delta.core.models import Instrument
+from delta.core.plugin import discover_targets
+from delta.plugins.data.yfinance import YFinanceData
+from delta.plugins.markets.asx import ASXMarket
+from delta.plugins.markets.us import USMarket
+from delta.plugins.targets.tickers import (
     CompanyTarget,
     LegacyTickersTarget,
     MarketTarget,
     SectorTarget,
 )
-from rigger.runtime import Rigger
-from rigger.targets import target_from_spec
+from delta.runtime import Delta
+from delta.targets import target_from_spec
 
 
 def _target(cls, name: str, market: str, tickers: list[str], **extra):
@@ -28,16 +28,16 @@ def _target(cls, name: str, market: str, tickers: list[str], **extra):
     return target
 
 
-def _rig(raw: dict) -> Rigger:
-    rig = Rigger.__new__(Rigger)
+def _rig(raw: dict) -> Delta:
+    delta = Delta.__new__(Delta)
     us, asx = USMarket(), ASXMarket()
     universe = raw.get("universe", {})
     us.configure({"tickers": list(universe.get("us", []))})
     asx.configure({"tickers": list(universe.get("asx", []))})
-    rig.plugins = {"us": us, "asx": asx}
-    rig.cfg = build_config(raw)
-    rig.targets = rig._build_targets()
-    return rig
+    delta.plugins = {"us": us, "asx": asx}
+    delta.cfg = build_config(raw)
+    delta.targets = delta._build_targets()
+    return delta
 
 
 def test_make_instrument_id():
@@ -139,7 +139,7 @@ def test_universe_shim_instruments_are_byte_identical():
             watchlists=watchlists,
         )
 
-    rig = _rig(
+    delta = _rig(
         {
             "universe": {"us": ["AAPL", "MSFT"], "asx": ["BHP"]},
             "watchlists": {
@@ -147,7 +147,7 @@ def test_universe_shim_instruments_are_byte_identical():
             },
         }
     )
-    assert rig.universe() == [
+    assert delta.universe() == [
         expected("ASX:BHP", "asx", "BHP", "AUD", None, ("mining", "universe_asx")),
         expected("ASX:RIO", "asx", "RIO", "AUD", None, ("mining",)),
         expected("US:AAPL", "us", "AAPL", "USD", "Technology", ("universe_us",)),
@@ -189,7 +189,7 @@ def test_each_kind_round_trips_through_config(tmp_path, monkeypatch):
     assert specs["aussie"].markets == ("asx",)
     assert specs["aussie"].tickers == ()
 
-    rig = _rig(
+    delta = _rig(
         {
             "targets": {
                 "bhp": {"kind": "company", "market": "asx", "tickers": ["BHP"]},
@@ -198,13 +198,13 @@ def test_each_kind_round_trips_through_config(tmp_path, monkeypatch):
             }
         }
     )
-    assert [i.id for i in rig.targets["bhp"].instruments()] == ["ASX:BHP"]
-    assert [i.id for i in rig.targets["solar"].instruments()] == ["US:ENPH", "US:FSLR"]
-    assert rig.targets["aussie"].instruments() == []
+    assert [i.id for i in delta.targets["bhp"].instruments()] == ["ASX:BHP"]
+    assert [i.id for i in delta.targets["solar"].instruments()] == ["US:ENPH", "US:FSLR"]
+    assert delta.targets["aussie"].instruments() == []
 
 
 def test_market_target_adds_no_instruments_to_universe():
-    rig = _rig(
+    delta = _rig(
         {
             "targets": {
                 "bhp": {"kind": "company", "market": "asx", "tickers": ["BHP"]},
@@ -212,12 +212,12 @@ def test_market_target_adds_no_instruments_to_universe():
             }
         }
     )
-    assert [i.id for i in rig.universe()] == ["ASX:BHP"]
-    assert set(rig.targets) == {"bhp", "aussie"}
+    assert [i.id for i in delta.universe()] == ["ASX:BHP"]
+    assert set(delta.targets) == {"bhp", "aussie"}
 
 
 def test_ticker_in_two_targets_merges():
-    rig = _rig(
+    delta = _rig(
         {
             "targets": {
                 "mining": {
@@ -235,7 +235,7 @@ def test_ticker_in_two_targets_merges():
             }
         }
     )
-    universe = {i.id: i for i in rig.universe()}
+    universe = {i.id: i for i in delta.universe()}
     assert sorted(universe) == ["ASX:BHP", "ASX:RIO"]
     assert set(universe["ASX:BHP"].watchlists) == {"mining", "bigminer"}
     assert universe["ASX:BHP"].tags == frozenset({"diggers", "core"})
@@ -243,38 +243,38 @@ def test_ticker_in_two_targets_merges():
 
 
 def test_unknown_market_fails_loudly_naming_known_markets():
-    rig = Rigger.__new__(Rigger)
-    rig.plugins = {"us": USMarket(), "asx": ASXMarket()}
-    rig.cfg = build_config(
+    delta = Delta.__new__(Delta)
+    delta.plugins = {"us": USMarket(), "asx": ASXMarket()}
+    delta.cfg = build_config(
         {"targets": {"bogus": {"kind": "company", "market": "asz", "tickers": ["X"]}}}
     )
     with pytest.raises(KeyError, match=r"known markets are asx, us"):
-        rig._build_targets()
+        delta._build_targets()
 
 
 def test_custom_market_builds_target_and_yahoo_symbol():
-    rig = _rig(
+    delta = _rig(
         {
             "markets": {"lse": {"label": "London Stock Exchange", "currency": "GBP", "yahoo_suffix": ".L"}},
             "targets": {"hargreaves": {"kind": "company", "market": "lse", "tickers": ["HL"]}},
         }
     )
-    (instrument,) = rig.targets["hargreaves"].instruments()
+    (instrument,) = delta.targets["hargreaves"].instruments()
     assert (instrument.id, instrument.currency) == ("LSE:HL", "GBP")
     feed = YFinanceData()
     feed.configure({})
-    feed.set_market_suffixes({name: item.yahoo_suffix for name, item in rig.cfg.markets.items()})
+    feed.set_market_suffixes({name: item.yahoo_suffix for name, item in delta.cfg.markets.items()})
     assert feed.yf_symbol(instrument) == "HL.L"
 
 
 def test_unknown_kind_fails_loudly_naming_known_kinds():
-    rig = Rigger.__new__(Rigger)
-    rig.plugins = {"us": USMarket(), "asx": ASXMarket()}
-    rig.cfg = build_config(
+    delta = Delta.__new__(Delta)
+    delta.plugins = {"us": USMarket(), "asx": ASXMarket()}
+    delta.cfg = build_config(
         {"targets": {"bogus": {"kind": "planet", "market": "asx", "tickers": ["X"]}}}
     )
     with pytest.raises(KeyError, match="known kinds are"):
-        rig._build_targets()
+        delta._build_targets()
 
 
 def test_legacy_watchlist_kinds_are_inferred_from_shape(tmp_path, monkeypatch):

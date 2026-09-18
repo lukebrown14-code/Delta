@@ -11,12 +11,12 @@ from sqlmodel import Session
 from textual.app import App
 from textual.widgets import DataTable, MarkdownViewer
 
-from rigger.core.db import EventTable, NewsItemTable
-from rigger.core.json import to_json
-from rigger.core.models import Instrument
-from rigger.evidence import cite
-from rigger.reports import build_report, gather, render_markdown, write_report
-from rigger.tui.screens.reports import Reports
+from delta.core.db import EventTable, NewsItemTable
+from delta.core.json import to_json
+from delta.core.models import Instrument
+from delta.evidence import cite
+from delta.reports import build_report, gather, render_markdown, write_report
+from delta.tui.screens.reports import Reports
 from tests.conftest import FakeConfig, FakeLLM, seed_bars
 
 INST = "US:AAPL"
@@ -200,11 +200,11 @@ def test_reports_screen_lists_targets_and_generates(tmp_engine, tmp_path, monkey
     _seed(tmp_engine)
     reports_dir = tmp_path / "reports"
     aapl = Instrument(id=INST, market="us", symbol="AAPL", currency="USD", watchlists=("apple",))
-    rig = ScreenRig(tmp_engine, FakeLLM({"report": _draft()}), [aapl], str(reports_dir))
+    delta = ScreenRig(tmp_engine, FakeLLM({"report": _draft()}), [aapl], str(reports_dir))
 
     class ReportsApp(App):
         def on_mount(self) -> None:
-            self.push_screen(Reports(rig))
+            self.push_screen(Reports(delta))
 
     async def run():
         app = ReportsApp()
@@ -249,11 +249,11 @@ def test_reports_screen_shows_newest_report_across_instruments(tmp_engine, tmp_p
         Instrument(id=INST, market="us", symbol="AAPL", currency="USD", watchlists=("pair",)),
         Instrument(id=other, market="us", symbol="MSFT", currency="USD", watchlists=("pair",)),
     ]
-    rig = ScreenRig(tmp_engine, FakeLLM({}), universe, str(reports_dir))
+    delta = ScreenRig(tmp_engine, FakeLLM({}), universe, str(reports_dir))
 
     class ReportsApp(App):
         def on_mount(self) -> None:
-            self.push_screen(Reports(rig))
+            self.push_screen(Reports(delta))
 
     async def run():
         app = ReportsApp()
@@ -269,11 +269,11 @@ def test_reports_screen_shows_newest_report_across_instruments(tmp_engine, tmp_p
 def test_reports_screen_generate_with_no_targets_notifies(tmp_engine, tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     (tmp_path / "config.toml").write_text("", encoding="utf-8")
-    rig = ScreenRig(tmp_engine, FakeLLM({}), [], str(tmp_path / "reports"))
+    delta = ScreenRig(tmp_engine, FakeLLM({}), [], str(tmp_path / "reports"))
 
     class ReportsApp(App):
         def on_mount(self) -> None:
-            self.push_screen(Reports(rig))
+            self.push_screen(Reports(delta))
 
     async def run():
         app = ReportsApp()

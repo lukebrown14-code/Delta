@@ -10,8 +10,8 @@ from pathlib import Path
 import pytest
 from sqlmodel import Session
 
-from rigger.core.db import BarTable
-from rigger.llm.client import LLMResult
+from delta.core.db import BarTable
+from delta.llm.client import LLMResult
 
 
 class FakeConfig:
@@ -86,6 +86,6 @@ def fake_llm() -> FakeLLM:
 
 @pytest.fixture
 def tmp_engine(tmp_path: Path):
-    from rigger.core.db import init_engine
+    from delta.core.db import init_engine
 
     return init_engine(tmp_path / "test.db")

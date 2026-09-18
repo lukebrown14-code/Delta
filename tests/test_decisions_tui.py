@@ -7,8 +7,8 @@ from datetime import date
 
 from textual.app import App
 
-from rigger import decisions
-from rigger.tui.screens.decisions import Decisions
+from delta import decisions
+from delta.tui.screens.decisions import Decisions
 from tests.conftest import FakeConfig
 
 

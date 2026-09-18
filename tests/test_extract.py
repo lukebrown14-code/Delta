@@ -8,12 +8,12 @@ from datetime import UTC, datetime, timedelta
 
 from sqlmodel import Session, select
 
-from rigger.core.db import EventTable, NewsItemTable
-from rigger.core.json import from_json, to_json
-from rigger.core.models import Instrument
-from rigger.core.plugin import Context
-from rigger.extract import event_id, extract_events
-from rigger.llm.client import LLMResult
+from delta.core.db import EventTable, NewsItemTable
+from delta.core.json import from_json, to_json
+from delta.core.models import Instrument
+from delta.core.plugin import Context
+from delta.extract import event_id, extract_events
+from delta.llm.client import LLMResult
 from tests.conftest import FakeConfig, FakeLLM
 
 NOW = datetime(2026, 3, 22, tzinfo=UTC)

@@ -1,8 +1,8 @@
-# Rigger
+# Delta
 
 A personal investment research assistant for people who enjoy investing as a hobby.
 
-You tell Rigger what you're interested in — a company, a sector, an industry, a market, a theme. It gathers evidence about them from public sources, an AI synthesises that evidence into reports you can check line by line, and an optional thesis layer tracks a long-horizon idea as evidence accumulates for and against it.
+You tell Delta what you're interested in — a company, a sector, an industry, a market, a theme. It gathers evidence about them from public sources, an AI synthesises that evidence into reports you can check line by line, and an optional thesis layer tracks a long-horizon idea as evidence accumulates for and against it.
 
 **It does not trade, and it does not tell you what to buy.** The product is clarity: organised facts, cited summaries, and somewhere to reason about an idea. Nothing here is financial advice.
 
@@ -38,8 +38,8 @@ Four rules the code actually enforces:
 ## Install
 
 ```bash
-git clone https://github.com/lukebrown14-code/Rigger.git
-cd Rigger
+git clone https://github.com/lukebrown14-code/Delta.git
+cd Delta
 uv sync
 cp .env.example .env      # then fill in your key(s)
 ```
@@ -75,7 +75,7 @@ Set `[plugins.sec_edgar].contact` to a real email before ingesting US filings �
 Open the app:
 
 ```bash
-uv run rig
+uv run delta
 ```
 
 | Key | Screen |
@@ -101,7 +101,7 @@ Reports keep their Markdown export alongside a structured JSON sidecar for citat
 ## Project layout
 
 ```
-rigger/
+delta/
 ├── core/            models, SQLite (SQLModel), config, plugin registry, event bus
 ├── llm/             provider-agnostic client, model catalog, routing, structured calls
 ├── plugins/
@@ -119,11 +119,11 @@ rigger/
 tests/               pytest, fully offline (respx + a fake LLM)
 ```
 
-Plugins are discovered through the `rigger.plugins` and `rigger.targets` entry-point groups in `pyproject.toml`. A new data source is one file implementing one class.
+Plugins are discovered through the `delta.plugins` and `delta.targets` entry-point groups in `pyproject.toml`. A new data source is one file implementing one class.
 
 ### Configuring data sources
 
-Press `c` for Settings, select a source in **data sources**, then press `d` to configure it. Source adapters declare the settings they accept; ordinary settings are saved in `config.toml`, while declared API-key fields are saved only in `.env` and are masked in the UI. Rigger deliberately does not offer a generic authenticated-HTTP connector: a commercial source such as Financial Times needs a dedicated adapter built against its licensed API contract, pagination rules and content-use rights.
+Press `c` for Settings, select a source in **data sources**, then press `d` to configure it. Source adapters declare the settings they accept; ordinary settings are saved in `config.toml`, while declared API-key fields are saved only in `.env` and are masked in the UI. Delta deliberately does not offer a generic authenticated-HTTP connector: a commercial source such as Financial Times needs a dedicated adapter built against its licensed API contract, pagination rules and content-use rights.
 
 ### Adding an exchange
 
@@ -134,7 +134,7 @@ Press `c`, then `a` in Settings to add an exchange-level market. Enter its ID, c
 ```bash
 uv run pytest
 uv run ruff check . && uv run ruff format .
-uv run mypy --strict rigger/core rigger/llm
+uv run mypy --strict delta/core delta/llm
 ```
 
 The same three run in CI on every push. Tests never touch the network.

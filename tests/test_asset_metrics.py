@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from rigger.asset_metrics import _values, chart_window, profile_for
-from rigger.core.models import Instrument
+from delta.asset_metrics import _values, chart_window, profile_for
+from delta.core.models import Instrument
 
 
 def test_each_asset_class_has_its_own_profile():

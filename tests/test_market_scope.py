@@ -5,9 +5,9 @@ from __future__ import annotations
 import asyncio
 from types import SimpleNamespace
 
-from rigger import services
-from rigger.core.models import Instrument
-from rigger.core.plugin import DataPlugin
+from delta import services
+from delta.core.models import Instrument
+from delta.core.plugin import DataPlugin
 
 
 class ScopedSource(DataPlugin):
@@ -25,7 +25,7 @@ class ScopedSource(DataPlugin):
 def test_ingest_applies_data_plugin_market_scope(tmp_engine):
     source = ScopedSource()
     source.configure({"scope": {"markets": ["lse"]}})
-    rig = SimpleNamespace(
+    delta = SimpleNamespace(
         engine=tmp_engine,
         plugins={"scoped": source},
         universe=lambda: [
@@ -34,6 +34,6 @@ def test_ingest_applies_data_plugin_market_scope(tmp_engine):
         ],
     )
 
-    asyncio.run(services.ingest(rig, since="2026-01-01"))
+    asyncio.run(services.ingest(delta, since="2026-01-01"))
 
     assert source.seen == ["LSE:HL"]

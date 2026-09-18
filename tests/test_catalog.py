@@ -11,8 +11,8 @@ import respx
 from textual.app import App
 from textual.widgets import DataTable, Input
 
-from rigger.core.config import load_toml
-from rigger.llm.catalog import (
+from delta.core.config import load_toml
+from delta.llm.catalog import (
     CATALOG_PATH,
     ModelInfo,
     _read_cache_entry,
@@ -22,11 +22,11 @@ from rigger.llm.catalog import (
     set_llm_route,
     set_plugin_model,
 )
-from rigger.llm.providers import (
+from delta.llm.providers import (
     OPENROUTER_BASE_URL,
     OpenRouterProvider,
 )
-from rigger.tui.screens.model_picker import ModelPicker
+from delta.tui.screens.model_picker import ModelPicker
 
 MODELS_URL = f"{OPENROUTER_BASE_URL}/models"
 

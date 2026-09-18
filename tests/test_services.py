@@ -8,10 +8,10 @@ from types import SimpleNamespace
 import pytest
 from sqlmodel import Session
 
-from rigger import services
-from rigger.core.db import LLMCallTable
-from rigger.core.models import Instrument
-from rigger.plugins.markets.us import USMarket
+from delta import services
+from delta.core.db import LLMCallTable
+from delta.core.models import Instrument
+from delta.plugins.markets.us import USMarket
 from tests.conftest import FakeConfig, FakeLLM, seed_bars
 
 AAPL = Instrument(id="US:AAPL", market="us", symbol="AAPL", currency="USD", sector="Tech")
@@ -19,7 +19,7 @@ MSFT = Instrument(id="US:MSFT", market="us", symbol="MSFT", currency="USD", sect
 
 
 class FakeRig:
-    """Just enough of :class:`rigger.runtime.Rigger` for the services."""
+    """Just enough of :class:`delta.runtime.Delta` for the services."""
 
     def __init__(self, engine, llm: FakeLLM, universe: list[Instrument]) -> None:
         self.engine = engine
@@ -46,7 +46,7 @@ class FakeRig:
         return self._universe
 
     def context(self, universe):
-        from rigger.core.plugin import Context
+        from delta.core.plugin import Context
 
         return Context(
             engine=self.engine,
@@ -59,22 +59,22 @@ class FakeRig:
 
 
 @pytest.fixture
-def rig(tmp_engine, fake_llm):
+def delta(tmp_engine, fake_llm):
     for inst in (AAPL, MSFT):
         seed_bars(tmp_engine, inst.id, price_fn=lambda i: 100.0)
     return FakeRig(tmp_engine, fake_llm, [AAPL, MSFT])
 
 
-def test_setup_checks_flag_missing_key(rig):
-    checks = {c.name: c for c in services.setup_checks(rig)}
+def test_setup_checks_flag_missing_key(delta):
+    checks = {c.name: c for c in services.setup_checks(delta)}
     assert not checks["LLM provider (openrouter)"].ok
     assert "OPENROUTER_API_KEY" in checks["LLM provider (openrouter)"].fix
     assert checks["Price history"].ok
     assert not checks["SEC EDGAR contact"].ok
 
 
-def test_data_health_counts_bars(rig):
-    health = services.data_health(rig)
+def test_data_health_counts_bars(delta):
+    health = services.data_health(delta)
     assert health.counts["bar"] == 160
     assert set(health.latest_bar) >= {AAPL.id, MSFT.id}
 
@@ -193,7 +193,7 @@ def test_remove_target_also_removes_legacy_watchlist(tmp_path, monkeypatch):
 def _news(engine, id_, instrument_ids, published, source="rss"):
     import json
 
-    from rigger.core.db import NewsItemTable
+    from delta.core.db import NewsItemTable
 
     with Session(engine) as session:
         session.add(
@@ -210,7 +210,7 @@ def _news(engine, id_, instrument_ids, published, source="rss"):
 
 
 def _event(engine, id_, instrument_id, ts):
-    from rigger.core.db import EventTable
+    from delta.core.db import EventTable
 
     with Session(engine) as session:
         session.add(

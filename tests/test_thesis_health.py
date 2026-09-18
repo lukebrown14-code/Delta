@@ -7,11 +7,11 @@ from datetime import UTC, datetime, timedelta
 
 from sqlmodel import Session
 
-from rigger.core.db import NewsItemTable
-from rigger.evidence import EvidenceItem
-from rigger.theses import Thesis, add_evidence, create_thesis
-from rigger.thesis_health import badge_text, compute_health, state_style
-from rigger.tui.screens.theses import Theses
+from delta.core.db import NewsItemTable
+from delta.evidence import EvidenceItem
+from delta.theses import Thesis, add_evidence, create_thesis
+from delta.thesis_health import badge_text, compute_health, state_style
+from delta.tui.screens.theses import Theses
 from tests.conftest import FakeConfig
 
 

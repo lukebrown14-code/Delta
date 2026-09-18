@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from rigger.plugins.markets.asx import ASXMarket
+from delta.plugins.markets.asx import ASXMarket
 
 SYDNEY = ZoneInfo("Australia/Sydney")
 

@@ -10,8 +10,8 @@ from typing import cast
 import httpx
 import respx
 
-from rigger.core.models import Instrument, NewsItem
-from rigger.plugins.data.rss import RSSData, news_id, strip_html
+from delta.core.models import Instrument, NewsItem
+from delta.plugins.data.rss import RSSData, news_id, strip_html
 
 FIXTURE = Path(__file__).parent / "fixtures" / "business_feed.xml"
 FEED_URL = "https://feeds.example.com/business.xml"

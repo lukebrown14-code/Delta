@@ -13,15 +13,15 @@ import respx
 from textual.app import App
 from textual.widgets import DataTable, Input
 
-from rigger.core.config import ENV_PATH, read_env_value, set_env_value
-from rigger.llm.catalog import set_llm_custom, set_llm_provider
-from rigger.llm.providers import (
+from delta.core.config import ENV_PATH, read_env_value, set_env_value
+from delta.llm.catalog import set_llm_custom, set_llm_provider
+from delta.llm.providers import (
     OPENROUTER_BASE_URL,
     PROVIDERS,
     OpenAICompatProvider,
     verify_key,
 )
-from rigger.tui.screens.provider_picker import (
+from delta.tui.screens.provider_picker import (
     CustomFormModal,
     KeyEntryModal,
     ProviderPicker,
@@ -191,14 +191,14 @@ def test_compat_get_client_requires_base_url():
 def test_build_llm_falls_back_on_legacy_provider_name(tmp_engine, monkeypatch, tmp_path):
     """A config naming a removed provider (e.g. "litellm") must not crash startup."""
     monkeypatch.chdir(tmp_path)
-    from rigger.runtime import Rigger
+    from delta.runtime import Delta
 
-    rig = Rigger.__new__(Rigger)
-    rig.settings = SimpleNamespace(openrouter_api_key="", openai_api_key="", anthropic_api_key="")
-    rig.cfg = _cfg(llm_provider="litellm")
-    rig.engine = tmp_engine
+    delta = Delta.__new__(Delta)
+    delta.settings = SimpleNamespace(openrouter_api_key="", openai_api_key="", anthropic_api_key="")
+    delta.cfg = _cfg(llm_provider="litellm")
+    delta.engine = tmp_engine
 
-    client = rig._build_llm()
+    client = delta._build_llm()
 
     assert client.provider.name == "openrouter"
 
@@ -271,17 +271,17 @@ def test_connect_provider_saves_key_verifies_and_switches(monkeypatch, tmp_path)
     (tmp_path / "config.toml").write_text('[llm]\nprovider = "openrouter"\n', encoding="utf-8")
     app = _FakeApp()
     app.push_screen_wait = lambda modal: _async_return("sk-new")  # type: ignore[method-assign]
-    rig = _FakeRig(_cfg())
+    delta = _FakeRig(_cfg())
 
     async def fake_verify(spec: Any, key: str, *, base_url: str = "") -> bool:
         return key == "sk-new"
 
-    monkeypatch.setattr("rigger.tui.screens.provider_picker.verify_key", fake_verify)
-    asyncio.run(connect_provider(app, rig, "openai"))
+    monkeypatch.setattr("delta.tui.screens.provider_picker.verify_key", fake_verify)
+    asyncio.run(connect_provider(app, delta, "openai"))
 
     assert read_env_value("OPENAI_API_KEY") == "sk-new"
     assert "openai" in (tmp_path / "config.toml").read_text(encoding="utf-8")
-    assert rig.reloaded == 1
+    assert delta.reloaded == 1
     assert any("connected" in msg for msg, _ in app.notifications)
     assert any("routes may not match" in msg for msg, sev in app.notifications if sev == "warning")
 
@@ -292,13 +292,13 @@ def test_connect_provider_cancelled_modals_do_nothing(monkeypatch, tmp_path):
     (tmp_path / "config.toml").write_text('[llm]\nprovider = "openrouter"\n', encoding="utf-8")
     app = _FakeApp()
     app.push_screen_wait = lambda modal: _async_return(None)  # type: ignore[method-assign]
-    rig = _FakeRig(_cfg())
+    delta = _FakeRig(_cfg())
 
-    asyncio.run(connect_provider(app, rig, "anthropic"))
-    asyncio.run(connect_provider(app, rig, "custom"))
+    asyncio.run(connect_provider(app, delta, "anthropic"))
+    asyncio.run(connect_provider(app, delta, "custom"))
 
     assert read_env_value("ANTHROPIC_API_KEY") == ""
-    assert rig.reloaded == 0
+    assert delta.reloaded == 0
     assert app.notifications == []
 
 
@@ -316,12 +316,12 @@ def test_connect_provider_existing_key_skips_modal(monkeypatch, tmp_path):
 
     app = _FakeApp()
     app.push_screen_wait = push_screen_wait  # type: ignore[method-assign]
-    rig = _FakeRig(_cfg())
+    delta = _FakeRig(_cfg())
 
-    asyncio.run(connect_provider(app, rig, "anthropic"))
+    asyncio.run(connect_provider(app, delta, "anthropic"))
 
     assert pushed == []  # key existed: no modal, straight to activation
-    assert rig.reloaded == 1
+    assert delta.reloaded == 1
 
 
 def _async_return(value: Any) -> Any:

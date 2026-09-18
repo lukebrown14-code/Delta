@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from rigger.llm.router import model_for
+from delta.llm.router import model_for
 from tests.conftest import FakeConfig
 
 

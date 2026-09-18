@@ -1,5 +1,5 @@
 base_currency = "AUD"
-db_path = "data/rigger.db"
+db_path = "data/delta.db"
 reports_dir = "reports"
 
 [universe]

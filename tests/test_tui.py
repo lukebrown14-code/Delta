@@ -7,11 +7,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from rigger import services
-from rigger.core.models import Instrument
-from rigger.tui.app import RiggerApp
-from rigger.tui.shell import ALL_ITEMS, OFF_BAR_ITEMS, ScreenFooter, StatusBar
-from rigger.tui.widgets import (
+from delta import services
+from delta.core.models import Instrument
+from delta.tui.app import DeltaApp
+from delta.tui.shell import ALL_ITEMS, OFF_BAR_ITEMS, ScreenFooter, StatusBar
+from delta.tui.widgets import (
     MODAL_WIDTH,
     MODAL_WIDTH_WIDE,
     Dialog,
@@ -47,7 +47,7 @@ class FakeRig:
         return self._universe
 
     def context(self, universe):
-        from rigger.core.plugin import Context
+        from delta.core.plugin import Context
 
         return Context(
             engine=self.engine,
@@ -60,17 +60,17 @@ class FakeRig:
 
 
 @pytest.fixture
-def rig(tmp_engine, tmp_path):
+def delta(tmp_engine, tmp_path):
     seed_bars(tmp_engine, AAPL.id, price_fn=lambda i: 100.0)
     fake = FakeRig(tmp_engine, [AAPL])
     # Keep the last-seen state file out of the repo: the app stamps a visit on start.
-    fake.cfg.db_path = str(tmp_path / "rigger.db")
+    fake.cfg.db_path = str(tmp_path / "delta.db")
     return fake
 
 
-def test_app_mounts_and_navigates(rig):
+def test_app_mounts_and_navigates(delta):
     async def run():
-        app = RiggerApp(rig)
+        app = DeltaApp(delta)
         async with app.run_test() as pilot:
             assert app.screen.name == "home"
             for key, name, _label in ALL_ITEMS:
@@ -80,11 +80,11 @@ def test_app_mounts_and_navigates(rig):
     asyncio.run(run())
 
 
-def test_status_bar_is_one_row(rig):
+def test_status_bar_is_one_row(delta):
     async def run():
-        app = RiggerApp(rig)
+        app = DeltaApp(delta)
         async with app.run_test(size=(120, 24)) as pilot:
-            # Home is a RiggerScreen like every panel: the bar is there where a
+            # Home is a DeltaScreen like every panel: the bar is there where a
             # new user lands, so the 1/2/4/5 rail never disappears.
             assert app.screen.name == "home"
             bar = app.screen.query_one(StatusBar)
@@ -110,9 +110,9 @@ def test_status_bar_is_one_row(rig):
     asyncio.run(run())
 
 
-def test_status_bar_sheds_cells_when_narrow(rig):
+def test_status_bar_sheds_cells_when_narrow(delta):
     async def run():
-        app = RiggerApp(rig)
+        app = DeltaApp(delta)
         async with app.run_test(size=(70, 24)) as pilot:
             await pilot.press("2")
             bar = app.screen.query_one(StatusBar)
@@ -124,7 +124,7 @@ def test_status_bar_sheds_cells_when_narrow(rig):
     asyncio.run(run())
 
 
-def test_targets_panel_adds_target(rig, monkeypatch, tmp_path):
+def test_targets_panel_adds_target(delta, monkeypatch, tmp_path):
     import tomli_w
 
     monkeypatch.chdir(tmp_path)
@@ -133,7 +133,7 @@ def test_targets_panel_adds_target(rig, monkeypatch, tmp_path):
     )
 
     async def run():
-        app = RiggerApp(rig)
+        app = DeltaApp(delta)
         async with app.run_test() as pilot:
             await pilot.press("1")
             assert app.screen.name == "targets"
@@ -150,9 +150,9 @@ def test_targets_panel_adds_target(rig, monkeypatch, tmp_path):
     asyncio.run(run())
 
 
-def test_question_mark_opens_help_then_closes(rig):
+def test_question_mark_opens_help_then_closes(delta):
     async def run():
-        app = RiggerApp(rig)
+        app = DeltaApp(delta)
         async with app.run_test() as pilot:
             assert app.screen.name == "home"
             await pilot.press("?")
@@ -163,13 +163,13 @@ def test_question_mark_opens_help_then_closes(rig):
     asyncio.run(run())
 
 
-def test_targets_panel_remove_with_no_targets_notifies(rig, monkeypatch, tmp_path):
+def test_targets_panel_remove_with_no_targets_notifies(delta, monkeypatch, tmp_path):
     """An empty DataTable reports cursor_row == 0, so row_count is the real guard."""
     monkeypatch.chdir(tmp_path)
     (tmp_path / "config.toml").write_text("", encoding="utf-8")
 
     async def run():
-        app = RiggerApp(rig)
+        app = DeltaApp(delta)
         async with app.run_test() as pilot:
             await pilot.press("1")
             assert app.screen.query_one("#target-table").row_count == 0
@@ -179,11 +179,11 @@ def test_targets_panel_remove_with_no_targets_notifies(rig, monkeypatch, tmp_pat
     asyncio.run(run())
 
 
-def test_home_pulse_reference_point_is_stable_across_refreshes(rig):
+def test_home_pulse_reference_point_is_stable_across_refreshes(delta):
     """last_seen is captured once per session; re-reading it would zero the panel."""
 
     async def run():
-        app = RiggerApp(rig)
+        app = DeltaApp(delta)
         async with app.run_test() as pilot:
             home = app.screen
             captured = home.last_seen
@@ -198,7 +198,7 @@ def test_home_pulse_reference_point_is_stable_across_refreshes(rig):
 
 @pytest.fixture(autouse=True)
 def offline_quotes(monkeypatch):
-    from rigger.quotes import YahooQuotes
+    from delta.quotes import YahooQuotes
 
     async def run(self):
         self.on_state("offline test")
@@ -208,11 +208,11 @@ def offline_quotes(monkeypatch):
 
 
 @pytest.mark.parametrize("size", [(80, 24), (120, 40)])
-@pytest.mark.parametrize("theme", ["rigger-dark", "rigger-light"])
-def test_ledger_groups_quotes_and_focus(rig, monkeypatch, tmp_path, size, theme):
+@pytest.mark.parametrize("theme", ["delta-dark", "delta-light"])
+def test_ledger_groups_quotes_and_focus(delta, monkeypatch, tmp_path, size, theme):
     import tomli_w
 
-    from rigger.quotes import parse_quote
+    from delta.quotes import parse_quote
 
     monkeypatch.chdir(tmp_path)
     (tmp_path / "config.toml").write_text(
@@ -232,7 +232,7 @@ def test_ledger_groups_quotes_and_focus(rig, monkeypatch, tmp_path, size, theme)
     )
 
     async def run():
-        app = RiggerApp(rig)
+        app = DeltaApp(delta)
         async with app.run_test(size=size) as pilot:
             app.theme = theme
             await pilot.press("1")
@@ -274,12 +274,12 @@ def test_ledger_groups_quotes_and_focus(rig, monkeypatch, tmp_path, size, theme)
 
 
 @pytest.mark.parametrize("field", ["name", "kind", "market", "tickers", "tags"])
-def test_company_form_enter_submits(rig, monkeypatch, tmp_path, field):
+def test_company_form_enter_submits(delta, monkeypatch, tmp_path, field):
     monkeypatch.chdir(tmp_path)
     (tmp_path / "config.toml").write_text("", encoding="utf-8")
 
     async def run():
-        app = RiggerApp(rig)
+        app = DeltaApp(delta)
         async with app.run_test() as pilot:
             await pilot.press("1", "a")
             screen = app.screen
@@ -296,12 +296,12 @@ def test_company_form_enter_submits(rig, monkeypatch, tmp_path, field):
     asyncio.run(run())
 
 
-def test_company_form_enter_keeps_invalid_form_open(rig, monkeypatch, tmp_path):
+def test_company_form_enter_keeps_invalid_form_open(delta, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     (tmp_path / "config.toml").write_text("", encoding="utf-8")
 
     async def run():
-        app = RiggerApp(rig)
+        app = DeltaApp(delta)
         async with app.run_test() as pilot:
             await pilot.press("1", "a")
             app.screen.query_one("#tg-name").value = "apple"
@@ -313,10 +313,10 @@ def test_company_form_enter_keeps_invalid_form_open(rig, monkeypatch, tmp_path):
     asyncio.run(run())
 
 
-def test_add_modal_yahoo_dropdown_keyboard_and_online_state(rig, monkeypatch, tmp_path):
-    from rigger import tui
-    from rigger.quotes import SearchResult
-    from rigger.tui.screens.targets import TargetAddModal
+def test_add_modal_yahoo_dropdown_keyboard_and_online_state(delta, monkeypatch, tmp_path):
+    from delta import tui
+    from delta.quotes import SearchResult
+    from delta.tui.screens.targets import TargetAddModal
 
     monkeypatch.chdir(tmp_path)
     (tmp_path / "config.toml").write_text("", encoding="utf-8")
@@ -328,7 +328,7 @@ def test_add_modal_yahoo_dropdown_keyboard_and_online_state(rig, monkeypatch, tm
     monkeypatch.setattr(tui.screens.targets, "yahoo_search", yahoo)
 
     async def run():
-        app = RiggerApp(rig)
+        app = DeltaApp(delta)
         async with app.run_test() as pilot:
             await pilot.press("1", "a")
             assert isinstance(app.screen, TargetAddModal)
@@ -359,9 +359,9 @@ def test_theme_tokens_are_readable_on_black():
 
     from textual.color import Color
 
-    from rigger.tui.theme import RIGGER_DARK
+    from delta.tui.theme import DELTA_DARK
 
-    tui = Path(__file__).resolve().parents[1] / "rigger" / "tui"
+    tui = Path(__file__).resolve().parents[1] / "delta" / "tui"
     pattern = re.compile(r"color: \$(primary|secondary|accent|success|error|warning)\b")
     # A graphic is ink, not text: the braille graph's low end is the brand
     # blue on purpose, and reading it never depends on that contrast — the
@@ -383,24 +383,24 @@ def test_theme_tokens_are_readable_on_black():
 
         return 0.2126 * channel(color.r) + 0.7152 * channel(color.g) + 0.0722 * channel(color.b)
 
-    black = luminance(Color.parse(RIGGER_DARK.background))
+    black = luminance(Color.parse(DELTA_DARK.background))
     for token in ("text-primary", "text-error", "text-success", "text-warning", "text-muted"):
-        ratio = (luminance(Color.parse(RIGGER_DARK.variables[token])) + 0.05) / (black + 0.05)
+        ratio = (luminance(Color.parse(DELTA_DARK.variables[token])) + 0.05) / (black + 0.05)
         assert ratio >= 4.5, (token, ratio)
 
 
-def _routed_rig(rig):
-    rig.cfg.llm_routing = {"chat": "x/sonnet", "extract": "x/haiku", "report": "x/sonnet"}
-    rig.cfg.targets = {"apple": {"kind": "company", "market": "us", "tickers": ["AAPL"]}}
-    return rig
+def _routed_delta(delta):
+    delta.cfg.llm_routing = {"chat": "x/sonnet", "extract": "x/haiku", "report": "x/sonnet"}
+    delta.cfg.targets = {"apple": {"kind": "company", "market": "us", "tickers": ["AAPL"]}}
+    return delta
 
 
-def test_config_two_columns_fold_and_focus_keys(rig):
+def test_config_two_columns_fold_and_focus_keys(delta):
     """Wide: diagnostics open beside the stack; d folds; l/t move focus; enter opens the picker."""
-    from rigger.tui.screens.model_picker import ModelPicker
+    from delta.tui.screens.model_picker import ModelPicker
 
     async def run():
-        app = RiggerApp(_routed_rig(rig))
+        app = DeltaApp(_routed_delta(delta))
         async with app.run_test(size=(120, 40)) as pilot:
             await pilot.press("c")
             screen = app.screen
@@ -434,11 +434,11 @@ def test_config_two_columns_fold_and_focus_keys(rig):
     asyncio.run(run())
 
 
-def test_config_narrow_folds_diagnostics_until_d(rig):
+def test_config_narrow_folds_diagnostics_until_d(delta):
     """80x24: one column, diagnostics folded; d expands full-height, esc closes."""
 
     async def run():
-        app = RiggerApp(_routed_rig(rig))
+        app = DeltaApp(_routed_delta(delta))
         async with app.run_test(size=(80, 24)) as pilot:
             await pilot.press("c")
             screen = app.screen
@@ -459,7 +459,7 @@ def test_config_narrow_folds_diagnostics_until_d(rig):
     asyncio.run(run())
 
 
-def test_home_refreshes_twice_without_duplicate_ids(rig, monkeypatch, tmp_path):
+def test_home_refreshes_twice_without_duplicate_ids(delta, monkeypatch, tmp_path):
     """Home's boxes update in place.
 
     A remove-then-mount rebuild raced Textual's async ``remove_children`` and
@@ -477,7 +477,7 @@ def test_home_refreshes_twice_without_duplicate_ids(rig, monkeypatch, tmp_path):
     )
 
     async def run():
-        app = RiggerApp(rig)
+        app = DeltaApp(delta)
         async with app.run_test() as pilot:
             home = app.screen
             assert home.name == "home"
@@ -490,7 +490,7 @@ def test_home_refreshes_twice_without_duplicate_ids(rig, monkeypatch, tmp_path):
     asyncio.run(run())
 
 
-def _home_config(tmp_path, monkeypatch, rig):
+def _home_config(tmp_path, monkeypatch, delta):
     """Chdir to a config with one watched ticker, so Home has a watchlist row."""
     import tomli_w
 
@@ -501,7 +501,7 @@ def _home_config(tmp_path, monkeypatch, rig):
         ),
         encoding="utf-8",
     )
-    rig.cfg.reports_dir = str(tmp_path / "reports")
+    delta.cfg.reports_dir = str(tmp_path / "reports")
     return tmp_path
 
 
@@ -513,7 +513,7 @@ def _frame(app):
 def _quote(price=1234.5, change_pct=2.5, age_seconds=0.0):
     from datetime import UTC, datetime, timedelta
 
-    from rigger.quotes import Quote
+    from delta.quotes import Quote
 
     now = datetime.now(UTC)
     return Quote(
@@ -525,17 +525,17 @@ def _quote(price=1234.5, change_pct=2.5, age_seconds=0.0):
     )
 
 
-def test_home_watchlist_paints_a_live_quote(rig, monkeypatch, tmp_path):
+def test_home_watchlist_paints_a_live_quote(delta, monkeypatch, tmp_path):
     """A quote reaches the screen, not just the feed dict.
 
     Asserting on ``feed.quotes`` alone passes for a row that never repaints,
     so this drives a real app and reads the exported frame: the live price,
     the live dot and the ``last`` header must all be there.
     """
-    _home_config(tmp_path, monkeypatch, rig)
+    _home_config(tmp_path, monkeypatch, delta)
 
     async def run():
-        app = RiggerApp(rig)
+        app = DeltaApp(delta)
         async with app.run_test(size=(120, 40)) as pilot:
             home = app.screen
             head = home.query_one("#watch-head")
@@ -560,15 +560,15 @@ def test_home_watchlist_paints_a_live_quote(rig, monkeypatch, tmp_path):
     asyncio.run(run())
 
 
-def test_home_quote_age_falls_back_to_the_stored_close(rig, monkeypatch, tmp_path):
+def test_home_quote_age_falls_back_to_the_stored_close(delta, monkeypatch, tmp_path):
     """No quote: the row shows the last stored bar under a ``close`` header, and
     an old quote is marked stale rather than shown as live."""
-    from rigger.tui.screens.home import WatchRow
+    from delta.tui.screens.home import WatchRow
 
-    _home_config(tmp_path, monkeypatch, rig)
+    _home_config(tmp_path, monkeypatch, delta)
 
     async def run():
-        app = RiggerApp(rig)
+        app = DeltaApp(delta)
         async with app.run_test(size=(120, 40)) as pilot:
             home = app.screen
             row = home.query_one(WatchRow)
@@ -584,12 +584,12 @@ def test_home_quote_age_falls_back_to_the_stored_close(rig, monkeypatch, tmp_pat
     asyncio.run(run())
 
 
-def test_home_quote_feed_starts_on_resume_and_is_cancelled_on_unmount(rig, monkeypatch, tmp_path):
+def test_home_quote_feed_starts_on_resume_and_is_cancelled_on_unmount(delta, monkeypatch, tmp_path):
     """A leaked feed task keeps a websocket alive after the screen is gone."""
-    _home_config(tmp_path, monkeypatch, rig)
+    _home_config(tmp_path, monkeypatch, delta)
 
     async def run():
-        app = RiggerApp(rig)
+        app = DeltaApp(delta)
         async with app.run_test(size=(120, 40)) as pilot:
             home = app.screen
             assert home.active
@@ -612,16 +612,16 @@ def test_home_quote_feed_starts_on_resume_and_is_cancelled_on_unmount(rig, monke
     asyncio.run(run())
 
 
-def test_home_warns_that_a_company_report_is_stale(rig, monkeypatch, tmp_path):
+def test_home_warns_that_a_company_report_is_stale(delta, monkeypatch, tmp_path):
     """Per-company report age, which Home could not say before.
 
     No report at all is not a warning — nothing is out of date until something
     has been written.
     """
-    _home_config(tmp_path, monkeypatch, rig)
+    _home_config(tmp_path, monkeypatch, delta)
 
     async def run():
-        app = RiggerApp(rig)
+        app = DeltaApp(delta)
         async with app.run_test(size=(120, 40)) as pilot:
             home = app.screen
             stale = home.query_one("#since-stale")
@@ -640,16 +640,16 @@ def test_home_warns_that_a_company_report_is_stale(rig, monkeypatch, tmp_path):
     asyncio.run(run())
 
 
-def test_home_survives_several_seconds_of_ticks(rig, monkeypatch, tmp_path):
+def test_home_survives_several_seconds_of_ticks(delta, monkeypatch, tmp_path):
     """The 1s clock and the 0.5s quote repaint must not race the box rebuild.
 
     Home crashed with DuplicateIds once because ``remove_children`` is async;
     a green helper test hid it, so this lets the real timers fire repeatedly.
     """
-    _home_config(tmp_path, monkeypatch, rig)
+    _home_config(tmp_path, monkeypatch, delta)
 
     async def run():
-        app = RiggerApp(rig)
+        app = DeltaApp(delta)
         async with app.run_test(size=(120, 40)) as pilot:
             home = app.screen
             home.feed.quotes["US:AAPL"] = _quote()
@@ -671,7 +671,7 @@ def test_braille_graph_paints_in_a_running_app():
     """
     from textual.app import App, ComposeResult
 
-    from rigger.tui.widgets import BrailleGraph
+    from delta.tui.widgets import BrailleGraph
 
     class GraphApp(App):
         CSS = "BrailleGraph { width: 40; height: 6; }"
@@ -691,7 +691,7 @@ def test_braille_graph_paints_in_a_running_app():
 
 def test_braille_graph_resolution_and_shape():
     """The graph uses the whole box: 4 dot rows per cell, 2 sample columns."""
-    from rigger.tui.widgets import BrailleGraph
+    from delta.tui.widgets import BrailleGraph
 
     rising = BrailleGraph(list(range(100)))
     rows = rising.rows(20, 4)
@@ -756,11 +756,11 @@ def _assert_dialog(screen, size: tuple[int, int], width: int) -> None:
     [("m", MODAL_WIDTH_WIDE), ("p", MODAL_WIDTH), ("g", MODAL_WIDTH), ("?", MODAL_WIDTH_WIDE)],
 )
 @pytest.mark.parametrize("size", [(80, 24), (120, 40)])
-def test_modals_are_framed_centred_and_escapable(rig, key, width, size):
+def test_modals_are_framed_centred_and_escapable(delta, key, width, size):
     """Every modal is a Dialog: framed, dimmed, centred, and closed by escape."""
 
     async def run():
-        app = RiggerApp(rig)
+        app = DeltaApp(delta)
         async with app.run_test(size=size) as pilot:
             await pilot.press(key)
             await pilot.pause()
@@ -775,18 +775,18 @@ def test_modals_are_framed_centred_and_escapable(rig, key, width, size):
     asyncio.run(run())
 
 
-def test_provider_key_modals_are_dialogs(rig):
+def test_provider_key_modals_are_dialogs(delta):
     """The two provider forms are Dialogs too, framed and closed by escape.
 
     Pushed onto the real app, not a bare one: the app stylesheet is what makes
     an Input one row rather than Textual's three, and these forms hold three
     of them.
     """
-    from rigger.llm.providers import PROVIDERS
-    from rigger.tui.screens.provider_picker import CustomFormModal, KeyEntryModal
+    from delta.llm.providers import PROVIDERS
+    from delta.tui.screens.provider_picker import CustomFormModal, KeyEntryModal
 
     async def run():
-        app = RiggerApp(rig)
+        app = DeltaApp(delta)
         async with app.run_test(size=(80, 24)) as pilot:
             for modal in (KeyEntryModal(PROVIDERS["openai"]), CustomFormModal()):
                 app.push_screen(modal)
@@ -800,14 +800,14 @@ def test_provider_key_modals_are_dialogs(rig):
     asyncio.run(run())
 
 
-def test_help_lists_per_screen_keys(rig):
+def test_help_lists_per_screen_keys(delta):
     """The keymap covers the screens, not just the app-level bindings."""
-    from rigger.tui.screens.research import Research
-    from rigger.tui.screens.theses import Theses
-    from rigger.tui.widgets import KeyGrid
+    from delta.tui.screens.research import Research
+    from delta.tui.screens.theses import Theses
+    from delta.tui.widgets import KeyGrid
 
     async def run():
-        app = RiggerApp(rig)
+        app = DeltaApp(delta)
         async with app.run_test(size=(120, 40)) as pilot:
             await pilot.press("?")
             await pilot.pause()
@@ -840,7 +840,7 @@ def test_help_lists_per_screen_keys(rig):
     asyncio.run(run())
 
 
-def test_space_folds_and_reopens_an_asset_class_group(rig, monkeypatch, tmp_path):
+def test_space_folds_and_reopens_an_asset_class_group(delta, monkeypatch, tmp_path):
     """``space`` on a group header must work, and must be able to undo itself.
 
     The header is not a target row, so the key cannot go through ``_selected``;
@@ -858,7 +858,7 @@ def test_space_folds_and_reopens_an_asset_class_group(rig, monkeypatch, tmp_path
     )
 
     async def run():
-        app = RiggerApp(rig)
+        app = DeltaApp(delta)
         async with app.run_test(size=(120, 40)) as pilot:
             await pilot.press("1")
             screen = app.screen

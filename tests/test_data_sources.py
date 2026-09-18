@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from rigger.core.config import read_env_value
-from rigger.core.plugin import DataPlugin, DataProviderField, DataProviderSpec
-from rigger.services import configure_data_provider, remove_market, save_market
+from delta.core.config import read_env_value
+from delta.core.plugin import DataPlugin, DataProviderField, DataProviderSpec
+from delta.services import configure_data_provider, remove_market, save_market
 
 
 class LicensedSource(DataPlugin):
@@ -32,10 +32,10 @@ class FakeRig:
 
 def test_licensed_source_persists_key_only_in_dotenv(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
-    rig = FakeRig()
+    delta = FakeRig()
     save_market("lse", label="London", currency="GBP", yahoo_suffix=".L")
     configure_data_provider(
-        rig,
+        delta,
         "licensed",
         {"endpoint": "https://api.example.test/v1", "api_key": "secret-value"},
         markets=["lse"],
@@ -45,7 +45,7 @@ def test_licensed_source_persists_key_only_in_dotenv(monkeypatch, tmp_path):
     assert "secret-value" not in text
     assert 'markets = [\n    "lse",\n]' in text
     assert read_env_value("FT_API_KEY") == "secret-value"
-    assert rig.reloaded == 1
+    assert delta.reloaded == 1
     try:
         remove_market("lse")
     except ValueError as exc:

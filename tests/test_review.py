@@ -5,10 +5,10 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
-from rigger.core.db import store_items
-from rigger.core.models import Bar, Instrument, NewsItem
-from rigger.review import evidence_audit, primary_sources_for, review_queue
-from rigger.theses import create_thesis
+from delta.core.db import store_items
+from delta.core.models import Bar, Instrument, NewsItem
+from delta.review import evidence_audit, primary_sources_for, review_queue
+from delta.theses import create_thesis
 
 NOW = datetime(2026, 1, 31, tzinfo=UTC)
 INST = Instrument(id="US:ACME", market="us", symbol="ACME", currency="USD")
@@ -60,20 +60,20 @@ def test_audit_tracks_stale_data_and_recent_source_diversity(tmp_engine):
 
 
 def test_primary_source_scope_and_asx_filing_classification(tmp_engine):
-    rig = Rig(
+    delta = Rig(
         tmp_engine,
         [INST, ASX],
         {"sec_edgar": SimpleNamespace(enabled=True), "asx_announcements": SimpleNamespace(enabled=True)},
     )
-    assert primary_sources_for(rig, INST.id) == frozenset({"sec_edgar"})
-    assert primary_sources_for(rig, ASX.id) == frozenset({"asx_announcements"})
+    assert primary_sources_for(delta, INST.id) == frozenset({"sec_edgar"})
+    assert primary_sources_for(delta, ASX.id) == frozenset({"asx_announcements"})
     store_items(tmp_engine, [_news("asx1", ASX.id, NOW - timedelta(days=1), source="asx_announcements")])
-    audit = evidence_audit(tmp_engine, ASX.id, now=NOW, primary_sources=primary_sources_for(rig, ASX.id))
+    audit = evidence_audit(tmp_engine, ASX.id, now=NOW, primary_sources=primary_sources_for(delta, ASX.id))
     assert audit.primary_coverage == "fresh"
 
 
 def test_queue_ranks_disclosures_then_falsifiers_then_coverage(tmp_engine):
-    rig = Rig(tmp_engine, [INST], {"sec_edgar": SimpleNamespace(enabled=True)})
+    delta = Rig(tmp_engine, [INST], {"sec_edgar": SimpleNamespace(enabled=True)})
     thesis = create_thesis(tmp_engine, "Revenue keeps rising", targets=(INST.id,), falsifiers=("guidance cut",))
     store_items(
         tmp_engine,
@@ -84,7 +84,7 @@ def test_queue_ranks_disclosures_then_falsifiers_then_coverage(tmp_engine):
             _news("future", INST.id, NOW + timedelta(days=1), source="sec_edgar", title="Future filing"),
         ],
     )
-    queue = review_queue(rig, since=NOW - timedelta(days=2), now=NOW)
+    queue = review_queue(delta, since=NOW - timedelta(days=2), now=NOW)
     assert [(item.kind, item.evidence_id) for item in queue[:2]] == [
         ("primary_disclosure", "filing:filing"),
         ("falsifier", "news:match"),
@@ -95,7 +95,7 @@ def test_queue_ranks_disclosures_then_falsifiers_then_coverage(tmp_engine):
 
 
 def test_queue_is_deterministic_and_deduplicates_each_navigation_target(tmp_engine):
-    rig = Rig(tmp_engine, [INST], {"sec_edgar": SimpleNamespace(enabled=True)})
+    delta = Rig(tmp_engine, [INST], {"sec_edgar": SimpleNamespace(enabled=True)})
     store_items(
         tmp_engine,
         [
@@ -103,7 +103,7 @@ def test_queue_is_deterministic_and_deduplicates_each_navigation_target(tmp_engi
             _news("a", INST.id, NOW - timedelta(days=1), source="sec_edgar", title="A"),
         ],
     )
-    first = review_queue(rig, since=NOW - timedelta(days=2), now=NOW)
-    second = review_queue(rig, since=NOW - timedelta(days=2), now=NOW)
+    first = review_queue(delta, since=NOW - timedelta(days=2), now=NOW)
+    second = review_queue(delta, since=NOW - timedelta(days=2), now=NOW)
     assert first == second
     assert [item.evidence_id for item in first if item.kind == "primary_disclosure"] == ["filing:a", "filing:b"]

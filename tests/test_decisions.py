@@ -6,7 +6,7 @@ from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
-from rigger import decisions, theses
+from delta import decisions, theses
 
 INST = "US:AAPL"
 OTHER = "US:MSFT"

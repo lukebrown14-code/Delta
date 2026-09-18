@@ -11,7 +11,7 @@ import httpx
 import respx
 from openai import APIStatusError
 
-from rigger.llm.providers import OPENROUTER_BASE_URL, OpenRouterProvider
+from delta.llm.providers import OPENROUTER_BASE_URL, OpenRouterProvider
 
 CREDITS_URL = f"{OPENROUTER_BASE_URL}/credits"
 

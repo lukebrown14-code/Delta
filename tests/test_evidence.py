@@ -13,9 +13,9 @@ from datetime import UTC, date, datetime
 
 from sqlmodel import Session
 
-from rigger.core.db import EventTable, FundamentalTable, NewsItemTable
-from rigger.core.json import to_json
-from rigger.evidence import cite, evidence, evidence_by_ids
+from delta.core.db import EventTable, FundamentalTable, NewsItemTable
+from delta.core.json import to_json
+from delta.evidence import cite, evidence, evidence_by_ids
 from tests.conftest import seed_bars
 
 INST = "US:AAPL"

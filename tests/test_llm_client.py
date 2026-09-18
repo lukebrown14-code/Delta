@@ -6,8 +6,8 @@ import asyncio
 
 import pytest
 
-from rigger.llm.client import build_client
-from rigger.llm.providers import (
+from delta.llm.client import build_client
+from delta.llm.providers import (
     OpenAICompatProvider,
     OpenRouterProvider,
     ProviderResult,
@@ -66,7 +66,7 @@ class _FakeProvider:
 
 
 def test_client_logs_and_caches(tmp_engine):
-    from rigger.llm.client import LLMClient
+    from delta.llm.client import LLMClient
 
     provider = _FakeProvider()
     client = LLMClient(provider=provider, engine=tmp_engine)

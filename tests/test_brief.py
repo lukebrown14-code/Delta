@@ -6,11 +6,11 @@ from datetime import UTC, date, datetime, timedelta
 
 from sqlmodel import Session
 
-from rigger.brief import build_brief
-from rigger.core.db import EventTable, FundamentalTable, NewsItemTable
-from rigger.core.json import to_json
-from rigger.core.models import Instrument
-from rigger.core.plugin import Context
+from delta.brief import build_brief
+from delta.core.db import EventTable, FundamentalTable, NewsItemTable
+from delta.core.json import to_json
+from delta.core.models import Instrument
+from delta.core.plugin import Context
 from tests.conftest import seed_bars
 
 AS_OF = datetime(2026, 3, 22, tzinfo=UTC)

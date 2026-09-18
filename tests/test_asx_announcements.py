@@ -12,8 +12,8 @@ import httpx
 import pytest
 import respx
 
-from rigger.core.models import Instrument, NewsItem
-from rigger.plugins.data.asx_announcements import ASXAnnouncements, announcement_id
+from delta.core.models import Instrument, NewsItem
+from delta.plugins.data.asx_announcements import ASXAnnouncements, announcement_id
 
 FIXTURE = Path(__file__).parent / "fixtures" / "asx_announcements_bhp.json"
 BHP_URL = "https://asx.api.markitdigital.com/asx-research/1.0/companies/bhp/announcements"

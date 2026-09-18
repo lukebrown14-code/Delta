@@ -10,23 +10,23 @@ from sqlmodel import Session
 from textual.app import App
 from textual.widgets import Button, Input, Markdown, MarkdownViewer, Static
 
-from rigger.core.db import NewsItemTable
-from rigger.core.json import to_json
-from rigger.core.models import Instrument
-from rigger.evidence import evidence
-from rigger.reports import Claim, Report, write_report
-from rigger.tui.screens.data import Data
-from rigger.tui.screens.reports import Reports
-from rigger.tui.screens.research import ResearchState
-from rigger.tui.theme import THEMES
-from rigger.tui.widgets import RiggerTable
+from delta.core.db import NewsItemTable
+from delta.core.json import to_json
+from delta.core.models import Instrument
+from delta.evidence import evidence
+from delta.reports import Claim, Report, write_report
+from delta.tui.screens.data import Data
+from delta.tui.screens.reports import Reports
+from delta.tui.screens.research import ResearchState
+from delta.tui.theme import THEMES
+from delta.tui.widgets import DeltaTable
 from tests.conftest import FakeLLM
 from tests.test_reports import INST, ScreenRig, _draft, _seed
 
 
 def pick_company(screen, company: str) -> None:
     """Move the company-list cursor onto a row, as the arrow keys would."""
-    companies = screen.query_one("#research-companies", RiggerTable)
+    companies = screen.query_one("#research-companies", DeltaTable)
     companies.move_cursor(row=companies.get_row_index(company))
 
 
@@ -45,7 +45,7 @@ def setup_rig(tmp_engine, tmp_path, monkeypatch):
     return ScreenRig(tmp_engine, FakeLLM({"report": _draft()}), universe, str(tmp_path / "reports"))
 
 
-def saved_report(rig):
+def saved_report(delta):
     report = Report(
         target_id=INST,
         as_of=datetime(2026, 3, 20, tzinfo=UTC),
@@ -55,7 +55,7 @@ def saved_report(rig):
         bull=[Claim(text="The companies partnered.", evidence_ids=["news:news-1"])],
         citations={"news:news-1": "Partnership filing", "bar:1": "Unused price"},
     )
-    write_report(report, rig.cfg.reports_dir)
+    write_report(report, delta.cfg.reports_dir)
     return report
 
 
@@ -82,14 +82,14 @@ def test_search_filters_before_limit_and_matches_body(tmp_engine):
 
 
 def test_structured_report_round_trip_and_legacy(tmp_engine, tmp_path, monkeypatch):
-    rig = setup_rig(tmp_engine, tmp_path, monkeypatch)
-    report = saved_report(rig)
-    path = write_report(report, rig.cfg.reports_dir)
+    delta = setup_rig(tmp_engine, tmp_path, monkeypatch)
+    report = saved_report(delta)
+    path = write_report(report, delta.cfg.reports_dir)
     assert Report.model_validate_json(path.with_suffix(".json").read_text()) == report
 
     class TestApp(App):
         def on_mount(self):
-            self.push_screen(Reports(rig))
+            self.push_screen(Reports(delta))
 
     async def run():
         async with TestApp().run_test() as pilot:
@@ -108,12 +108,12 @@ def test_structured_report_round_trip_and_legacy(tmp_engine, tmp_path, monkeypat
 
 
 def test_company_filters_and_citation_round_trip(tmp_engine, tmp_path, monkeypatch):
-    rig = setup_rig(tmp_engine, tmp_path, monkeypatch)
-    saved_report(rig)
+    delta = setup_rig(tmp_engine, tmp_path, monkeypatch)
+    saved_report(delta)
 
     class TestApp(App):
         def on_mount(self):
-            self.push_screen(Data(rig))
+            self.push_screen(Data(delta))
 
     async def run():
         async with TestApp().run_test(size=(120, 35)) as pilot:
@@ -145,10 +145,10 @@ def test_company_filters_and_citation_round_trip(tmp_engine, tmp_path, monkeypat
     asyncio.run(run())
 
 
-@pytest.mark.parametrize("theme", ["rigger-dark", "rigger-light"])
+@pytest.mark.parametrize("theme", ["delta-dark", "delta-light"])
 def test_aliases_share_state_and_narrow_details(tmp_engine, tmp_path, monkeypatch, theme):
-    rig = setup_rig(tmp_engine, tmp_path, monkeypatch)
-    saved_report(rig)
+    delta = setup_rig(tmp_engine, tmp_path, monkeypatch)
+    saved_report(delta)
     state = ResearchState()
 
     class TestApp(App):
@@ -156,8 +156,8 @@ def test_aliases_share_state_and_narrow_details(tmp_engine, tmp_path, monkeypatc
             for registered in THEMES:
                 self.register_theme(registered)
             self.theme = theme
-            self.install_screen(Data(rig, state), "data")
-            self.install_screen(Reports(rig, state), "reports")
+            self.install_screen(Data(delta, state), "data")
+            self.install_screen(Reports(delta, state), "reports")
             self.push_screen("data")
 
     async def run():
@@ -184,8 +184,8 @@ def test_aliases_share_state_and_narrow_details(tmp_engine, tmp_path, monkeypatc
 
 
 def test_generation_captures_company_and_handles_failure(tmp_engine, tmp_path, monkeypatch):
-    rig = setup_rig(tmp_engine, tmp_path, monkeypatch)
-    original = saved_report(rig)
+    delta = setup_rig(tmp_engine, tmp_path, monkeypatch)
+    original = saved_report(delta)
     started, release = asyncio.Event(), asyncio.Event()
 
     async def build(_rig, company):
@@ -194,11 +194,11 @@ def test_generation_captures_company_and_handles_failure(tmp_engine, tmp_path, m
         await release.wait()
         return original.model_copy(update={"summary": "Updated"})
 
-    monkeypatch.setattr("rigger.tui.screens.research.build_report", build)
+    monkeypatch.setattr("delta.tui.screens.research.build_report", build)
 
     class TestApp(App):
         def on_mount(self):
-            self.push_screen(Reports(rig))
+            self.push_screen(Reports(delta))
 
     async def run():
         async with TestApp().run_test() as pilot:
@@ -219,7 +219,7 @@ def test_generation_captures_company_and_handles_failure(tmp_engine, tmp_path, m
             async def fail(*_):
                 raise ValueError("Provider unavailable")
 
-            monkeypatch.setattr("rigger.tui.screens.research.build_report", fail)
+            monkeypatch.setattr("delta.tui.screens.research.build_report", fail)
             await screen.generate(INST).wait()
             assert "Updated" in screen.query_one(MarkdownViewer).document.source
             assert not screen.state.busy
@@ -228,18 +228,18 @@ def test_generation_captures_company_and_handles_failure(tmp_engine, tmp_path, m
 
 
 def test_report_citation_opens_evidence_and_returns_to_the_citing_claim(tmp_engine, tmp_path, monkeypatch):
-    rig = setup_rig(tmp_engine, tmp_path, monkeypatch)
-    report = saved_report(rig)
+    delta = setup_rig(tmp_engine, tmp_path, monkeypatch)
+    report = saved_report(delta)
     report.bull = [Claim(text=f"Earlier claim {n}", evidence_ids=["bar:1"]) for n in range(30)]
     report.bull.append(Claim(text="Final partnership claim", evidence_ids=["news:news-1"]))
-    write_report(report, rig.cfg.reports_dir)
+    write_report(report, delta.cfg.reports_dir)
 
     state = ResearchState()
 
     class TestApp(App):
         def on_mount(self):
-            self.install_screen(Data(rig, state), "data")
-            self.install_screen(Reports(rig, state), "reports")
+            self.install_screen(Data(delta, state), "data")
+            self.install_screen(Reports(delta, state), "reports")
             self.push_screen("reports")
 
     async def run():
@@ -267,10 +267,10 @@ def test_report_citation_opens_evidence_and_returns_to_the_citing_claim(tmp_engi
 
 
 def test_settings_diagnostics_and_gather_refresh(tmp_engine, tmp_path, monkeypatch):
-    from rigger.tui.screens.config import Config
+    from delta.tui.screens.config import Config
 
-    rig = setup_rig(tmp_engine, tmp_path, monkeypatch)
-    rig.plugins = {}
+    delta = setup_rig(tmp_engine, tmp_path, monkeypatch)
+    delta.plugins = {}
     calls = []
 
     async def ingest(_, **kwargs):
@@ -279,13 +279,13 @@ def test_settings_diagnostics_and_gather_refresh(tmp_engine, tmp_path, monkeypat
     async def extract(_, **kwargs):
         calls.append(("extract", kwargs.get("instruments")))
 
-    monkeypatch.setattr("rigger.services.ingest", ingest)
-    monkeypatch.setattr("rigger.services.extract", extract)
+    monkeypatch.setattr("delta.services.ingest", ingest)
+    monkeypatch.setattr("delta.services.extract", extract)
 
     class TestApp(App):
         def on_mount(self):
-            self.install_screen(Config(rig), "config")
-            self.push_screen(Data(rig))
+            self.install_screen(Config(delta), "config")
+            self.push_screen(Data(delta))
 
     async def run():
         async with TestApp().run_test() as pilot:
@@ -308,7 +308,7 @@ def test_settings_diagnostics_and_gather_refresh(tmp_engine, tmp_path, monkeypat
 
 def test_report_age_and_section_counts_surface_staleness(tmp_engine, tmp_path, monkeypatch):
     """A week-old report must not read the same as a fresh one."""
-    rig = setup_rig(tmp_engine, tmp_path, monkeypatch)
+    delta = setup_rig(tmp_engine, tmp_path, monkeypatch)
     stale = Report(
         target_id=INST,
         as_of=datetime.now(UTC) - timedelta(days=9),
@@ -319,11 +319,11 @@ def test_report_age_and_section_counts_surface_staleness(tmp_engine, tmp_path, m
         bear=[Claim(text="One bear claim.", evidence_ids=["news:news-1"])],
         citations={"news:news-1": "Partnership filing"},
     )
-    write_report(stale, rig.cfg.reports_dir)
+    write_report(stale, delta.cfg.reports_dir)
 
     class TestApp(App):
         def on_mount(self):
-            self.push_screen(Reports(rig))
+            self.push_screen(Reports(delta))
 
     async def run():
         async with TestApp().run_test() as pilot:
@@ -346,10 +346,10 @@ def test_report_age_and_section_counts_surface_staleness(tmp_engine, tmp_path, m
 
 def test_same_day_regeneration_keeps_the_previous_run(tmp_engine, tmp_path, monkeypatch):
     """The change between two runs is the signal; it must survive a rerun."""
-    from rigger.reports import report_history
+    from delta.reports import report_history
 
-    rig = setup_rig(tmp_engine, tmp_path, monkeypatch)
-    base = rig.cfg.reports_dir
+    delta = setup_rig(tmp_engine, tmp_path, monkeypatch)
+    base = delta.cfg.reports_dir
     day = datetime.now(UTC).replace(hour=1, minute=0, second=0, microsecond=0)
 
     def run_at(when, sentiment):
@@ -375,7 +375,7 @@ def test_same_day_regeneration_keeps_the_previous_run(tmp_engine, tmp_path, monk
 
     class TestApp(App):
         def on_mount(self):
-            self.push_screen(Reports(rig))
+            self.push_screen(Reports(delta))
 
     async def run():
         async with TestApp().run_test() as pilot:
@@ -392,16 +392,16 @@ def test_same_day_regeneration_keeps_the_previous_run(tmp_engine, tmp_path, monk
 
 
 def test_status_line_reports_a_price_not_a_bare_date(tmp_engine, tmp_path, monkeypatch):
-    rig = setup_rig(tmp_engine, tmp_path, monkeypatch)
+    delta = setup_rig(tmp_engine, tmp_path, monkeypatch)
 
     class TestApp(App):
         def on_mount(self):
-            self.push_screen(Reports(rig))
+            self.push_screen(Reports(delta))
 
     async def run():
         async with TestApp().run_test() as pilot:
             screen = pilot.app.screen
-            close = evidence(rig.engine, target=INST, kind="bar", limit=1)[0].raw["close"]
+            close = evidence(delta.engine, target=INST, kind="bar", limit=1)[0].raw["close"]
             assert f"{close:,.2f} USD" in screen.last_close(INST)
             assert f"{close:,.2f} USD" in screen.status_text
             assert screen.last_close("US:NOPE") == "last close: none"
@@ -411,12 +411,12 @@ def test_status_line_reports_a_price_not_a_bare_date(tmp_engine, tmp_path, monke
 
 def test_every_action_is_reachable_from_the_keyboard(tmp_engine, tmp_path, monkeypatch):
     """The app is keyboard-first; this screen used to be mouse-only."""
-    rig = setup_rig(tmp_engine, tmp_path, monkeypatch)
-    saved_report(rig)
+    delta = setup_rig(tmp_engine, tmp_path, monkeypatch)
+    saved_report(delta)
 
     class TestApp(App):
         def on_mount(self):
-            self.push_screen(Reports(rig))
+            self.push_screen(Reports(delta))
 
     async def run():
         async with TestApp().run_test() as pilot:
@@ -425,7 +425,7 @@ def test_every_action_is_reachable_from_the_keyboard(tmp_engine, tmp_path, monke
             assert not screen.query_one("#evidence-layout").display
             assert not {"e", "r"} & {key for key, _, _ in screen.BINDINGS}
             await pilot.press("t")
-            from rigger.tui.screens.research import CompanyPicker
+            from delta.tui.screens.research import CompanyPicker
 
             assert isinstance(pilot.app.screen, CompanyPicker)
             await pilot.press("escape")
@@ -438,14 +438,14 @@ def test_every_action_is_reachable_from_the_keyboard(tmp_engine, tmp_path, monke
 
 def test_promote_claim_creates_a_thesis_with_its_evidence(tmp_engine, tmp_path, monkeypatch):
     """A report claim becomes a thesis without re-finding its sources by hand."""
-    from rigger import theses
+    from delta import theses
 
-    rig = setup_rig(tmp_engine, tmp_path, monkeypatch)
-    saved_report(rig)
+    delta = setup_rig(tmp_engine, tmp_path, monkeypatch)
+    saved_report(delta)
 
     class TestApp(App):
         def on_mount(self):
-            self.push_screen(Reports(rig))
+            self.push_screen(Reports(delta))
 
     async def run():
         async with TestApp().run_test() as pilot:
@@ -458,9 +458,9 @@ def test_promote_claim_creates_a_thesis_with_its_evidence(tmp_engine, tmp_path, 
             assert dialog.query_one("#th-targets", Input).value == INST
             await pilot.press("enter")
             await pilot.pause()
-            stored = theses.list_theses(rig.engine)
+            stored = theses.list_theses(delta.engine)
             assert [thesis.claim for thesis in stored] == ["The companies partnered."]
-            linked = theses.evidence_for(rig.engine, stored[0].id)
+            linked = theses.evidence_for(delta.engine, stored[0].id)
             assert [item.evidence_id for item in linked] == ["news:news-1"]
             assert linked[0].side == "support"
             # A claim reference that no longer resolves must not raise.
@@ -478,17 +478,17 @@ def test_price_runs_fold_and_the_preview_never_dumps_raw(tmp_engine, tmp_path, m
     """
     from tests.conftest import seed_bars
 
-    rig = setup_rig(tmp_engine, tmp_path, monkeypatch)
+    delta = setup_rig(tmp_engine, tmp_path, monkeypatch)
     seed_bars(tmp_engine, INST, n=40, price_fn=lambda i: 200.0 + i)
 
     class TestApp(App):
         def on_mount(self):
-            self.push_screen(Data(rig))
+            self.push_screen(Data(delta))
 
     async def run():
         async with TestApp().run_test(size=(120, 40)) as pilot:
             screen = pilot.app.screen
-            table = screen.query_one("#evidence-table", RiggerTable)
+            table = screen.query_one("#evidence-table", DeltaTable)
             bars = [item for item in screen.items.values() if item.kind == "bar"]
             assert len(bars) >= 40
 
@@ -530,11 +530,11 @@ def test_price_runs_fold_and_the_preview_never_dumps_raw(tmp_engine, tmp_path, m
 
 def test_fold_key_on_an_empty_evidence_list_is_a_no_op(tmp_engine, tmp_path, monkeypatch):
     """``space`` is pressable with nothing in the list; the cursor has no cell there."""
-    rig = setup_rig(tmp_engine, tmp_path, monkeypatch)
+    delta = setup_rig(tmp_engine, tmp_path, monkeypatch)
 
     class TestApp(App):
         def on_mount(self):
-            self.push_screen(Data(rig))
+            self.push_screen(Data(delta))
 
     async def run():
         async with TestApp().run_test(size=(120, 40)) as pilot:
@@ -542,7 +542,7 @@ def test_fold_key_on_an_empty_evidence_list_is_a_no_op(tmp_engine, tmp_path, mon
             screen.view.search = "nothing matches this"
             screen.load_evidence()
             await pilot.pause()
-            assert screen.query_one("#evidence-table", RiggerTable).row_count == 0
+            assert screen.query_one("#evidence-table", DeltaTable).row_count == 0
             await pilot.press("space")
             await pilot.pause()
             assert pilot.app._exception is None
