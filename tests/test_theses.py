@@ -9,6 +9,7 @@ import pytest
 from sqlmodel import Session
 from textual.app import App
 from textual.containers import VerticalScroll
+from textual.content import Content
 from textual.widgets import Input
 
 from rigger import theses
@@ -16,6 +17,7 @@ from rigger.core.db import NewsItemTable
 from rigger.core.json import to_json
 from rigger.evidence import evidence
 from rigger.tui.screens.theses import Theses
+from rigger.tui.widgets import Pane
 from tests.conftest import FakeConfig, FakeLLM, seed_bars
 
 INST = "US:AAPL"
@@ -33,6 +35,11 @@ class FakeRig:
         self.engine = engine
         self.llm = llm
         self.cfg = cfg if cfg is not None else FakeConfig()
+
+
+def _hints(screen: Theses, pane: str = "#thesis-evidence-pane") -> str:
+    """A pane's bottom-border key hints as plain text (markup stripped)."""
+    return Content.from_markup(screen.query_one(pane, Pane).border_subtitle or "").plain
 
 
 def _seed_news(engine) -> None:
@@ -282,13 +289,13 @@ def test_theses_screen_smoke(tmp_engine):
             assert screen.selected == thesis.id
 
             await pilot.press("e")
-            # The action line offers what applies to the highlighted row.
-            assert "a accept" in str(screen.query_one("#thesis-actions").render())
+            # The ledger's border hints offer what applies to the highlighted row.
+            assert "a accept" in _hints(screen)
             await pilot.press("a")
             await pilot.pause()
             accepted = theses.evidence_for(tmp_engine, thesis.id)
             assert [row.evidence_id for row in accepted] == ["news:n1"]
-            actions = str(screen.query_one("#thesis-actions").render())
+            actions = _hints(screen)
             assert "a accept" not in actions
             assert "u un-accept" in actions
             detail_text = "\n".join(str(widget.render()) for widget in screen.query("Static"))
@@ -575,8 +582,8 @@ def test_screen_filter_and_escape_return_to_the_claims_table(tmp_engine):
     asyncio.run(run())
 
 
-def test_screen_e_alternates_focus_when_wide(tmp_engine):
-    """Wide has nothing to toggle, so `e` moves between detail and evidence."""
+def test_pane_hotkeys_focus_their_pane_and_escape_returns(tmp_engine):
+    """`e` is the ledger's hotkey, `t` the thesis pane's; `esc` goes back to the list."""
     _seed_news(tmp_engine)
     thesis = theses.create_thesis(tmp_engine, CLAIM, targets=(INST,))
     theses.add_evidence(tmp_engine, thesis.id, "news:n1", "support", "A note")
@@ -591,9 +598,11 @@ def test_screen_e_alternates_focus_when_wide(tmp_engine):
             await pilot.press("e")
             assert screen.query_one("#thesis-ledger").has_focus
             await pilot.press("e")
-            assert screen.query_one("#thesis-detail").has_focus
-            await pilot.press("e")
             assert screen.query_one("#thesis-ledger").has_focus
+            await pilot.press("t")
+            assert screen.query_one("#thesis-detail").has_focus
+            await pilot.press("escape")
+            assert screen.query_one("#thesis-table").has_focus
 
     asyncio.run(run())
 
@@ -638,18 +647,19 @@ def test_action_line_tracks_the_highlighted_row(tmp_engine):
             screen = Theses(FakeRig(tmp_engine))
             await app.push_screen(screen)
             await pilot.pause()
-            actions = screen.query_one("#thesis-actions")
             ledger = screen.query_one("#thesis-ledger")
             ledger.focus()
 
             # Pending rows sort first, so the cursor starts on one.
-            assert "a accept" in str(actions.render())
-            assert "x reject" in str(actions.render())
+            assert "a accept" in _hints(screen)
+            assert "x reject" in _hints(screen)
+            assert "f find" in _hints(screen)
 
             await pilot.press("down")
             await pilot.pause()
-            assert "u un-accept" in str(actions.render())
-            assert "a accept" not in str(actions.render())
+            assert "u un-accept" in _hints(screen)
+            assert "a accept" not in _hints(screen)
+            assert "f find" in _hints(screen)
 
     asyncio.run(run())
 
@@ -667,7 +677,7 @@ def test_shift_arrows_scroll_the_note_only_from_the_ledger(tmp_engine):
             await pilot.pause()
             preview = screen.query_one("#thesis-preview", VerticalScroll)
             assert preview.max_scroll_y > 0
-            assert "scroll note" in str(screen.query_one("#thesis-actions").render())
+            assert "⇧↕ note" in _hints(screen)
 
             screen.query_one("#thesis-ledger").focus()
             await pilot.press("shift+down")
@@ -692,16 +702,12 @@ def test_pane_width_constants_match_the_stylesheet():
     """
     from rigger.tui.screens import theses as screen
 
-    assert f"min-width: {screen.CLAIMS_MIN_WIDTH};" in screen.Theses.CSS
-    assert f"width: {screen.EVIDENCE_WIDTH};" in screen.Theses.CSS
-    assert f"min-width: {screen.DETAIL_MIN_WIDTH};" in screen.Theses.CSS
-    assert screen.Theses.WIDE_WIDTH == (
-        screen.CLAIMS_MIN_WIDTH + screen.EVIDENCE_WIDTH + screen.DETAIL_MIN_WIDTH + 4
-    )
+    assert f"#thesis-claims {{ width: {screen.CLAIMS_WIDTH}; }}" in screen.Theses.CSS
+    assert f"#thesis-evidence-pane {{ width: {screen.EVIDENCE_WIDTH}; }}" in screen.Theses.CSS
 
 
-def test_key_strip_restores_chips_when_the_terminal_widens(tmp_engine):
-    """Hidden chips must come back: a narrow width must not be a one-way door."""
+def test_border_hints_follow_the_layout_both_ways(tmp_engine):
+    """Narrow adds enter/e/esc to the borders; widening takes them away again."""
     theses.create_thesis(tmp_engine, CLAIM, targets=(INST,))
 
     async def run():
@@ -710,19 +716,56 @@ def test_key_strip_restores_chips_when_the_terminal_widens(tmp_engine):
             screen = Theses(FakeRig(tmp_engine))
             await app.push_screen(screen)
             await pilot.pause()
-            strip = screen.query_one("#thesis-keys")
+            wide = _hints(screen, "#thesis-claims")
+            assert "n new" in wide and "enter thesis" not in wide
+            assert "esc back" not in _hints(screen)
 
-            def shown() -> int:
-                return sum(1 for child in strip.children if child.display)
-
-            wide = shown()
-
-            await pilot.resize_terminal(70, 20)
+            await pilot.resize_terminal(80, 24)
             await pilot.pause()
-            assert shown() < wide
+            narrow = _hints(screen, "#thesis-claims")
+            assert "enter thesis" in narrow and "e evidence" in narrow
+            assert "esc back" in _hints(screen)
+            assert "esc back" in _hints(screen, "#thesis-detail-pane")
 
             await pilot.resize_terminal(130, 32)
             await pilot.pause()
-            assert shown() == wide
+            assert _hints(screen, "#thesis-claims") == wide
+
+    asyncio.run(run())
+
+
+def test_narrow_enter_opens_the_thesis_and_escape_steps_back(tmp_engine):
+    """At 80 columns the list owns the screen; enter and e open the other panes full-width."""
+    _seed_news(tmp_engine)
+    thesis = theses.create_thesis(tmp_engine, CLAIM, targets=(INST,))
+    theses.add_evidence(tmp_engine, thesis.id, "news:n1", "support", "A note")
+
+    async def run():
+        app = App()
+        async with app.run_test(size=(80, 24)) as pilot:
+            screen = Theses(FakeRig(tmp_engine))
+            await app.push_screen(screen)
+            await pilot.pause()
+            assert screen.query_one("#thesis-claims").display
+            assert not screen.query_one("#thesis-detail-pane").display
+            assert not screen.query_one("#thesis-evidence-pane").display
+
+            await pilot.press("enter")
+            await pilot.pause()
+            assert screen.query_one("#thesis-detail-pane").display
+            assert not screen.query_one("#thesis-claims").display
+            assert screen.query_one("#thesis-detail").has_focus
+
+            await pilot.press("e")
+            await pilot.pause()
+            assert screen.query_one("#thesis-evidence-pane").display
+            assert not screen.query_one("#thesis-detail-pane").display
+            assert screen.query_one("#thesis-ledger").has_focus
+
+            await pilot.press("escape")
+            await pilot.pause()
+            assert screen.query_one("#thesis-claims").display
+            assert not screen.query_one("#thesis-evidence-pane").display
+            assert screen.query_one("#thesis-table").has_focus
 
     asyncio.run(run())

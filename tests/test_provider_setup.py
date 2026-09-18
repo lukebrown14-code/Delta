@@ -381,7 +381,9 @@ def test_custom_form_modal_collects_fields():
             modal.query_one("#cf-base", Input).value = "localhost:11434/v1"
             modal.query_one("#cf-env", Input).value = ""
             modal.query_one("#cf-key", Input).value = "local"
-            await pilot.click("#cf-save")
+            # Enter saves from any of the three fields; two are optional.
+            modal.query_one("#cf-base", Input).focus()
+            await pilot.press("enter")
             await pilot.pause()
 
     asyncio.run(run())  # smoke: modal mounts and saves without error

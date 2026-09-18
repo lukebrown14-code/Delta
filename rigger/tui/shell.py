@@ -49,7 +49,9 @@ OFF_BAR_ITEMS: list[tuple[str, str, str]] = [
 
 ALL_ITEMS: list[tuple[str, str, str]] = NAV_ITEMS + CHROME_ITEMS + OFF_BAR_ITEMS
 
-CHROME_HINT = "? help · ^p go"
+#: The bar's trailing hint. ``g`` opens the Go picker; the caret notation this
+#: used to carry pointed at ctrl+p, which is Textual's command palette, not Go.
+CHROME_HINT = "? help · g go"
 
 
 def age_text(age: timedelta) -> tuple[str, str]:
@@ -85,7 +87,7 @@ class NavKey(Static):
     }
     NavKey.-active {
         background: $primary;
-        color: $background;
+        color: $block-cursor-foreground;
         text-style: bold;
     }
     NavKey:hover {
@@ -251,9 +253,12 @@ class ScreenFooter(Vertical):
     """
 
     DEFAULT_CSS = """
+    /* Two rows, the top one padding: the bar needs air under the pane's
+       bottom border, or its key hints and the nav row read as one strip. */
     ScreenFooter {
         dock: bottom;
-        height: 1;
+        height: 2;
+        padding-top: 1;
     }
     """
 

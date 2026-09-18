@@ -253,9 +253,7 @@ def update_thesis(
         if row is None:
             raise KeyError(f"unknown thesis: {id}")
         new_scope = row.scope if scope is None else scope.strip()
-        new_assumptions = (
-            row.assumptions if assumptions is None else to_json(list(assumptions))
-        )
+        new_assumptions = row.assumptions if assumptions is None else to_json(list(assumptions))
         new_falsifiers = row.falsifiers if falsifiers is None else to_json(list(falsifiers))
         # One spelling of the column set, so a new field cannot be added to the
         # rename branch and forgotten in the in-place one.

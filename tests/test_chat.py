@@ -15,7 +15,7 @@ from typing import Any
 import pytest
 from sqlmodel import Session, select
 from textual.app import App
-from textual.widgets import Input, SelectionList, Switch
+from textual.widgets import Input
 
 from rigger.chat import ChatMessage, OfflineSearchTool, WebHit, chat
 from rigger.core.db import BarTable, EventTable, FundamentalTable, LLMCallTable, NewsItemTable
@@ -23,6 +23,7 @@ from rigger.evidence import evidence
 from rigger.llm.client import LLMClient, LLMResult
 from rigger.llm.providers import ProviderResult
 from rigger.tui.screens.chat import Chat
+from rigger.tui.widgets import ActionChip, Pane, RiggerTable
 from tests.conftest import FakeConfig, seed_bars
 
 INST = "US:AAPL"
@@ -229,27 +230,34 @@ def test_client_chat_delegates_logs_and_caches(tmp_engine):
     assert len(provider.calls) == 1
 
 
-def test_chat_screen_round_trip(tmp_engine, monkeypatch, tmp_path):
+def _write_targets(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     (tmp_path / "config.toml").write_text(
         '[targets.aapl]\nkind = "company"\nmarket = "us"\ntickers = ["AAPL"]\n',
         encoding="utf-8",
     )
+
+
+def test_chat_screen_round_trip(tmp_engine, monkeypatch, tmp_path):
+    _write_targets(tmp_path, monkeypatch)
     seed_bars(tmp_engine, INST, n=3)
     llm = FakeChatLLM([{"answer": "AAPL closed at 100.00.", "citations": ["bar:1"]}])
     rig = FakeRig(tmp_engine, llm, ROUTING)
 
     async def run() -> None:
         app = App()
-        async with app.run_test() as pilot:
+        async with app.run_test(size=(120, 40)) as pilot:
             screen = Chat(rig)
             app.push_screen(screen)
             await pilot.pause()
             assert screen.name == "chat"
-            selections = screen.query_one("#chat-targets", SelectionList)
-            assert selections.option_count == 1
-            selections.select("aapl")
-            await pilot.click("#chat-input")
+            table = screen.query_one("#chat-targets", RiggerTable)
+            assert table.row_count == 1
+            # Every configured target starts in scope; the header says so.
+            assert screen.scope == {"aapl"}
+            assert "1 of 1 in scope" in str(screen.query_one("#chat-scope-count").render())
+            await pilot.press("i")
+            assert screen.query_one("#chat-input", Input).has_focus
             screen.query_one("#chat-input", Input).value = "How did AAPL do?"
             await pilot.press("enter")
             for _ in range(100):
@@ -261,12 +269,79 @@ def test_chat_screen_round_trip(tmp_engine, monkeypatch, tmp_path):
             assert reply.source == "stored"
             assert reply.citations == ("bar:1",)
             assert screen.query_one("#chat-input", Input).value == ""
-            assert screen.query_one("#chat-web", Switch).value is False
+            assert screen.allow_web is False
             await pilot.pause()
             transcript = "\n".join(
                 str(widget.render()) for widget in screen.query("#chat-scroll Static")
             )
             assert "How did AAPL do?" in transcript
             assert "AAPL closed at 100.00." in transcript
+            assert "[1]" in transcript
+            assert "1 citation" in transcript
+            assert "2 messages" in screen.query_one("#chat-main", Pane).border_title
+
+    asyncio.run(run())
+
+
+def test_chat_screen_keys_drive_scope_web_citations_and_clear(tmp_engine, monkeypatch, tmp_path):
+    _write_targets(tmp_path, monkeypatch)
+    seed_bars(tmp_engine, INST, n=3)
+    llm = FakeChatLLM([{"answer": "Two bars.", "citations": ["bar:1", "bar:2"]}])
+    rig = FakeRig(tmp_engine, llm, ROUTING)
+
+    async def run() -> None:
+        app = App()
+        async with app.run_test(size=(120, 40)) as pilot:
+            screen = Chat(rig)
+            app.push_screen(screen)
+            await pilot.pause()
+            # Letters typed into the prompt stay in the prompt.
+            await pilot.press("i")
+            await pilot.press("w", "x", "t", "space", "a")
+            assert screen.query_one("#chat-input", Input).value == "wxt a"
+            assert screen.allow_web is False
+            await pilot.press("escape")
+            assert not screen.query_one("#chat-input", Input).has_focus
+            screen.query_one("#chat-input", Input).value = ""
+            # Targets: t focuses, space toggles, a flips all.
+            await pilot.press("t")
+            assert screen.query_one("#chat-targets", RiggerTable).has_focus
+            await pilot.press("space")
+            assert screen.scope == set()
+            await pilot.press("a")
+            assert screen.scope == {"aapl"}
+            # Web toggle is a chip, not a Switch.
+            await pilot.press("w")
+            assert screen.allow_web is True
+            assert "web search: on" in str(screen.query_one("#chat-web", ActionChip).label)
+            await pilot.press("w")
+            # Ask, then walk the citations of the answer.
+            await pilot.press("enter")
+            screen.query_one("#chat-input", Input).value = "Bars?"
+            await pilot.press("enter")
+            for _ in range(100):
+                if len(screen.history) >= 2:
+                    break
+                await pilot.pause(0.05)
+            await pilot.press("escape")
+            assert screen.citations() == ("bar:1", "bar:2")
+            assert screen.selected_citation == 0
+            await pilot.press("right")
+            assert screen.selected_citation == 1
+            await pilot.press("right")
+            assert screen.selected_citation == 0
+            await pilot.press("left")
+            assert screen.selected_citation == 1
+            # Clear is two-step: x arms, esc cancels, x then y clears.
+            await pilot.press("x")
+            assert screen.confirm_pending
+            assert "confirm" in screen.query_one("#chat-main", Pane).border_subtitle
+            await pilot.press("escape")
+            assert not screen.confirm_pending
+            assert len(screen.history) == 2
+            await pilot.press("x", "y")
+            await pilot.pause()
+            assert screen.history == []
+            assert screen.query_one("#chat-main", Pane).border_title.endswith("ask")
 
     asyncio.run(run())

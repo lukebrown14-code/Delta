@@ -259,16 +259,24 @@ def test_pulse_counts_only_since_but_ranks_over_whole_window(tmp_engine):
 
 def test_pulse_daily_is_zero_filled_oldest_first(tmp_engine):
     now = datetime.now(UTC)
-    _news(tmp_engine, "today", ["US:AAPL"], now - timedelta(minutes=5))
-    _news(tmp_engine, "back", ["US:AAPL"], now - timedelta(days=3))
+    recent = now - timedelta(minutes=5)
+    older = now - timedelta(days=3)
+    _news(tmp_engine, "today", ["US:AAPL"], recent)
+    _news(tmp_engine, "back", ["US:AAPL"], older)
 
     result = services.pulse(
         tmp_engine, instrument_ids=["US:AAPL"], since=now - timedelta(days=30), days=7
     )
 
+    # Buckets are UTC days, so an item lands in the bucket for its own date —
+    # do not assume "five minutes ago" is today, which is false for the five
+    # minutes after UTC midnight and made this test fail once a day.
+    def bucket(ts: datetime) -> int:
+        return 6 - (now.date() - ts.date()).days
+
     assert len(result.daily) == 7
-    assert result.daily[-1] == 1  # today is last
-    assert result.daily[-4] == 1  # three days back
+    assert result.daily[bucket(recent)] == 1
+    assert result.daily[bucket(older)] == 1
     assert sum(result.daily) == 2
 
 
@@ -323,3 +331,59 @@ def test_upcoming_events_with_no_instruments_returns_empty(tmp_engine):
     _event(tmp_engine, "future", "US:AAPL", datetime.now(UTC) + timedelta(days=1))
 
     assert services.upcoming_events(tmp_engine, instrument_ids=[]) == []
+
+
+def _write_report(root, company, stem, as_of=None):
+    """A report markdown file, optionally with the ``.json`` sidecar beside it."""
+    import json
+
+    folder = root / company
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / f"{stem}.md").write_text("# report\n", encoding="utf-8")
+    if as_of is not None:
+        (folder / f"{stem}.json").write_text(
+            json.dumps(
+                {
+                    "summary": "s",
+                    "sentiment": 0.0,
+                    "target_id": "apple",
+                    "as_of": as_of.isoformat(),
+                    "prompt_version": "report_v1",
+                }
+            ),
+            encoding="utf-8",
+        )
+
+
+def test_latest_report_prefers_the_sidecar_as_of(tmp_path):
+    stamp = datetime(2024, 3, 2, 9, 30, tzinfo=UTC)
+    _write_report(tmp_path, "US:AAPL", "2024-03-01", as_of=stamp)
+
+    result = services.latest_report(tmp_path, "US:AAPL")
+
+    assert result is not None
+    assert result.path.name == "2024-03-01.md"
+    assert result.as_of == stamp
+    assert services.latest_report_age(tmp_path, "US:AAPL") == stamp
+
+
+def test_latest_report_falls_back_to_the_filename_then_gives_up(tmp_path):
+    """No sidecar: the stem is the only date on offer, and a name that is not a
+    date yields no age rather than an invented one."""
+    _write_report(tmp_path, "US:AAPL", "2024-03-01")
+    _write_report(tmp_path, "US:MSFT", "draft")
+
+    assert services.latest_report_age(tmp_path, "US:AAPL") == datetime(2024, 3, 1, tzinfo=UTC)
+    stamp = services.latest_report(tmp_path, "US:MSFT")
+    assert stamp is not None and stamp.as_of is None
+    assert services.latest_report_age(tmp_path, "US:MSFT") is None
+
+
+def test_latest_report_takes_the_newest_and_tolerates_a_missing_folder(tmp_path):
+    _write_report(tmp_path, "US:AAPL", "2024-01-01")
+    _write_report(tmp_path, "US:AAPL", "2024-06-30")
+
+    stamp = services.latest_report(tmp_path, "US:AAPL")
+    assert stamp is not None and stamp.path.stem == "2024-06-30"
+    assert services.latest_report(tmp_path, "US:NOPE") is None
+    assert services.latest_report_age(tmp_path / "missing", "US:AAPL") is None

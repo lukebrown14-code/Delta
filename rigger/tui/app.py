@@ -25,7 +25,7 @@ from rigger.tui.screens.targets import Targets
 from rigger.tui.screens.theses import Theses
 from rigger.tui.shell import ALL_ITEMS
 from rigger.tui.theme import THEMES
-from rigger.tui.widgets import Dialog, KeyGrid, PaneRow
+from rigger.tui.widgets import MODAL_WIDTH, Dialog, KeyGrid, PaneRow, hint_markup
 
 
 async def _gather(rig: Any, app: App) -> None:
@@ -79,9 +79,9 @@ class RiggerCommands(Provider):
 class GoPicker(Dialog):
     """Centred keymap of every panel: the replacement for the nav rail."""
 
-    dialog_title = " go"
-    dialog_hint = "<key>: open   <Esc>: exit"
-    dialog_width = 48
+    dialog_title = "go"
+    dialog_hint = hint_markup(("key", "open"), ("esc", "exit"))
+    dialog_width = MODAL_WIDTH
 
     def compose_dialog(self) -> ComposeResult:
         yield KeyGrid([(key, label) for key, _name, label in ALL_ITEMS])
@@ -101,7 +101,7 @@ class RiggerApp(App):
     BINDINGS = [
         Binding("1", "switch_screen('targets')", "Watchlist", tooltip="Manage what is watched"),
         Binding(
-            "2", "switch_screen('data')", "Research · Evidence", tooltip="Browse company sources"
+            "2", "switch_screen('data')", "Research · Evidence", tooltip="Browse the evidence pool"
         ),
         Binding(
             "3",
@@ -132,6 +132,11 @@ class RiggerApp(App):
 
     def __init__(self, rig: Rigger | None = None) -> None:
         super().__init__()
+        # Register before the first stylesheet parse so the app never paints
+        # a frame in Textual's stock theme.
+        for theme in THEMES:
+            self.register_theme(theme)
+        self.theme = "rigger-dark"
         self.rig = rig if rig is not None else Rigger()
         #: Public registry of the installed screens. Screens that keep each
         #: other in sync read this rather than Textual's private ``_screens``.
@@ -146,9 +151,6 @@ class RiggerApp(App):
         state.write_last_seen(self.rig.cfg)
 
     def on_mount(self) -> None:
-        for theme in THEMES:
-            self.register_theme(theme)
-        self.theme = "rigger-dark"
         research_state = ResearchState()
         self._screens = {
             "home": Home(self.rig, last_seen=self.last_seen),
@@ -187,10 +189,19 @@ class RiggerApp(App):
         else:
             self.push_screen(HelpScreen())
 
-    def action_show_model_picker(self) -> None:
-        task = {"data": "report", "reports": "report", "chat": "chat", "theses": "thesis"}.get(
-            self.screen.name or "", "extract"
-        )
+    def action_show_model_picker(self, task: str | None = None) -> None:
+        """Pick the model for a routing task.
+
+        With no ``task`` the task is derived from the current screen, which is
+        what the ``m`` binding wants. Settings passes the task explicitly, so
+        it can re-route any row without re-implementing this action.
+        """
+        task = task or {
+            "data": "report",
+            "reports": "report",
+            "chat": "chat",
+            "theses": "thesis",
+        }.get(self.screen.name or "", "extract")
         provider = getattr(getattr(self.rig, "llm", None), "provider", None)
 
         def on_select(model: ModelInfo) -> None:
