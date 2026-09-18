@@ -14,11 +14,11 @@ from rich.text import Text
 from textual import work
 from textual.app import ComposeResult
 from textual.containers import Horizontal, VerticalScroll
-from textual.widgets import Button, Input, Markdown, MarkdownViewer, Static
+from textual.widgets import Button, Input, Markdown, MarkdownViewer, Select, Static
 from textual.widgets._markdown import MarkdownBlock
 from textual.worker import Worker, get_current_worker
 
-from rigger import services, theses
+from rigger import review, services, theses
 from rigger.evidence import EvidenceItem, evidence, evidence_by_ids
 from rigger.llm.router import model_for
 from rigger.plugins.data.yfinance import DEFAULT_SUFFIXES
@@ -36,6 +36,7 @@ from rigger.reports import (
 from rigger.tui.shell import RiggerScreen, age_text
 from rigger.tui.widgets import (
     ActionChip,
+    Dialog,
     Pane,
     PaneRow,
     Pill,
@@ -120,13 +121,42 @@ class ResearchViewer(MarkdownViewer):
             message.stop()
 
 
+class CompanyPicker(Dialog):
+    """A compact, keyboard-first company switcher for the report reader."""
+
+    dialog_title = "choose company"
+    dialog_hint = "arrows choose · tab confirm · esc cancel"
+
+    def __init__(self, companies: list[tuple[str, Any]], selected: str) -> None:
+        super().__init__()
+        self.companies = companies
+        self.selected = selected
+
+    def compose_dialog(self) -> ComposeResult:
+        options = [
+            (f"{instrument.symbol} · {instrument.name or instrument.id} · {target}", instrument.id)
+            for target, instrument in self.companies
+        ]
+        yield Select(options, value=self.selected or Select.BLANK, id="research-company-picker")
+        yield Button("Open report", id="research-company-open", variant="primary")
+
+    def on_mount(self) -> None:
+        self.query_one("#research-company-picker", Select).focus()
+
+    def on_select_changed(self, event: Select.Changed) -> None:
+        if event.select.id == "research-company-picker" and event.value is not Select.BLANK:
+            self.selected = str(event.value)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "research-company-open":
+            self.dismiss(self.selected or None)
+
+
 class Research(RiggerScreen):
     #: Every button here has a key. The keys dodge the app-level bindings in
     #: ``RiggerApp`` (1-5, c, h, m, p, g, q) so the global navigation still
     #: works from this screen — notably ``g``, which is the Go picker.
     BINDINGS = [
-        ("e", "show_evidence", "evidence"),
-        ("r", "show_report", "report"),
         ("n", "generate_report", "generate report"),
         ("u", "update_evidence", "gather company"),
         ("U", "gather_all", "gather all targets"),
@@ -147,6 +177,12 @@ class Research(RiggerScreen):
     #research-companies { height: 1fr; width: 1fr; overflow-y: auto; }
     #research-actions { height: 1; margin: 0 1; }
     #research-actions .chip-gap { width: 1fr; height: 1; }
+    #report-company-pane { height: auto; }
+    #report-company-row { height: 1; padding: 0 1; }
+    #report-company-name { width: auto; text-style: bold; }
+    #report-company-context { width: 1fr; margin-left: 2; color: $text-muted; text-wrap: nowrap; text-overflow: ellipsis; }
+    .-company-store { display: none; }
+    #research-audit { height: 1; margin: 0 1; color: $warning; text-wrap: nowrap; text-overflow: ellipsis; }
     #evidence-layout, #report-doc { height: 1fr; }
     #evidence-list-pane { width: 2fr; }
     #evidence-preview-pane { width: 3fr; }
@@ -187,43 +223,73 @@ class Research(RiggerScreen):
         self.quote_state = ""
 
     @property
+    def is_report_workspace(self) -> bool:
+        return self.initial_tab == "report"
+
+    @property
     def view(self) -> CompanyView:
         return self.state.companies.setdefault(self.state.company, CompanyView())
 
     def compose_content(self) -> ComposeResult:
-        with Pane(
-            title="company",
-            key="t",
-            hints=hint_markup(("↑↓", "select"), ("enter", "open")),
-            id="research-header",
-        ):
-            yield RiggerTable(id="research-companies")
+        if self.is_report_workspace:
+            with Pane(
+                title="report for",
+                key="t",
+                hints=hint_markup(("t", "change company")),
+                id="report-company-pane",
+            ):
+                with Horizontal(id="report-company-row"):
+                    yield Static("select a company", id="report-company-name", markup=False)
+                    yield Static("", id="report-company-context", markup=False)
+            # Kept mounted as a shared-state lookup surface; it is never shown
+            # in the report reader.
+            yield RiggerTable(id="research-companies", classes="-company-store")
+        else:
+            with Pane(
+                title="company",
+                key="t",
+                hints=hint_markup(("↑↓", "select"), ("enter", "open")),
+                id="research-header",
+            ):
+                yield RiggerTable(id="research-companies")
         with Horizontal(id="research-actions"):
-            yield ActionChip("e", "evidence", id="tab-evidence")
-            yield ActionChip("r", "report", id="tab-report")
-            yield Static("", classes="chip-gap")
+            if not self.is_report_workspace:
+                yield Static("", classes="chip-gap")
             yield ActionChip("u", "gather company", id="research-refresh")
             yield ActionChip("U", "gather all", id="research-gather")
             yield ActionChip("n", "generate report", id="report-generate", classes="-primary")
-        with PaneRow(id="evidence-layout"):
-            with Pane(
-                title="evidence",
-                key="e",
-                hints=hint_markup(("/", "search"), ("k", "kind"), ("space", "fold"), ("l", "more")),
-                id="evidence-list-pane",
-            ):
-                with Horizontal(id="evidence-filters"):
-                    yield Input(placeholder="/ search evidence", id="evidence-search")
-                    yield Static("", id="evidence-kind")
+        yield Static("", id="research-audit", markup=False)
+        if not self.is_report_workspace:
+            with PaneRow(id="evidence-layout"):
+                with Pane(
+                    title="evidence",
+                    key="e",
+                    hints=hint_markup(("/", "search"), ("k", "kind"), ("space", "fold"), ("l", "more")),
+                    id="evidence-list-pane",
+                ):
+                    with Horizontal(id="evidence-filters"):
+                        yield Input(placeholder="/ search evidence", id="evidence-search")
+                        yield Static("", id="evidence-kind")
+                    yield RiggerTable(id="evidence-table")
+                    yield Static("", id="evidence-count", markup=False)
+                with Pane(
+                    title="preview",
+                    hints=hint_markup(("o", "open link"), ("v", "view in report"), ("esc", "back")),
+                    id="evidence-preview-pane",
+                ):
+                    with VerticalScroll(id="evidence-preview"):
+                        yield Static("select evidence to preview it", id="source-body", markup=False)
+        else:
+            # Keep the evidence widgets available for shared gather/citation
+            # state without giving the report reader a competing layout.
+            with PaneRow(id="evidence-layout", classes="-company-store"):
                 yield RiggerTable(id="evidence-table")
-                yield Static("", id="evidence-count", markup=False)
-            with Pane(
-                title="preview",
-                hints=hint_markup(("o", "open link"), ("v", "view in report"), ("esc", "back")),
-                id="evidence-preview-pane",
-            ):
-                with VerticalScroll(id="evidence-preview"):
-                    yield Static("select evidence to preview it", id="source-body", markup=False)
+                yield Static("", id="evidence-kind")
+                yield Input(id="evidence-search")
+                yield Static("", id="evidence-count")
+                yield VerticalScroll(Static(id="source-body"), id="evidence-preview")
+                yield Pane(id="evidence-list-pane")
+                yield Pane(id="evidence-preview-pane")
         with Pane(
             title="report",
             key="r",
@@ -314,11 +380,26 @@ class Research(RiggerScreen):
         if self.state.company not in ids:
             self.state.company = ids[0] if ids else ""
         self.state.target = next((t for t, i in rows if i.id == self.state.company), "")
-        self.query_one("#research-header", Pane).set_badge(str(len(ids)))
+        if self.is_report_workspace:
+            self._refresh_company_bar(rows)
+        else:
+            self.query_one("#research-header", Pane).set_badge(str(len(ids)))
         if self.state.company:
             with self.prevent(RiggerTable.RowHighlighted):
                 table.move_cursor(row=ids.index(self.state.company))
         await self.load_company()
+
+    def _refresh_company_bar(self, rows: list[tuple[str, Any]]) -> None:
+        """Keep the report reader about the selected company, not a directory."""
+        instrument = next((item for _target, item in rows if item.id == self.state.company), None)
+        name = instrument.name or instrument.symbol if instrument else "select a company"
+        self.query_one("#report-company-name", Static).update(name)
+        if instrument is None:
+            self.query_one("#report-company-context", Static).update("press t to choose")
+            return
+        age = self.company_report_age(instrument.id).plain
+        context = " · ".join(part for part in (instrument.id, age, self.last_close(instrument.id)) if part)
+        self.query_one("#report-company-context", Static).update(context)
 
     def company_report_age(self, company: str) -> Text:
         """``date · age`` of the newest report, so the list answers "what is stale?"."""
@@ -345,10 +426,11 @@ class Research(RiggerScreen):
             self.query_one(button, Button).disabled = self.state.busy
         self.detail_open = False
         await self.show_latest(self.state.company)
+        self.show_audit(self.state.company)
         self.load_evidence()
         if self.view.inspected:
             await self.inspect_evidence(self.view.inspected, save=False)
-        self.show_tab(self.tab)
+        self.layout_views()
         self.start_quotes(self.state.company)
         self.call_after_refresh(self.restore_position)
 
@@ -732,12 +814,13 @@ class Research(RiggerScreen):
         """Live cells on the company rows; job progress in the pane's border."""
         if not self.is_mounted:
             return
-        header = self.query_one("#research-header", Pane)
-        header.set_hints(
-            f"[$text-warning]{self.state.activity}[/]"
-            if self.state.activity
-            else hint_markup(("↑↓", "select"), ("enter", "open"))
-        )
+        if not self.is_report_workspace:
+            header = self.query_one("#research-header", Pane)
+            header.set_hints(
+                f"[$text-warning]{self.state.activity}[/]"
+                if self.state.activity
+                else hint_markup(("↑↓", "select"), ("enter", "open"))
+            )
         if not self.feed:
             return
         table = self.query_one("#research-companies", RiggerTable)
@@ -757,6 +840,23 @@ class Research(RiggerScreen):
                 ("—" if pct is None else f"{pct:+.2f}%", colour),
             )
             table.update_cell(company, "live", cell, update_width=True)
+
+    def show_audit(self, company: str) -> None:
+        """Surface evidence gaps without blocking research or asserting a conclusion."""
+        line = self.query_one("#research-audit", Static)
+        if not company:
+            line.update("")
+            return
+        try:
+            audit = review.evidence_audit(
+                self.rig.engine,
+                company,
+                primary_sources=review.primary_sources_for(self.rig, company),
+            )
+        except Exception:
+            line.update("")
+            return
+        line.update(" · ".join(audit.warnings))
 
     def reports_dir(self) -> Path:
         return Path(getattr(self.rig.cfg, "reports_dir", "reports"))
@@ -899,12 +999,18 @@ class Research(RiggerScreen):
         self.render_status()
 
     async def inspect_evidence(self, evidence_id: str, *, save: bool = True) -> None:
+        if self.is_report_workspace and save:
+            evidence_screen = self._workspace_screen("data")
+            if isinstance(evidence_screen, Research):
+                evidence_screen.state.company = self.state.company
+                evidence_screen.state.target = self.state.target
+                evidence_screen.view.inspected = evidence_id
+                await self._switch_workspace("data")
+                return
         if save:
             self.save_position()
         self.view.inspected = evidence_id
         found = evidence_by_ids(self.rig.engine, [evidence_id])
-        if save:
-            self.show_tab("evidence")
         self.detail_open = True
         self.layout_views()
         if found:
@@ -920,19 +1026,19 @@ class Research(RiggerScreen):
         self.query_one("#evidence-preview", VerticalScroll).scroll_home(animate=False)
 
     def show_tab(self, tab: str) -> None:
-        self.tab = tab
-        self.query_one("#tab-evidence", Button).set_class(tab == "evidence", "-tab-active")
-        self.query_one("#tab-report", Button).set_class(tab == "report", "-tab-active")
+        # Compatibility shim for callers that used the old in-panel tabs.
+        self.tab = "report" if self.is_report_workspace else "evidence"
         self.layout_views()
 
     def layout_views(self) -> None:
         narrow = self.size.width < 100
-        self.query_one("#evidence-layout").display = self.tab == "evidence"
-        self.query_one("#report-doc").display = self.tab == "report"
+        self.query_one("#evidence-layout").display = not self.is_report_workspace
+        self.query_one("#report-doc").display = self.is_report_workspace
         self.query_one("#evidence-list-pane").display = not (narrow and self.detail_open)
         self.query_one("#evidence-preview-pane").display = not narrow or self.detail_open
         # Narrow: two company rows instead of four, and shorter chip labels.
-        self.query_one("#research-header", Pane).set_class(narrow, "-narrow")
+        if not self.is_report_workspace:
+            self.query_one("#research-header", Pane).set_class(narrow, "-narrow")
         for chip, short, long in (
             ("#research-refresh", "gather", "gather company"),
             ("#research-gather", "gather all", "gather all"),
@@ -946,10 +1052,29 @@ class Research(RiggerScreen):
     # Keys and buttons run the same branch: the screen has one set of
     # behaviours, reachable either way.
     def action_show_evidence(self) -> None:
-        self.dispatch("tab-evidence")
+        self.run_worker(self._switch_workspace("data"), exclusive=True)
 
     def action_show_report(self) -> None:
-        self.dispatch("tab-report")
+        self.run_worker(self._switch_workspace("reports"), exclusive=True)
+
+    async def _switch_workspace(self, name: str) -> None:
+        """Switch in RiggerApp and lightweight standalone test hosts alike."""
+        action = getattr(self.app, "action_switch_screen", None)
+        if not callable(action):
+            return
+        result = action(name)
+        if hasattr(result, "__await__"):
+            await result
+
+    def _workspace_screen(self, name: str) -> Any | None:
+        screens = getattr(self.app, "screens_by_name", {})
+        screen = screens.get(name) if isinstance(screens, dict) else None
+        if screen is not None:
+            return screen
+        try:
+            return self.app.get_screen(name)
+        except Exception:
+            return None
 
     def action_generate_report(self) -> None:
         self.dispatch("report-generate")
@@ -964,7 +1089,34 @@ class Research(RiggerScreen):
         self.dispatch("evidence-more")
 
     def action_focus_targets(self) -> None:
-        self.query_one("#research-companies", RiggerTable).focus()
+        if not self.is_report_workspace:
+            self.query_one("#research-companies", RiggerTable).focus()
+            return
+        self.app.push_screen(CompanyPicker(self.companies(), self.state.company), self._choose_company)
+
+    def _choose_company(self, company: str | None) -> None:
+        if not company or company == self.state.company:
+            return
+        self.state.company = company
+        self.state.target = next((target for target, item in self.companies() if item.id == company), "")
+        self.run_worker(self._reload_research_screens(), exclusive=True)
+
+    async def _reload_research_screens(self) -> None:
+        for screen in self.research_screens():
+            await screen.refresh_view()
+
+    async def _open_report_for_evidence(self) -> None:
+        reports = self._workspace_screen("reports")
+        if not isinstance(reports, Research):
+            return
+        reports._claim_to_reveal = self.view.selected
+        await self._switch_workspace("reports")
+        await reports.show_latest(self.state.company)
+        # Screen-show restoration can run before the report document has its
+        # new layout; restore the target once the document is current.
+        reports._claim_to_reveal = self.view.selected
+        reports.scroll_to_claim()
+        reports.call_after_refresh(reports.scroll_to_claim)
 
     def action_open_source(self) -> None:
         self.dispatch("evidence-open")
@@ -986,14 +1138,16 @@ class Research(RiggerScreen):
             self.dispatch("evidence-back")
 
     def action_focus_search(self) -> None:
-        self.show_tab("evidence")
+        if self.is_report_workspace:
+            self.run_worker(self._switch_workspace("data"), exclusive=True)
+            return
         self.query_one("#evidence-search", Input).focus()
 
     def dispatch(self, action: str) -> None:
-        if action in ("tab-evidence", "tab-report"):
-            self.save_position()
-            self.show_tab(action.removeprefix("tab-"))
-            self.call_after_refresh(self.restore_position)
+        if action == "tab-evidence":
+            self.action_show_evidence()
+        elif action == "tab-report":
+            self.action_show_report()
         elif action == "evidence-more":
             if self.more_available:
                 self.view.limit += 200
@@ -1005,7 +1159,7 @@ class Research(RiggerScreen):
             self.layout_views()
         elif action == "evidence-report":
             self._claim_to_reveal = self.view.selected
-            self.show_tab("report")
+            self.run_worker(self._open_report_for_evidence(), exclusive=True)
         elif action == "evidence-open":
             item = self.items.get(self.view.selected)
             if self.can_open and item and item.url:

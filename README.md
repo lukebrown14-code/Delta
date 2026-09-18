@@ -81,7 +81,7 @@ uv run rig
 | Key | Screen |
 |-----|--------|
 | `1` | Watchlist |
-| `2` / `3` | Research: Evidence / Report |
+| `2` / `3` | Evidence / Reports |
 | `4` / `5` | Theses / Ask |
 | `c` | Settings |
 | `h` | Home |
@@ -94,7 +94,7 @@ Watchlist entries come in five kinds — `company`, `sector`, `industry`, `marke
 
 Theses are optional. Skip them entirely and you still get a watchlist, evidence and reports. On the Theses screen (**4**) write down something you believe, let the model propose candidate evidence, and accept or reject each piece yourself.
 
-Press **2** for Research: choose a watch target and company, then search and filter its sources. **Gather all** collects evidence across configured targets. **Generate report** writes a report for the selected company; browsing filters do not change its inputs. Press **3** to read the latest report and follow its citations back to Evidence.
+Press **3** for Reports: choose a company with **t**, read its latest sourced report, and generate or refresh it with **n**. Press **2** for Evidence when you want to search and inspect the underlying sources. Citations move directly into Evidence, and **v** returns to the report that cites a source.
 
 Reports keep their Markdown export alongside a structured JSON sidecar for citation navigation. Older Markdown-only reports remain readable; regenerate them to enable interactive citations. Database counts, price timestamps and cumulative model spend are under **Settings → Diagnostics** (**c**).
 
@@ -120,6 +120,14 @@ tests/               pytest, fully offline (respx + a fake LLM)
 ```
 
 Plugins are discovered through the `rigger.plugins` and `rigger.targets` entry-point groups in `pyproject.toml`. A new data source is one file implementing one class.
+
+### Configuring data sources
+
+Press `c` for Settings, select a source in **data sources**, then press `d` to configure it. Source adapters declare the settings they accept; ordinary settings are saved in `config.toml`, while declared API-key fields are saved only in `.env` and are masked in the UI. Rigger deliberately does not offer a generic authenticated-HTTP connector: a commercial source such as Financial Times needs a dedicated adapter built against its licensed API contract, pagination rules and content-use rights.
+
+### Adding an exchange
+
+Press `c`, then `a` in Settings to add an exchange-level market. Enter its ID, currency and Yahoo suffix (for example, `lse`, `GBP`, `.L`). Yahoo Finance prices/calendar data and RSS work for every configured market; country-specific disclosure plugins are enabled separately and can be assigned to selected markets in their source setup form.
 
 ## Develop
 
