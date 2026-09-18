@@ -115,6 +115,24 @@ def test_relink_thesis_preserves_historical_snapshot(tmp_engine):
     assert stored.thesis_claim_snapshot == thesis.claim
 
 
+def test_thesis_rename_relinks_decision_but_preserves_snapshot(tmp_engine):
+    thesis = theses.create_thesis(tmp_engine, "Apple services keep growing.", targets=(INST,))
+    created = _create(tmp_engine, thesis_id=thesis.id)
+
+    renamed = theses.update_thesis(
+        tmp_engine,
+        thesis.id,
+        claim="Apple services keep compounding.",
+        targets=(INST,),
+        time_horizon="5 years",
+        status="active",
+    )
+
+    stored = decisions.get_decision(tmp_engine, created.id)
+    assert stored.thesis_id == renamed.id
+    assert stored.thesis_claim_snapshot == thesis.claim
+
+
 def test_public_apis_create_tables_idempotently(tmp_engine):
     assert decisions.list_decisions(tmp_engine) == []
     created = _create(tmp_engine)

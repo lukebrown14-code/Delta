@@ -16,7 +16,7 @@ from textual.containers import Horizontal, Vertical
 from textual.screen import Screen
 from textual.widgets import Sparkline, Static
 
-from rigger import services
+from rigger import decisions, review, services
 from rigger.core.state import read_last_seen
 from rigger.core.time import to_utc
 from rigger.tui.shell import age_text
@@ -55,6 +55,7 @@ MENU: list[MenuItem] = [
     MenuItem("3", "Research · Report", "report", "do", screen="reports"),
     MenuItem("5", "Ask a question", "ask", "do", screen="chat"),
     MenuItem("4", "Track a thesis", "thesis", "do", screen="theses"),
+    MenuItem("6", "Review decisions", "decisions", "do", screen="decisions"),
     MenuItem("2", "Research · Evidence", "evidence", "look", screen="data"),
     MenuItem("c", "Settings", "settings", "look", screen="config"),
     MenuItem("?", "Help", "help", "app", action="show_help"),
@@ -231,6 +232,7 @@ class Home(Screen):
         padding-bottom: 1;
     }
     Home #tickers, Home #upcoming { height: auto; }
+    Home #review { height: auto; max-height: 6; }
     Home #menu-block { height: auto; margin: 1 3 0 3; }
     Home #setup-line {
         width: 100%;
@@ -242,6 +244,10 @@ class Home(Screen):
     Home #setup-line.-ok { color: $success; }
     Home #setup-line.-bad { color: $error; }
     Home .up-row { height: 1; }
+    Home .review-row { height: 1; }
+    Home .review-row:hover { background: $panel; }
+    Home .review-kind { width: 10; color: $primary; }
+    Home .review-text { width: 1fr; color: $text-muted; text-wrap: nowrap; text-overflow: ellipsis; }
     Home .up-sym { width: 9; color: $foreground; text-style: bold; }
     Home .up-kind { width: 12; color: $text-muted; }
     Home .up-date { width: 9; color: $foreground; }
@@ -310,6 +316,8 @@ class Home(Screen):
                 with Vertical(id="dash-right"):
                     yield Static("MARKET", classes="sec-head", markup=False)
                     yield Vertical(id="tickers")
+                    yield Static("REVIEW", classes="sec-head", markup=False)
+                    yield Vertical(id="review")
                     yield Static("COMING UP", classes="sec-head", markup=False)
                     yield Vertical(id="upcoming")
         with Vertical(id="page-footer"):
@@ -338,6 +346,7 @@ class Home(Screen):
         self._refresh_status(health)
         await self._refresh_statbox()
         await self._refresh_tickers()
+        await self._refresh_review()
         await self._refresh_upcoming()
         self._refresh_setup()
 
@@ -470,6 +479,27 @@ class Home(Screen):
             )
         )
 
+    async def _refresh_review(self) -> None:
+        """Material changes and weak coverage needing a human look."""
+        holder = self.query_one("#review", Vertical)
+        await holder.remove_children()
+        watched = self._watched()
+        try:
+            items = review.review_queue(
+                self.rig,
+                instrument_ids=[instrument.id for instrument in watched],
+                since=self.last_seen,
+            )
+        except Exception:
+            items = []
+        due = decisions.due_reviews(self.rig.engine)
+        if not items and not due:
+            await holder.mount(self._row("nothing needs review", ""))
+            return
+        rows: list[Any] = [ReviewRow(item) for item in items[:3]]
+        rows.extend(DueDecisionRow(item) for item in due[: max(0, 3 - len(rows))])
+        await holder.mount(*rows)
+
     def _refresh_setup(self) -> None:
         """One status line, like the boot line: stay quiet unless something is wrong."""
         checks = services.setup_checks(self.rig)
@@ -489,3 +519,53 @@ class Home(Screen):
             Static(right, classes="sec-num", markup=False),
             classes="sec-row",
         )
+
+
+class ReviewRow(Horizontal):
+    """A review-queue row that opens the affected instrument's evidence."""
+
+    def __init__(self, item: review.ReviewItem) -> None:
+        super().__init__(classes="review-row")
+        self.item = item
+
+    def compose(self) -> ComposeResult:
+        yield Static(self.item.kind.replace("_", " "), classes="review-kind", markup=False)
+        yield Static(self.item.title, classes="review-text", markup=False)
+
+    def on_click(self) -> None:
+        if self.item.thesis_id:
+            self.app.action_switch_screen("theses")
+            return
+        screen = getattr(self.app, "screens_by_name", {}).get("data")
+        if screen is None:
+            return
+        for instrument in screen.rig.universe():
+            if instrument.id == self.item.instrument_id:
+                screen.state.target = next(iter(instrument.watchlists), "")
+                break
+        screen.state.company = self.item.instrument_id
+        if self.item.evidence_id:
+            from rigger.tui.screens.research import CompanyView
+
+            view = screen.state.companies.setdefault(self.item.instrument_id, CompanyView())
+            view.inspected = self.item.evidence_id
+        self.app.action_switch_screen("data")
+
+
+class DueDecisionRow(Horizontal):
+    """A due journal review, kept beside factual evidence prompts on Home."""
+
+    def __init__(self, decision: decisions.Decision) -> None:
+        super().__init__(classes="review-row")
+        self.decision = decision
+
+    def compose(self) -> ComposeResult:
+        yield Static("decision", classes="review-kind", markup=False)
+        yield Static(
+            f"Review {self.decision.instrument_id} · due {self.decision.review_date:%d %b}",
+            classes="review-text",
+            markup=False,
+        )
+
+    def on_click(self) -> None:
+        self.app.action_switch_screen("decisions")

@@ -16,7 +16,7 @@ from textual.widgets import Button, Input, Markdown, MarkdownViewer, Select, Sta
 from textual.widgets._markdown import MarkdownBlock
 from textual.worker import Worker, get_current_worker
 
-from rigger import services, theses
+from rigger import review, services, theses
 from rigger.evidence import EvidenceItem, evidence, evidence_by_ids
 from rigger.llm.router import model_for
 from rigger.plugins.data.yfinance import DEFAULT_SUFFIXES
@@ -100,6 +100,7 @@ class Research(RiggerScreen):
     #research-company { width: 1fr; }
     #research-actions Button { min-width: 10; }
     #research-status { height: auto; color: $text-muted; }
+    #research-audit { height: auto; color: $warning; }
     #evidence-layout, #report-doc { height: 1fr; }
     #evidence-list-pane { width: 2fr; }
     #evidence-preview-pane { width: 3fr; }
@@ -152,6 +153,7 @@ class Research(RiggerScreen):
             yield Button("Gather all targets", id="research-gather")
             yield Button("Generate report", id="report-generate", variant="primary")
         yield Static("", id="research-status", markup=False)
+        yield Static("", id="research-audit", markup=False)
         with PaneRow(id="evidence-layout"):
             with Pane(title="sources", id="evidence-list-pane"):
                 with Horizontal(id="evidence-filters"):
@@ -289,6 +291,7 @@ class Research(RiggerScreen):
             self.query_one(button, Button).disabled = self.state.busy
         self.detail_open = False
         await self.show_latest(self.state.company)
+        self.show_audit(self.state.company)
         self.load_evidence()
         if self.view.inspected:
             await self.inspect_evidence(self.view.inspected, save=False)
@@ -459,6 +462,23 @@ class Research(RiggerScreen):
             part for part in (self.status_text, self.live_quote()) if part
         )
         self.query_one("#research-status", Static).update(text)
+
+    def show_audit(self, company: str) -> None:
+        """Warn about evidence gaps without gating the report workflow."""
+        line = self.query_one("#research-audit", Static)
+        if not company:
+            line.update("")
+            return
+        try:
+            audit = review.evidence_audit(
+                self.rig.engine,
+                company,
+                primary_sources=review.primary_sources_for(self.rig, company),
+            )
+        except Exception:
+            line.update("")
+            return
+        line.update(" · ".join(audit.warnings))
 
     def reports_dir(self) -> Path:
         return Path(getattr(self.rig.cfg, "reports_dir", "reports"))

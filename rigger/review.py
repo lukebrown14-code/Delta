@@ -152,7 +152,7 @@ def review_queue(
                 primary_items.append(_item("primary_disclosure", instrument_id, item))
             if since <= item.ts <= now:
                 for thesis_id, terms in active:
-                    if instrument_id in terms[0] and _matches(item, terms[1]):
+                    if (not terms[0] or instrument_id in terms[0]) and _matches(item, terms[1]):
                         falsifiers.append(_item("falsifier", instrument_id, item, thesis_id=thesis_id))
         audit = evidence_audit(
             rig.engine, instrument_id, now=now, primary_sources=primary_sources_for(rig, instrument_id)
@@ -172,7 +172,7 @@ def _active_theses(engine: Engine) -> list[tuple[str, tuple[tuple[str, ...], tup
     return [
         (thesis.id, (thesis.targets, tuple(term.casefold() for term in thesis.falsifiers if term.strip())))
         for thesis in list_theses(engine)
-        if thesis.status == "active" and thesis.targets and thesis.falsifiers
+        if thesis.status == "active" and thesis.falsifiers
     ]
 
 
