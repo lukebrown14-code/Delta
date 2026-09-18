@@ -21,7 +21,15 @@ from rigger.core.models import Instrument
 from rigger.plugins.data.yfinance import DEFAULT_SUFFIXES
 from rigger.quotes import SearchResult, YahooQuotes, canonical_symbol, yahoo_search
 from rigger.tui.shell import RiggerScreen, age_text
-from rigger.tui.widgets import BrailleGraph, Dialog, Pane, PaneRow, hint_markup, token_color
+from rigger.tui.widgets import (
+    MODAL_WIDTH,
+    BrailleGraph,
+    Dialog,
+    Pane,
+    PaneRow,
+    hint_markup,
+    token_color,
+)
 
 
 class WatchlistList(OptionList):
@@ -57,8 +65,8 @@ class TargetAddModal(Dialog):
     """Centred terminal form for adding one target to the watchlist."""
 
     dialog_title = "add to watchlist"
-    dialog_hint = "enter save · esc cancel"
-    dialog_width = 64
+    dialog_hint = hint_markup(("enter", "save"), ("esc", "cancel"))
+    dialog_width = MODAL_WIDTH
 
     DEFAULT_CSS = """
     TargetAddModal #tg-form { height: auto; }

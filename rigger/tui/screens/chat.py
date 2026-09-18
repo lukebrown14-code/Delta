@@ -74,7 +74,9 @@ class Chat(RiggerScreen):
     #: so none of these fire mid-sentence.
     BINDINGS = [
         ("i", "focus_input", "ask"),
-        ("enter", "focus_input", "ask"),
+        # enter does the same thing from the transcript; hidden so the keymap
+        # does not list one action twice.
+        Binding("enter", "focus_input", "ask", show=False),
         ("escape", "back", "back"),
         ("t", "focus_targets", "targets"),
         ("space", "toggle_target", "toggle target"),

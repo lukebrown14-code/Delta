@@ -100,7 +100,7 @@ class RiggerApp(App):
     BINDINGS = [
         Binding("1", "switch_screen('targets')", "Watchlist", tooltip="Manage what is watched"),
         Binding(
-            "2", "switch_screen('data')", "Research · Evidence", tooltip="Browse company sources"
+            "2", "switch_screen('data')", "Research · Evidence", tooltip="Browse the evidence pool"
         ),
         Binding(
             "3",

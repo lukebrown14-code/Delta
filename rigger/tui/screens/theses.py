@@ -79,7 +79,7 @@ class ThesisForm(Dialog):
     a full border.
     """
 
-    dialog_hint = "tab next field · enter save · esc cancel"
+    dialog_hint = hint_markup(("tab", "next field"), ("enter", "save"), ("esc", "cancel"))
 
     DEFAULT_CSS = """
     ThesisForm Input, ThesisForm Select {
