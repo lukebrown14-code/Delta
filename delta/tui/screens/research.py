@@ -43,10 +43,10 @@ from delta.reports import (
 from delta.tui.shell import DeltaScreen, age_text
 from delta.tui.widgets import (
     ActionChip,
+    DeltaTable,
     Pane,
     PaneRow,
     Pill,
-    DeltaTable,
     StatusDot,
     hint_markup,
     sentiment_variant,
