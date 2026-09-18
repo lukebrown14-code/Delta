@@ -95,7 +95,15 @@ def test_status_bar_is_one_row(rig):
             # Panels, status cells and chrome all share the one row.
             for sel in ("#nav-targets", "#nav-config", "#sl-dot", "#sl-keys"):
                 assert bar.query(sel), sel
-            assert app.screen.query_one(ScreenFooter).styles.height.value == 1
+            # The bar itself is one row; the footer adds a second as padding so
+            # the bar does not sit flush against the pane border above it.
+            assert bar.size.height == 1
+            # ``size`` is the content box, which excludes the padding row, so
+            # the two-row claim has to be made against the laid-out region.
+            footer = app.screen.query_one(ScreenFooter)
+            assert footer.outer_size.height == 2
+            assert footer.region.height == 2
+            assert bar.region.y == footer.region.y + 1
             await pilot.press("c")
             assert app.screen.name == "config"
 
@@ -794,6 +802,7 @@ def test_provider_key_modals_are_dialogs(rig):
 
 def test_help_lists_per_screen_keys(rig):
     """The keymap covers the screens, not just the app-level bindings."""
+    from rigger.tui.screens.research import Research
     from rigger.tui.screens.theses import Theses
     from rigger.tui.widgets import KeyGrid
 
@@ -816,10 +825,57 @@ def test_help_lists_per_screen_keys(rig):
             }
             thesis_keys = {binding_key(b) for b in shown_bindings(Theses.BINDINGS)}
             assert thesis_keys and thesis_keys <= keys, thesis_keys - keys
+            # Data and Reports are thin subclasses of Research: their keymap is
+            # inherited, so reading the class dict alone left it out entirely.
+            research_keys = {binding_key(b) for b in shown_bindings(Research.BINDINGS)}
+            assert research_keys <= keys, research_keys - keys
+            # …and it is listed once, not once per alias screen.
+            assert len(groups) == len(set(groups))
             assert all(grid.region.height > 0 for grid in help_screen.query(KeyGrid))
             # t switches back to the tour.
             await pilot.press("t")
             await pilot.pause()
             assert help_screen.query_one("#help-tabs").active == "help-tour"
+
+    asyncio.run(run())
+
+
+def test_space_folds_and_reopens_an_asset_class_group(rig, monkeypatch, tmp_path):
+    """``space`` on a group header must work, and must be able to undo itself.
+
+    The header is not a target row, so the key cannot go through ``_selected``;
+    and the cursor has to be put back on the header after the rebuild, or a
+    collapsed group could never be reopened.
+    """
+    import tomli_w
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "config.toml").write_text(
+        tomli_w.dumps(
+            {"targets": {"apple": {"kind": "company", "market": "us", "tickers": ["AAPL"]}}}
+        ),
+        encoding="utf-8",
+    )
+
+    async def run():
+        app = RiggerApp(rig)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.press("1")
+            screen = app.screen
+            table = screen.query_one("#target-table")
+            table.highlighted = table.get_option_index("group:equity")
+            await pilot.pause()
+            expanded = table.option_count
+
+            await pilot.press("space")
+            await pilot.pause()
+            assert screen._collapsed_groups == {"group:equity"}
+            assert table.option_count < expanded
+            assert table.highlighted == table.get_option_index("group:equity")
+
+            await pilot.press("space")
+            await pilot.pause()
+            assert screen._collapsed_groups == set()
+            assert table.option_count == expanded
 
     asyncio.run(run())

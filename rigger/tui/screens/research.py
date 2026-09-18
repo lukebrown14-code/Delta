@@ -362,6 +362,9 @@ class Research(RiggerScreen):
         )
 
     async def on_data_table_row_highlighted(self, event: RiggerTable.RowHighlighted) -> None:
+        # A table that empties posts a highlight with no row (cursor_row -1).
+        if event.row_key is None or event.row_key.value is None:
+            return
         value = str(event.row_key.value)
         if event.data_table.id == "research-companies":
             if value != self.state.company:
@@ -556,6 +559,10 @@ class Research(RiggerScreen):
     def action_fold_prices(self) -> None:
         """Unfold or refold the highlighted price run."""
         table = self.query_one("#evidence-table", RiggerTable)
+        # An empty list has no cell under the cursor: ``coordinate_to_cell_key``
+        # raises rather than returning None, and space is pressable there.
+        if not table.is_valid_coordinate(table.cursor_coordinate):
+            return
         row = table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value
         key = str(row or "")
         if key not in self.groups:

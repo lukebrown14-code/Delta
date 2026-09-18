@@ -535,3 +535,25 @@ def test_price_runs_fold_and_the_preview_never_dumps_raw(tmp_engine, tmp_path, m
             assert "the stored fields are the evidence" in body
 
     asyncio.run(run())
+
+
+def test_fold_key_on_an_empty_evidence_list_is_a_no_op(tmp_engine, tmp_path, monkeypatch):
+    """``space`` is pressable with nothing in the list; the cursor has no cell there."""
+    rig = setup_rig(tmp_engine, tmp_path, monkeypatch)
+
+    class TestApp(App):
+        def on_mount(self):
+            self.push_screen(Data(rig))
+
+    async def run():
+        async with TestApp().run_test(size=(120, 40)) as pilot:
+            screen = pilot.app.screen
+            screen.view.search = "nothing matches this"
+            screen.load_evidence()
+            await pilot.pause()
+            assert screen.query_one("#evidence-table", RiggerTable).row_count == 0
+            await pilot.press("space")
+            await pilot.pause()
+            assert pilot.app._exception is None
+
+    asyncio.run(run())

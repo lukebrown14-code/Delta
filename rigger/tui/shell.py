@@ -252,9 +252,12 @@ class ScreenFooter(Vertical):
     """
 
     DEFAULT_CSS = """
+    /* Two rows, the top one padding: the bar needs air under the pane's
+       bottom border, or its key hints and the nav row read as one strip. */
     ScreenFooter {
         dock: bottom;
-        height: 1;
+        height: 2;
+        padding-top: 1;
     }
     """
 

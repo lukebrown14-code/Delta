@@ -18,6 +18,25 @@ from rigger.tui.widgets import (
     shown_bindings,
 )
 
+
+def _own_bindings(screen_type: type) -> list:
+    """The nearest class in ``screen_type``'s MRO that declares its own BINDINGS.
+
+    Not ``vars(screen_type)``: ``Data`` and ``Reports`` are thin subclasses of
+    ``Research`` that only set ``name`` and ``initial_tab``, so reading the
+    class dict alone left the whole research keymap out of this list. Stops at
+    the Textual base classes, whose bindings are the stock focus keys and are
+    not news to anyone.
+    """
+    for klass in screen_type.__mro__:
+        if klass.__module__.startswith("textual."):
+            break
+        own = vars(klass).get("BINDINGS")
+        if own:
+            return list(own)
+    return []
+
+
 # Plain-language tour. Kept as a module constant so the README can
 # reuse the exact same words the TUI shows.
 TUTORIAL = """\
@@ -169,14 +188,18 @@ class HelpScreen(Dialog):
         invisible here, because only ``app.BINDINGS`` was listed.
         """
         widgets: list[Widget] = []
+        seen: list[list[tuple[str, str]]] = []
         for title, bindings in self._binding_groups():
             # Description only: a KeyGrid column is ~28 columns wide, and
             # appending the tooltip truncated every entry mid-word.
             items = [
                 (binding_key(binding), binding.description) for binding in shown_bindings(bindings)
             ]
-            if not items:
+            # Evidence and Report are two views of one screen class, so their
+            # keymaps are the same list: print it once, under the first.
+            if not items or items in seen:
                 continue
+            seen.append(items)
             widgets.append(Static(title, classes="help-group", markup=False))
             widgets.append(KeyGrid(items))
         return widgets
@@ -189,8 +212,5 @@ class HelpScreen(Dialog):
         # under a bare App (as the tests do) simply has no screens to list.
         screens = getattr(self.app, "screens_by_name", {}) or {}
         for name, screen in sorted(screens.items()):
-            # Only the bindings the screen class declares itself: inherited
-            # ones are Textual's own focus keys, which are not news to anyone.
-            own = vars(type(screen)).get("BINDINGS") or []
-            groups.append((labels.get(name, name.capitalize()), list(own)))
+            groups.append((labels.get(name, name.capitalize()), _own_bindings(type(screen))))
         return groups

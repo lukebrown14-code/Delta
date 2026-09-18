@@ -453,8 +453,7 @@ class Targets(RiggerScreen):
         self.set_interval(0.5, self._paint_quotes)
 
     def _selected(self) -> str | None:
-        option = self.query_one("#target-table", WatchlistList).highlighted_option
-        key = str(option.id) if option and option.id else ""
+        key = self._highlighted_key()
         return key if key in self.rows else None
 
     def refresh_view(self) -> None:
@@ -888,8 +887,17 @@ class Targets(RiggerScreen):
         self._select_instrument(force=True)
         self._paint_quotes()
 
+    def _highlighted_key(self) -> str:
+        """The highlighted option's id, group headers included.
+
+        ``_selected`` answers "which target row?" and so drops the group
+        headers; folding is the one action that wants them.
+        """
+        option = self.query_one("#target-table", WatchlistList).highlighted_option
+        return str(option.id) if option and option.id else ""
+
     def _toggle_group(self, key: str | None = None) -> None:
-        key = key or self._selected()
+        key = key or self._highlighted_key()
         if not key or not key.startswith("group:"):
             return
         if key in self._collapsed_groups:
@@ -897,6 +905,12 @@ class Targets(RiggerScreen):
         else:
             self._collapsed_groups.add(key)
         self.refresh_view()
+        # ``refresh_view`` restores the highlight from ``_selected``, which only
+        # knows target rows — leave it to that and a collapsed group could never
+        # be reopened, because the cursor would have jumped off its header.
+        with suppress(Exception):
+            table = self.query_one("#target-table", WatchlistList)
+            table.highlighted = table.get_option_index(key)
 
     def action_inspect(self) -> None:
         """Refresh live metrics for the highlighted instrument; narrow: open them."""
