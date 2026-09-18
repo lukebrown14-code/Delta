@@ -27,7 +27,7 @@ from rigger.tui.widgets import StatusDot
 
 NAV_ITEMS: list[tuple[str, str, str]] = [
     ("1", "targets", "Watchlist"),
-    ("2", "data", "Research"),
+    ("2", "data", "Evidence"),
     ("4", "theses", "Theses"),
     ("5", "chat", "Ask"),
     ("6", "decisions", "Decisions"),
@@ -44,7 +44,7 @@ CHROME_ITEMS: list[tuple[str, str, str]] = [
 # Same 3-tuple shape again — ALL_ITEMS is what navigation should iterate.
 OFF_BAR_ITEMS: list[tuple[str, str, str]] = [
     ("h", "home", "Home"),
-    ("3", "reports", "Research · Report"),
+    ("3", "reports", "Reports"),
 ]
 
 ALL_ITEMS: list[tuple[str, str, str]] = NAV_ITEMS + CHROME_ITEMS + OFF_BAR_ITEMS

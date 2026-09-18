@@ -101,12 +101,12 @@ class RiggerApp(App):
     BINDINGS = [
         Binding("1", "switch_screen('targets')", "Watchlist", tooltip="Manage what is watched"),
         Binding(
-            "2", "switch_screen('data')", "Research · Evidence", tooltip="Browse the evidence pool"
+            "2", "switch_screen('data')", "Evidence", tooltip="Browse the evidence pool"
         ),
         Binding(
             "3",
             "switch_screen('reports')",
-            "Research · Report",
+            "Reports",
             tooltip="Generate and read company reports",
         ),
         Binding("4", "switch_screen('theses')", "Theses", tooltip="Track claims and evidence"),
@@ -172,8 +172,6 @@ class RiggerApp(App):
         self.narrow = event.size.width < PaneRow.NARROW_WIDTH
 
     def action_switch_screen(self, name: str) -> None:
-        if name in ("data", "reports"):
-            self._screens[name].tab = "evidence" if name == "data" else "report"
         self.switch_screen(name)
 
     def action_toggle_theme(self) -> None:

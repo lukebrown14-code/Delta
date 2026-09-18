@@ -130,8 +130,6 @@ def test_company_filters_and_citation_round_trip(tmp_engine, tmp_path, monkeypat
             assert screen.view.search == "close"
             assert "Both companies" in str(screen.query_one("#source-body", Static).render())
             assert screen.can_view
-            await pilot.press("v")
-            assert screen.tab == "report"
             await screen.inspect_evidence("news:deleted")
             assert "no longer available" in str(screen.query_one("#source-body", Static).render())
             pick_company(screen, "US:MSFT")
@@ -229,7 +227,7 @@ def test_generation_captures_company_and_handles_failure(tmp_engine, tmp_path, m
     asyncio.run(run())
 
 
-def test_report_scroll_returns_and_first_citing_claim(tmp_engine, tmp_path, monkeypatch):
+def test_report_citation_opens_evidence_and_returns_to_the_citing_claim(tmp_engine, tmp_path, monkeypatch):
     rig = setup_rig(tmp_engine, tmp_path, monkeypatch)
     report = saved_report(rig)
     report.bull = [Claim(text=f"Earlier claim {n}", evidence_ids=["bar:1"]) for n in range(30)]
@@ -251,17 +249,12 @@ def test_report_scroll_returns_and_first_citing_claim(tmp_engine, tmp_path, monk
             await pilot.pause()
             viewer.scroll_to(y=10, animate=False)
             await pilot.pause()
-            position = viewer.scroll_y
             await screen.inspect_evidence("news:news-1")
             await pilot.pause()
-            await pilot.click("#tab-report")
-            await pilot.pause()
-            assert viewer.scroll_y == position
-            await screen.inspect_evidence("news:news-1")
-            await pilot.pause()
+            assert pilot.app.screen.name == "data"
             await pilot.press("v")
             await pilot.pause()
-            assert viewer.scroll_y > position
+            assert pilot.app.screen.name == "reports"
             viewer.scroll_to(y=20, animate=False)
             await pilot.pause()
             pilot.app.switch_screen("data")
@@ -428,16 +421,14 @@ def test_every_action_is_reachable_from_the_keyboard(tmp_engine, tmp_path, monke
     async def run():
         async with TestApp().run_test() as pilot:
             screen = pilot.app.screen
-            await pilot.press("e")
-            assert screen.tab == "evidence"
-            await pilot.press("r")
-            assert screen.tab == "report"
-            # Exactly one tab chip reads as active.
-            assert screen.query_one("#tab-report", Button).has_class("-tab-active")
-            assert not screen.query_one("#tab-evidence", Button).has_class("-tab-active")
-            await pilot.press("slash")
-            assert screen.tab == "evidence"
-            assert screen.query_one("#evidence-search", Input).has_focus
+            assert screen.query_one("#report-doc").display
+            assert not screen.query_one("#evidence-layout").display
+            assert not {"e", "r"} & {key for key, _, _ in screen.BINDINGS}
+            await pilot.press("t")
+            from rigger.tui.screens.research import CompanyPicker
+
+            assert isinstance(pilot.app.screen, CompanyPicker)
+            await pilot.press("escape")
             # None of the screen keys may shadow the app-level navigation keys.
             app_keys = {"1", "2", "3", "4", "5", "c", "h", "m", "p", "g", "q"}
             assert not app_keys & {key for key, _, _ in screen.BINDINGS}
