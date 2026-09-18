@@ -129,7 +129,7 @@ class Decisions(DeltaScreen):
     #decision-detail-pane { width: 3fr; min-width: 36; }
     #decision-detail { height: 1fr; }
     #decision-keys { height: auto; }
-    .decision-heading { color: $primary; text-style: bold; margin-top: 1; height: 1; }
+    .decision-heading { color: $text-primary; text-style: bold; margin-top: 1; height: 1; }
     .decision-field { height: auto; margin-bottom: 1; }
     .decision-muted { color: $text-muted; }
     #decisions-split.-narrow > Pane { width: 1fr; min-width: 0; }

@@ -5,4 +5,4 @@ from delta.tui.screens.research import Research
 
 class Data(Research):
     name = "data"
-    initial_tab = "evidence"
+    initial_view = "evidence"

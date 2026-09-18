@@ -19,7 +19,6 @@ from delta.tui.screens.decisions import Decisions
 from delta.tui.screens.help import HelpScreen
 from delta.tui.screens.home import Home
 from delta.tui.screens.model_picker import ModelPicker
-from delta.tui.screens.reports import Reports
 from delta.tui.screens.research import ResearchState
 from delta.tui.screens.targets import Targets
 from delta.tui.screens.theses import Theses
@@ -100,15 +99,7 @@ class DeltaApp(App):
     CSS_PATH = "delta.tcss"
     BINDINGS = [
         Binding("1", "switch_screen('targets')", "Watchlist", tooltip="Manage what is watched"),
-        Binding(
-            "2", "switch_screen('data')", "Evidence", tooltip="Browse the evidence pool"
-        ),
-        Binding(
-            "3",
-            "switch_screen('reports')",
-            "Reports",
-            tooltip="Generate and read company reports",
-        ),
+        Binding("2", "switch_screen('data')", "Research", tooltip="Read reports and evidence"),
         Binding("4", "switch_screen('theses')", "Theses", tooltip="Track claims and evidence"),
         Binding("5", "switch_screen('chat')", "Ask", tooltip="Grounded Q&A over evidence"),
         Binding("6", "switch_screen('decisions')", "Decisions", tooltip="Record and review decision context"),
@@ -156,7 +147,6 @@ class DeltaApp(App):
             "home": Home(self.delta, last_seen=self.last_seen),
             "data": Data(self.delta, research_state),
             "config": Config(self.delta),
-            "reports": Reports(self.delta, research_state),
             "theses": Theses(self.delta),
             "decisions": Decisions(self.delta, research_state),
             "chat": Chat(self.delta),
@@ -196,7 +186,6 @@ class DeltaApp(App):
         """
         task = task or {
             "data": "report",
-            "reports": "report",
             "chat": "chat",
             "theses": "thesis",
         }.get(self.screen.name or "", "extract")

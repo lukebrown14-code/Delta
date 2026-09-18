@@ -1,4 +1,11 @@
-"""Company research: browse the evidence pool and follow report citations."""
+"""Company research desk: company, report and evidence in one three-column screen.
+
+Wide terminals show all three columns — Company (36 cells), Report (the
+remaining width), Evidence (40 cells) — so the report, the central
+decision-making surface, stays visible while its sources sit alongside it.
+Below 100 cells the screen follows the Theses drill-in pattern: Company is
+shown first, ``r`` opens Report, ``e`` opens Evidence, and Escape steps back.
+"""
 
 from __future__ import annotations
 
@@ -13,8 +20,8 @@ from typing import Any
 from rich.text import Text
 from textual import work
 from textual.app import ComposeResult
-from textual.containers import Horizontal, VerticalScroll
-from textual.widgets import Button, Input, Markdown, MarkdownViewer, Select, Static
+from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.widgets import Button, Input, Markdown, MarkdownViewer, Static
 from textual.widgets._markdown import MarkdownBlock
 from textual.worker import Worker, get_current_worker
 
@@ -37,7 +44,6 @@ from delta.tui.shell import DeltaScreen, age_text
 from delta.tui.widgets import (
     ActionChip,
     DeltaTable,
-    Dialog,
     Pane,
     PaneRow,
     Pill,
@@ -76,6 +82,15 @@ KINDS: tuple[tuple[str, str], ...] = (
     ("events", "event"),
 )
 
+#: Pane widths at the wide layout, mirroring Theses: the picker and the
+#: evidence list are fixed-shape columns, the report takes the rest.
+COMPANY_WIDTH = 36
+EVIDENCE_WIDTH = 40
+
+#: Below this terminal width the three columns no longer fit side by side:
+#: Company fills the screen and Report/Evidence open on demand (``r``/``e``).
+NARROW_WIDTH = 100
+
 
 @dataclass
 class CompanyView:
@@ -101,6 +116,11 @@ class ResearchState:
 
 
 class ResearchViewer(MarkdownViewer):
+    #: Focusable as itself, not via its inner document: focusing the document
+    # widget scrolls it into view, which would drag the reader back to the
+    # top of the report.
+    can_focus = True
+
     def on_show(self) -> None:
         self.screen.restore_report_position()
 
@@ -121,42 +141,13 @@ class ResearchViewer(MarkdownViewer):
             message.stop()
 
 
-class CompanyPicker(Dialog):
-    """A compact, keyboard-first company switcher for the report reader."""
-
-    dialog_title = "choose company"
-    dialog_hint = "arrows choose · tab confirm · esc cancel"
-
-    def __init__(self, companies: list[tuple[str, Any]], selected: str) -> None:
-        super().__init__()
-        self.companies = companies
-        self.selected = selected
-
-    def compose_dialog(self) -> ComposeResult:
-        options = [
-            (f"{instrument.symbol} · {instrument.name or instrument.id} · {target}", instrument.id)
-            for target, instrument in self.companies
-        ]
-        yield Select(options, value=self.selected or Select.BLANK, id="research-company-picker")
-        yield Button("Open report", id="research-company-open", variant="primary")
-
-    def on_mount(self) -> None:
-        self.query_one("#research-company-picker", Select).focus()
-
-    def on_select_changed(self, event: Select.Changed) -> None:
-        if event.select.id == "research-company-picker" and event.value is not Select.BLANK:
-            self.selected = str(event.value)
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "research-company-open":
-            self.dismiss(self.selected or None)
-
-
 class Research(DeltaScreen):
     #: Every button here has a key. The keys dodge the app-level bindings in
-    #: ``DeltaApp`` (1-5, c, h, m, p, g, q) so the global navigation still
+    #: ``DeltaApp`` (1-6, c, h, m, p, g, q) so the global navigation still
     #: works from this screen — notably ``g``, which is the Go picker.
     BINDINGS = [
+        ("e", "show_evidence", "evidence"),
+        ("r", "show_report", "report"),
         ("n", "generate_report", "generate report"),
         ("u", "update_evidence", "gather company"),
         ("U", "gather_all", "gather all targets"),
@@ -169,42 +160,66 @@ class Research(DeltaScreen):
         ("v", "view_in_report", "view in report"),
         ("escape", "back", "back"),
     ]
-    CSS = """
-    /* Header: one company list, seven rows including its frame (four rows
-       of companies at 120x40, two at 80x24 — see layout_views). */
-    #research-header { height: 7; }
-    #research-header.-narrow { height: 5; }
-    #research-companies { height: 1fr; width: 1fr; overflow-y: auto; }
-    #research-actions { height: 1; margin: 0 1; }
-    #research-actions .chip-gap { width: 1fr; height: 1; }
-    #report-company-pane { height: auto; }
-    #report-company-row { height: 1; padding: 0 1; }
-    #report-company-name { width: auto; text-style: bold; }
-    #report-company-context { width: 1fr; margin-left: 2; color: $text-muted; text-wrap: nowrap; text-overflow: ellipsis; }
-    .-company-store { display: none; }
-    #research-audit { height: 1; margin: 0 1; color: $warning; text-wrap: nowrap; text-overflow: ellipsis; }
-    #evidence-layout, #report-doc { height: 1fr; }
-    #evidence-list-pane { width: 2fr; }
-    #evidence-preview-pane { width: 3fr; }
-    #evidence-filters { height: 1; margin: 0 0 0 0; }
-    #evidence-search { width: 1fr; }
-    #evidence-kind { width: auto; height: 1; padding: 0 1; color: $text-muted; }
-    #evidence-table { height: 1fr; }
-    #evidence-preview, #report-view { height: 1fr; }
-    #evidence-count { height: 1; padding: 0 1; color: $text-muted; }
-    #source-body { height: auto; padding: 0 1; }
-    #report-meta { height: 1; padding: 0 1; }
-    #report-meta StatusDot { width: 2; }
-    #report-meta Static, #report-meta Pill { width: auto; padding: 0 1 0 0; }
-    #report-age, #report-sentiment-delta { color: $text-muted; }
-    #report-history, #report-legacy { height: auto; padding: 0 1; color: $text-muted; }
+    CSS = f"""
+    #research-columns {{ height: 1fr; }}
+    #research-header {{ width: {COMPANY_WIDTH}; }}
+    #report-doc {{ width: 1fr; min-width: 0; }}
+    #evidence-pane {{ width: {EVIDENCE_WIDTH}; }}
+    /* Narrow state lives on the row, not the screen: Textual scopes screen
+       CSS with the mounting class name, and a ``Data``-scoped three-part
+       chain would need the screen to be its own ancestor to match. */
+    #research-columns.-compact > Pane {{ width: 1fr; }}
+    #research-companies {{ height: 1fr; width: 1fr; }}
+    #company-summary {{
+        height: auto;
+        padding: 0 1;
+        border-top: solid $border-blurred;
+        color: $text-muted;
+    }}
+    #company-actions {{ height: 2; }}
+    #company-actions ActionChip {{ margin: 0 1 0 0; }}
+    #report-actions {{ height: 1; margin: 0 1; }}
+    #report-meta {{ height: 1; padding: 0 1; }}
+    #report-meta StatusDot {{ width: 2; }}
+    #report-meta Static, #report-meta Pill {{ width: auto; padding: 0 1 0 0; }}
+    #report-age, #report-sentiment-delta {{ color: $text-muted; }}
+    #report-history, #report-legacy {{ height: auto; padding: 0 1; color: $text-muted; }}
+    #research-audit {{
+        height: 1;
+        margin: 0 1;
+        color: $text-warning;
+        text-wrap: nowrap;
+        text-overflow: ellipsis;
+    }}
+    #report-view {{ height: 1fr; }}
+    /* Evidence stacks its filters and source list above an inline preview;
+       the preview is a section of the pane, not a pane of its own. */
+    #evidence-list-stack {{ height: 1fr; }}
+    #evidence-filters {{ height: 1; margin: 0 0 0 0; }}
+    #evidence-search {{ width: 1fr; }}
+    #evidence-kind {{ width: auto; height: 1; padding: 0 1; color: $text-muted; }}
+    #evidence-table {{ height: 1fr; }}
+    #evidence-count {{ height: 1; padding: 0 1; color: $text-muted; }}
+    #evidence-preview {{ height: 10; border-top: solid $border-blurred; }}
+    #source-body {{ height: auto; padding: 0 1; }}
+    /* Narrow: the preview only appears once a source is opened, and then it
+       takes the pane — the drill-in detail view. */
+    #research-columns.-compact #evidence-preview {{ display: none; }}
+    #research-columns.-compact.-detail #evidence-list-stack {{ display: none; }}
+    #research-columns.-compact.-detail #evidence-preview {{
+        display: block;
+        height: 1fr;
+        border-top: none;
+    }}
     """
-    initial_tab = "evidence"
+    #: Narrow only: which column fills the screen. Wide shows all three.
+    initial_view = "company"
 
     def __init__(self, delta: Any, state: ResearchState | None = None) -> None:
         super().__init__(delta)
         self.state = state or ResearchState()
-        self.tab = self.initial_tab
+        self._view = self.initial_view
+        self._narrow = False
         self.report: Report | None = None
         self.items: dict[str, EvidenceItem] = {}
         self.groups: dict[str, list[EvidenceItem]] = {}
@@ -215,6 +230,10 @@ class Research(DeltaScreen):
         self.can_view = False
         self._rendered_company = ""
         self.status_text = ""
+        self._head_line = ""
+        self._report_line = ""
+        self._close_line = ""
+        self._company_hints = hint_markup(("↑↓", "select"))
         self._claim_to_reveal = ""
         self._job: Worker | None = None
         self.feed: YahooQuotes | None = None
@@ -223,92 +242,73 @@ class Research(DeltaScreen):
         self.quote_state = ""
 
     @property
-    def is_report_workspace(self) -> bool:
-        return self.initial_tab == "report"
-
-    @property
     def view(self) -> CompanyView:
         return self.state.companies.setdefault(self.state.company, CompanyView())
 
     def compose_content(self) -> ComposeResult:
-        if self.is_report_workspace:
-            with Pane(
-                title="report for",
-                key="t",
-                hints=hint_markup(("t", "change company")),
-                id="report-company-pane",
-            ):
-                with Horizontal(id="report-company-row"):
-                    yield Static("select a company", id="report-company-name", markup=False)
-                    yield Static("", id="report-company-context", markup=False)
-            # Kept mounted as a shared-state lookup surface; it is never shown
-            # in the report reader.
-            yield DeltaTable(id="research-companies", classes="-company-store")
-        else:
+        with PaneRow(id="research-columns"):
             with Pane(
                 title="company",
                 key="t",
-                hints=hint_markup(("↑↓", "select"), ("enter", "open")),
+                hints=hint_markup(("↑↓", "select")),
                 id="research-header",
             ):
                 yield DeltaTable(id="research-companies")
-        with Horizontal(id="research-actions"):
-            if not self.is_report_workspace:
-                yield Static("", classes="chip-gap")
-            yield ActionChip("u", "gather company", id="research-refresh")
-            yield ActionChip("U", "gather all", id="research-gather")
-            yield ActionChip("n", "generate report", id="report-generate", classes="-primary")
-        yield Static("", id="research-audit", markup=False)
-        if not self.is_report_workspace:
-            with PaneRow(id="evidence-layout"):
-                with Pane(
-                    title="evidence",
-                    key="e",
-                    hints=hint_markup(("/", "search"), ("k", "kind"), ("space", "fold"), ("l", "more")),
-                    id="evidence-list-pane",
-                ):
+                yield Static("", id="company-summary", markup=False)
+                with Vertical(id="company-actions"):
+                    yield ActionChip("u", "gather company", id="research-refresh")
+                    yield ActionChip("U", "gather all", id="research-gather")
+            with Pane(
+                title="report",
+                key="r",
+                hints=hint_markup(("↑↓", "scroll"), ("enter", "citation"), ("n", "regenerate")),
+                id="report-doc",
+            ):
+                with Horizontal(id="report-actions"):
+                    yield ActionChip(
+                        "n", "generate report", id="report-generate", classes="-primary"
+                    )
+                with Horizontal(id="report-meta"):
+                    yield StatusDot("warn", id="report-age-dot")
+                    yield Static("", id="report-age", markup=False)
+                    yield Pill("", id="report-sentiment")
+                    yield Static("", id="report-sentiment-delta", markup=False)
+                yield Static("", id="report-history", markup=False)
+                yield Static("", id="report-legacy", markup=False)
+                yield Static("", id="research-audit", markup=False)
+                yield ResearchViewer(
+                    id="report-view", show_table_of_contents=False, open_links=False
+                )
+            with Pane(
+                title="evidence",
+                key="e",
+                hints=hint_markup(
+                    ("/", "search"),
+                    ("k", "kind"),
+                    ("space", "fold"),
+                    ("l", "more"),
+                    ("v", "report"),
+                ),
+                id="evidence-pane",
+            ):
+                with Vertical(id="evidence-list-stack"):
                     with Horizontal(id="evidence-filters"):
                         yield Input(placeholder="/ search evidence", id="evidence-search")
                         yield Static("", id="evidence-kind")
                     yield DeltaTable(id="evidence-table")
                     yield Static("", id="evidence-count", markup=False)
-                with Pane(
-                    title="preview",
-                    hints=hint_markup(("o", "open link"), ("v", "view in report"), ("esc", "back")),
-                    id="evidence-preview-pane",
-                ):
-                    with VerticalScroll(id="evidence-preview"):
-                        yield Static("select evidence to preview it", id="source-body", markup=False)
-        else:
-            # Keep the evidence widgets available for shared gather/citation
-            # state without giving the report reader a competing layout.
-            with PaneRow(id="evidence-layout", classes="-company-store"):
-                yield DeltaTable(id="evidence-table")
-                yield Static("", id="evidence-kind")
-                yield Input(id="evidence-search")
-                yield Static("", id="evidence-count")
-                yield VerticalScroll(Static(id="source-body"), id="evidence-preview")
-                yield Pane(id="evidence-list-pane")
-                yield Pane(id="evidence-preview-pane")
-        with Pane(
-            title="report",
-            key="r",
-            hints=hint_markup(("↑↓", "scroll"), ("enter", "follow citation"), ("n", "regenerate")),
-            id="report-doc",
-        ):
-            with Horizontal(id="report-meta"):
-                yield StatusDot("warn", id="report-age-dot")
-                yield Static("", id="report-age", markup=False)
-                yield Pill("", id="report-sentiment")
-                yield Static("", id="report-sentiment-delta", markup=False)
-            yield Static("", id="report-history", markup=False)
-            yield Static("", id="report-legacy", markup=False)
-            yield ResearchViewer(id="report-view", show_table_of_contents=True, open_links=False)
+                with VerticalScroll(id="evidence-preview"):
+                    yield Static(
+                        "select evidence to preview it", id="source-body", markup=False
+                    )
 
     async def on_mount(self) -> None:
+        # The company table lives in a 36-cell column: a name plus the report
+        # age is what fits. Symbol, target and the live quote move to the
+        # summary under the list.
         companies = self.query_one("#research-companies", DeltaTable)
-        for label in ("Company", "Symbol", "Target", "Report", "Live"):
-            companies.add_column(label, key=label.casefold())
+        companies.add_column("Company", key="company")
+        companies.add_column("Report", key="report", width=12)
         # Fixed widths for the two narrow columns: a long row in Evidence must
         # never push Type (which carries the kind colour) or Date off the pane.
         table = self.query_one("#evidence-table", DeltaTable)
@@ -322,13 +322,12 @@ class Research(DeltaScreen):
     def save_position(self) -> None:
         if self.ready and self._rendered_company:
             old = self.state.companies.setdefault(self._rendered_company, CompanyView())
-            if self.tab == "report":
+            if self.query_one("#report-doc").display:
                 old.report_y = self.query_one("#report-view", MarkdownViewer).scroll_y
-            else:
-                if self.query_one("#evidence-list-pane").display:
-                    old.list_y = self.query_one("#evidence-table", DeltaTable).scroll_y
-                if self.query_one("#evidence-preview-pane").display:
-                    old.preview_y = self.query_one("#evidence-preview", VerticalScroll).scroll_y
+            if self.query_one("#evidence-list-stack").display:
+                old.list_y = self.query_one("#evidence-table", DeltaTable).scroll_y
+            if self.query_one("#evidence-preview").display:
+                old.preview_y = self.query_one("#evidence-preview", VerticalScroll).scroll_y
 
     def on_screen_suspend(self) -> None:
         self.save_position()
@@ -339,8 +338,8 @@ class Research(DeltaScreen):
     def companies(self) -> list[Any]:
         """Every instrument under a configured target, grouped by target.
 
-        You research a company, not a target: the target is a column here.
-        Sorting by target first keeps a sector's members adjacent.
+        You research a company, not a target: the target is a line in the
+        summary. Sorting by target first keeps a sector's members adjacent.
         """
         specs = services.target_specs()
         rows = [
@@ -361,64 +360,54 @@ class Research(DeltaScreen):
     async def refresh_view(self) -> None:
         if not self.ready:
             return
-        specs = services.target_specs()
         rows = self.companies()
         table = self.query_one("#research-companies", DeltaTable)
         with self.prevent(DeltaTable.RowHighlighted):
             table.clear()
-            for target, instrument in rows:
-                spec = specs[target]
+            for _target, instrument in rows:
                 table.add_row(
                     getattr(instrument, "name", "") or instrument.symbol,
-                    instrument.id,
-                    f"{target} · {spec.kind}",
                     self.company_report_age(instrument.id),
-                    "",
                     key=instrument.id,
                 )
         ids = [instrument.id for _target, instrument in rows]
         if self.state.company not in ids:
             self.state.company = ids[0] if ids else ""
         self.state.target = next((t for t, i in rows if i.id == self.state.company), "")
-        if self.is_report_workspace:
-            self._refresh_company_bar(rows)
-        else:
-            self.query_one("#research-header", Pane).set_badge(str(len(ids)))
+        self.query_one("#research-header", Pane).set_badge(str(len(ids)))
         if self.state.company:
             with self.prevent(DeltaTable.RowHighlighted):
                 table.move_cursor(row=ids.index(self.state.company))
         await self.load_company()
 
-    def _refresh_company_bar(self, rows: list[tuple[str, Any]]) -> None:
-        """Keep the report reader about the selected company, not a directory."""
-        instrument = next((item for _target, item in rows if item.id == self.state.company), None)
-        name = instrument.name or instrument.symbol if instrument else "select a company"
-        self.query_one("#report-company-name", Static).update(name)
-        if instrument is None:
-            self.query_one("#report-company-context", Static).update("press t to choose")
-            return
-        age = self.company_report_age(instrument.id).plain
-        context = " · ".join(part for part in (instrument.id, age, self.last_close(instrument.id)) if part)
-        self.query_one("#report-company-context", Static).update(context)
-
     def company_report_age(self, company: str) -> Text:
-        """``date · age`` of the newest report, so the list answers "what is stale?"."""
+        """The age of the newest report — the list answers "what is stale?".
+
+        The column is 12 cells; the date itself is in the summary and the
+        report pane's badge, so the cell carries the actionable part alone.
+        """
         stamp = services.latest_report(self.reports_dir(), company)
         if stamp is None:
             return Text("no report", style=token_color(self.app, "text-muted"))
         if stamp.as_of is None:
-            # A legacy report whose filename is not a date: show the stem, which
-            # is all it records, rather than invent an age for it.
-            return Text(stamp.path.stem)
+            # A legacy report whose filename is not a date: show the stem,
+            # which is all it records, rather than invent an age for it.
+            return Text(stamp.path.stem[:12])
         label, state = age_text(datetime.now(UTC) - stamp.as_of)
         colour = {
             "ok": token_color(self.app, "foreground"),
             "warn": token_color(self.app, "text-warning"),
         }.get(state, token_color(self.app, "text-error"))
-        return Text.assemble(f"{stamp.path.stem} ", (label, colour))
+        return Text(label, colour)
 
     async def load_company(self) -> None:
         self._rendered_company = self.state.company
+        spec = services.target_specs().get(self.state.target)
+        self._head_line = " · ".join(
+            part
+            for part in (self.state.company, self.state.target, spec.kind if spec else "")
+            if part
+        )
         with self.prevent(Input.Changed):
             self.query_one("#evidence-search", Input).value = self.view.search
         self.render_kind()
@@ -473,7 +462,7 @@ class Research(DeltaScreen):
         self.query_one("#evidence-kind", Static).update(f"kind: {label}")
 
     def action_cycle_kind(self) -> None:
-        self.show_tab("evidence")
+        self._show("evidence")
         values = [value for _label, value in KINDS]
         index = values.index(self.view.kind) if self.view.kind in values else 0
         self.view.kind = values[(index + 1) % len(values)]
@@ -570,7 +559,7 @@ class Research(DeltaScreen):
                     key=item.id,
                 )
         self._fit_columns(table)
-        self.query_one("#evidence-list-pane", Pane).set_badge(
+        self.query_one("#evidence-pane", Pane).set_badge(
             f"{len(self.items)}+" if self.more_available else str(len(self.items))
         )
         self.query_one("#evidence-count", Static).update(self._count_line(bool(rows)))
@@ -595,7 +584,7 @@ class Research(DeltaScreen):
         self._preview_row(row_key)
 
     def _count_line(self, any_rows: bool) -> str:
-        """What the list has, or why it is empty — the pane is 46 columns wide."""
+        """What the list has, or why it is empty — the pane is 40 columns wide."""
         if any_rows:
             return (
                 f"{len(self.items)} shown — press l to load more"
@@ -622,14 +611,27 @@ class Research(DeltaScreen):
         pushes Type — which carries the kind colour — off the pane behind a
         horizontal scrollbar instead of truncating.
         """
-        available = self.query_one("#evidence-list-pane").content_size.width
+        available = self.query_one("#evidence-pane").content_size.width
         if available <= 0:
             return
         source = table.columns.get("source")
         if source is not None:
-            # 21 columns for Type and Date, plus the cell padding between them.
-            source.width = max(12, available - 21 - 6)
+            # Type (11) and Date (10) plus two cells of padding each, and two
+            # for the source column's own padding.
+            source.width = max(8, available - 27)
             source.auto_width = False
+        table.refresh()
+
+    def _fit_company_columns(self) -> None:
+        """The company column takes whatever the 12-cell report age leaves."""
+        table = self.query_one("#research-companies", DeltaTable)
+        available = self.query_one("#research-header").content_size.width
+        if available <= 0:
+            return
+        company = table.columns.get("company")
+        if company is not None:
+            company.width = max(12, available - 12 - 2 - 2)
+            company.auto_width = False
         table.refresh()
 
     def on_resize(self) -> None:
@@ -637,6 +639,7 @@ class Research(DeltaScreen):
             self.layout_views()
             with suppress(Exception):
                 self._fit_columns(self.query_one("#evidence-table", DeltaTable))
+                self._fit_company_columns()
 
     def action_fold_prices(self) -> None:
         """Unfold or refold the highlighted price run."""
@@ -669,11 +672,6 @@ class Research(DeltaScreen):
     def preview(self, item: EvidenceItem | None, group: list[EvidenceItem] | None = None) -> None:
         self.can_open = bool(item and item.url and item.url.startswith(("https://", "http://")))
         self.can_view = bool(item and item.id in self.cited_ids())
-        hints = [("o", "open link")] if self.can_open else []
-        if self.can_view:
-            hints.append(("v", "view in report"))
-        hints.append(("esc", "back"))
-        self.query_one("#evidence-preview-pane", Pane).set_hints(hint_markup(*hints))
         body = self.query_one("#source-body", Static)
         if group is not None:
             first, last = group[-1], group[0]
@@ -810,36 +808,27 @@ class Research(DeltaScreen):
         age, _state = age_text(datetime.now(UTC) - quote.received_at)
         return f"live: {quote.price:,.2f} {quote.currency}{move} ({age})"
 
+    def render_summary(self) -> None:
+        """The selected company's summary: identity, report, close, live price."""
+        lines = [line for line in (self._head_line, self._report_line, self._close_line) if line]
+        live = self.live_quote()
+        if live:
+            lines.append(live)
+        if not lines:
+            lines = ["no companies yet — press 1 to add a target"]
+        self.query_one("#company-summary", Static).update("\n".join(lines))
+
     def render_status(self) -> None:
-        """Live cells on the company rows; job progress in the pane's border."""
+        """Job progress in the company pane's border; live cells in the summary."""
         if not self.is_mounted:
             return
-        if not self.is_report_workspace:
-            header = self.query_one("#research-header", Pane)
-            header.set_hints(
-                f"[$text-warning]{self.state.activity}[/]"
-                if self.state.activity
-                else hint_markup(("↑↓", "select"), ("enter", "open"))
-            )
-        if not self.feed:
-            return
-        table = self.query_one("#research-companies", DeltaTable)
-        for company, quote in self.feed.quotes.items():
-            if company not in table.rows:
-                continue
-            pct = quote.change_pct
-            colour = (
-                token_color(self.app, "text-success")
-                if pct and pct > 0
-                else token_color(self.app, "text-error")
-                if pct and pct < 0
-                else token_color(self.app, "text-muted")
-            )
-            cell = Text.assemble(
-                f"{quote.price:,.2f} {quote.currency} ",
-                ("—" if pct is None else f"{pct:+.2f}%", colour),
-            )
-            table.update_cell(company, "live", cell, update_width=True)
+        header = self.query_one("#research-header", Pane)
+        header.set_hints(
+            f"[$text-warning]{self.state.activity}[/]"
+            if self.state.activity
+            else self._company_hints
+        )
+        self.render_summary()
 
     def show_audit(self, company: str) -> None:
         """Surface evidence gaps without blocking research or asserting a conclusion."""
@@ -987,36 +976,47 @@ class Research(DeltaScreen):
             companies.update_cell(company, "report", self.company_report_age(company))
         self.show_report_meta(company, path)
         age_label = self.report_age(path)[0] if path else ""
+        self._report_line = (
+            f"report: {path.stem} ({age_label})" if path else "report: none"
+        ) if company else ""
+        self._close_line = self.last_close(company) if company else ""
         self.status_text = " · ".join(
             part
             for part in (
                 company or "select a company",
                 f"report: {path.stem} ({age_label})" if path else "report: none",
-                self.last_close(company),
+                self._close_line,
             )
             if part
         )
+        self.render_summary()
         self.render_status()
 
     async def inspect_evidence(self, evidence_id: str, *, save: bool = True) -> None:
-        if self.is_report_workspace and save:
-            evidence_screen = self._workspace_screen("data")
-            if isinstance(evidence_screen, Research):
-                evidence_screen.state.company = self.state.company
-                evidence_screen.state.target = self.state.target
-                evidence_screen.view.inspected = evidence_id
-                await self._switch_workspace("data")
-                return
+        """Select a citation's source in the Evidence column, in this screen.
+
+        On a wide terminal the row is highlighted and previewed in place while
+        the report stays where it is; narrow drills into the Evidence view
+        with the preview taking the pane.
+        """
         if save:
             self.save_position()
         self.view.inspected = evidence_id
         found = evidence_by_ids(self.delta.engine, [evidence_id])
         self.detail_open = True
+        if save and self._narrow:
+            self._show("evidence")
         self.layout_views()
         if found:
-            self.items[found[0].id] = found[0]
-            self.view.selected = found[0].id
-            self.preview(found[0])
+            item = found[0]
+            self.items[item.id] = item
+            self.view.selected = item.id
+            table = self.query_one("#evidence-table", DeltaTable)
+            if item.id in table.rows:
+                with suppress(Exception):
+                    with self.prevent(DeltaTable.RowHighlighted):
+                        table.move_cursor(row=table.get_row_index(item.id))
+            self.preview(item)
         else:
             self.preview(None)
             self.query_one("#source-body", Static).update(
@@ -1025,26 +1025,58 @@ class Research(DeltaScreen):
             )
         self.query_one("#evidence-preview", VerticalScroll).scroll_home(animate=False)
 
-    def show_tab(self, tab: str) -> None:
-        # Compatibility shim for callers that used the old in-panel tabs.
-        self.tab = "report" if self.is_report_workspace else "evidence"
-        self.layout_views()
-
     def layout_views(self) -> None:
-        narrow = self.size.width < 100
-        self.query_one("#evidence-layout").display = not self.is_report_workspace
-        self.query_one("#report-doc").display = self.is_report_workspace
-        self.query_one("#evidence-list-pane").display = not (narrow and self.detail_open)
-        self.query_one("#evidence-preview-pane").display = not narrow or self.detail_open
-        # Narrow: two company rows instead of four, and shorter chip labels.
-        if not self.is_report_workspace:
-            self.query_one("#research-header", Pane).set_class(narrow, "-narrow")
-        for chip, short, long in (
-            ("#research-refresh", "gather", "gather company"),
-            ("#research-gather", "gather all", "gather all"),
-            ("#report-generate", "generate", "generate report"),
+        """Wide: three columns. Narrow: one column at a time, ``self._view``."""
+        self._narrow = self.size.width < NARROW_WIDTH
+        row = self.query_one("#research-columns")
+        row.set_class(self._narrow, "-compact")
+        row.set_class(self._narrow and self.detail_open, "-detail")
+        for pane, view in (
+            ("#research-header", "company"),
+            ("#report-doc", "report"),
+            ("#evidence-pane", "evidence"),
         ):
-            self.query_one(chip, ActionChip).set_text(short if narrow else long)
+            self.query_one(pane).display = not self._narrow or self._view == view
+        self._paint_hints()
+
+    def _paint_hints(self) -> None:
+        """Every pane's bottom border: fixed keys plus what narrow adds."""
+        company = [("↑↓", "select")]
+        report = [("↑↓", "scroll"), ("enter", "citation"), ("n", "regenerate")]
+        evidence = [
+            ("/", "search"),
+            ("k", "kind"),
+            ("space", "fold"),
+            ("l", "more"),
+            ("v", "report"),
+        ]
+        if self._narrow:
+            company += [("r", "report"), ("e", "evidence")]
+            report = [("↑↓", "scroll"), ("t", "company"), ("e", "evidence"), ("esc", "back")]
+            evidence = [("/", "search"), ("k", "kind"), ("enter", "preview"), ("esc", "back")]
+        self._company_hints = hint_markup(*company)
+        self.query_one("#research-header", Pane).set_hints(self._company_hints)
+        self.query_one("#report-doc", Pane).set_hints(hint_markup(*report))
+        self.query_one("#evidence-pane", Pane).set_hints(hint_markup(*evidence))
+
+    # ---------- navigation ----------
+
+    def _show(self, view: str) -> None:
+        """Narrow: fill the screen with ``view``. Wide: no-op, all are shown."""
+        if self._narrow and self._view != view:
+            self._view = view
+            self.layout_views()
+
+    def _open(self, view: str) -> None:
+        """Show ``view`` and put the cursor in it."""
+        self._show(view)
+        self.query_one(
+            {
+                "company": "#research-companies",
+                "report": "#report-view",
+                "evidence": "#evidence-table",
+            }[view]
+        ).focus()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         self.dispatch(event.button.id or "")
@@ -1052,29 +1084,10 @@ class Research(DeltaScreen):
     # Keys and buttons run the same branch: the screen has one set of
     # behaviours, reachable either way.
     def action_show_evidence(self) -> None:
-        self.run_worker(self._switch_workspace("data"), exclusive=True)
+        self._open("evidence")
 
     def action_show_report(self) -> None:
-        self.run_worker(self._switch_workspace("reports"), exclusive=True)
-
-    async def _switch_workspace(self, name: str) -> None:
-        """Switch in DeltaApp and lightweight standalone test hosts alike."""
-        action = getattr(self.app, "action_switch_screen", None)
-        if not callable(action):
-            return
-        result = action(name)
-        if hasattr(result, "__await__"):
-            await result
-
-    def _workspace_screen(self, name: str) -> Any | None:
-        screens = getattr(self.app, "screens_by_name", {})
-        screen = screens.get(name) if isinstance(screens, dict) else None
-        if screen is not None:
-            return screen
-        try:
-            return self.app.get_screen(name)
-        except Exception:
-            return None
+        self._open("report")
 
     def action_generate_report(self) -> None:
         self.dispatch("report-generate")
@@ -1089,77 +1102,48 @@ class Research(DeltaScreen):
         self.dispatch("evidence-more")
 
     def action_focus_targets(self) -> None:
-        if not self.is_report_workspace:
-            self.query_one("#research-companies", DeltaTable).focus()
-            return
-        self.app.push_screen(CompanyPicker(self.companies(), self.state.company), self._choose_company)
-
-    def _choose_company(self, company: str | None) -> None:
-        if not company or company == self.state.company:
-            return
-        self.state.company = company
-        self.state.target = next((target for target, item in self.companies() if item.id == company), "")
-        self.run_worker(self._reload_research_screens(), exclusive=True)
-
-    async def _reload_research_screens(self) -> None:
-        for screen in self.research_screens():
-            await screen.refresh_view()
-
-    async def _open_report_for_evidence(self) -> None:
-        reports = self._workspace_screen("reports")
-        if not isinstance(reports, Research):
-            return
-        reports._claim_to_reveal = self.view.selected
-        await self._switch_workspace("reports")
-        await reports.show_latest(self.state.company)
-        # Screen-show restoration can run before the report document has its
-        # new layout; restore the target once the document is current.
-        reports._claim_to_reveal = self.view.selected
-        reports.scroll_to_claim()
-        reports.call_after_refresh(reports.scroll_to_claim)
+        self._open("company")
 
     def action_open_source(self) -> None:
         self.dispatch("evidence-open")
 
     def action_view_in_report(self) -> None:
         # An uncited source has nowhere to go: the key must not jump to the
-        # report tab and land nowhere.
-        if self.can_view:
-            self.dispatch("evidence-report")
+        # report column and land nowhere.
+        if not self.can_view:
+            return
+        self._claim_to_reveal = self.view.selected
+        self._open("report")
+        self.call_after_refresh(self.scroll_to_claim)
 
     def action_back(self) -> None:
         # Escape cancels a running generation or gather first: that is the
-        # thing you most want to stop. Otherwise it backs out of the
-        # narrow-mode detail view, and never silently resets the selection.
+        # thing you most want to stop. Narrow then steps back: the Evidence
+        # preview returns to its list, then to Company.
         if self._job is not None:
             self._job.cancel()
             return
-        if self.detail_open:
-            self.dispatch("evidence-back")
+        if not self._narrow:
+            return
+        if self._view == "evidence" and self.detail_open:
+            self.detail_open = False
+            self.view.inspected = ""
+            self.load_evidence()
+            self.layout_views()
+        elif self._view != "company":
+            self._view = "company"
+            self.layout_views()
+            self.query_one("#research-companies", DeltaTable).focus()
 
     def action_focus_search(self) -> None:
-        if self.is_report_workspace:
-            self.run_worker(self._switch_workspace("data"), exclusive=True)
-            return
+        self._show("evidence")
         self.query_one("#evidence-search", Input).focus()
 
     def dispatch(self, action: str) -> None:
-        if action == "tab-evidence":
-            self.action_show_evidence()
-        elif action == "tab-report":
-            self.action_show_report()
-        elif action == "evidence-more":
+        if action == "evidence-more":
             if self.more_available:
                 self.view.limit += 200
                 self.load_evidence()
-        elif action == "evidence-back":
-            self.view.inspected = ""
-            self.load_evidence()
-            self.detail_open = False
-            self.layout_views()
-        elif action == "evidence-report":
-            self._claim_to_reveal = self.view.selected
-            self.run_worker(self._open_report_for_evidence(), exclusive=True)
         elif action == "evidence-open":
             item = self.items.get(self.view.selected)
             if self.can_open and item and item.url:
@@ -1179,7 +1163,7 @@ class Research(DeltaScreen):
 
     def restore_report_position(self) -> None:
         # Show arrives after layout gives the previously hidden document a region.
-        if not self.ready or self.tab != "report":
+        if not self.ready or not self.query_one("#report-doc").display:
             return
         if self._claim_to_reveal:
             self.scroll_to_claim()
@@ -1256,7 +1240,7 @@ class Research(DeltaScreen):
         self.app.push_screen(ThesisForm(claim=claim.text, targets=self.state.company), created)
 
     def research_screens(self) -> list[Research]:
-        """Every mounted Research panel, so Reports and Research stay in sync.
+        """Every mounted Research panel, so compatibility views stay in sync.
 
         Reads the app's public registry; falls back to this screen alone when
         mounted standalone (tests, a single-panel host).

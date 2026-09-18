@@ -385,7 +385,7 @@ class Home(DeltaScreen):
     Home #since-axis { margin-bottom: 1; color: $text-muted; }
     Home #since-newest { margin-bottom: 1; }
     Home #since-stale { height: 1; text-wrap: nowrap; text-overflow: ellipsis; }
-    Home #since-review { height: 1; color: $warning; text-wrap: nowrap; text-overflow: ellipsis; }
+    Home #since-review { height: 1; color: $text-warning; text-wrap: nowrap; text-overflow: ellipsis; }
 
     /* upcoming / theses */
     Home #upcoming-table, Home #theses-table { height: 1fr; overflow-x: hidden; }
