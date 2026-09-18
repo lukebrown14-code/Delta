@@ -81,7 +81,7 @@ uv run delta
 | Key | Screen |
 |-----|--------|
 | `1` | Watchlist |
-| `2` / `3` | Evidence / Reports |
+| `2` | Research: companies, reports and evidence |
 | `4` / `5` | Theses / Ask |
 | `c` | Settings |
 | `h` | Home |
@@ -94,7 +94,7 @@ Watchlist entries come in five kinds — `company`, `sector`, `industry`, `marke
 
 Theses are optional. Skip them entirely and you still get a watchlist, evidence and reports. On the Theses screen (**4**) write down something you believe, let the model propose candidate evidence, and accept or reject each piece yourself.
 
-Press **3** for Reports: choose a company with **t**, read its latest sourced report, and generate or refresh it with **n**. Press **2** for Evidence when you want to search and inspect the underlying sources. Citations move directly into Evidence, and **v** returns to the report that cites a source.
+Press **2** for Research. Its three columns keep the selected company, the latest report, and its supporting evidence visible together. Choose a watch target and company on the left; use the right column to search and filter sources. **Gather all** collects evidence across configured targets, and **Generate report** writes a report for the selected company without changing the evidence filters. Citations select their source in the Evidence column on the same screen, and **v** jumps to the report claim that cites a source.
 
 Reports keep their Markdown export alongside a structured JSON sidecar for citation navigation. Older Markdown-only reports remain readable; regenerate them to enable interactive citations. Database counts, price timestamps and cumulative model spend are under **Settings → Diagnostics** (**c**).
 

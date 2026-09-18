@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import pytest
 from sqlmodel import Session
 from textual.app import App
-from textual.widgets import DataTable, MarkdownViewer
+from textual.widgets import DataTable, MarkdownViewer, Static
 
 from delta.core.db import EventTable, NewsItemTable
 from delta.core.json import to_json
@@ -210,9 +210,17 @@ def test_reports_screen_lists_targets_and_generates(tmp_engine, tmp_path, monkey
         app = ReportsApp()
         async with app.run_test() as pilot:
             table = app.screen.query_one("#research-companies", DataTable)
+
+            def cell(row: int, col: int) -> str:
+                value = table.get_row_at(row)[col]
+                return getattr(value, "plain", value)
+
             assert table.row_count == 1
-            assert table.get_row_at(0)[1] == INST
-            assert "apple" in table.get_row_at(0)[2]
+            # The 36-cell company column carries the name and the report age;
+            # symbol and target moved to the summary under the list.
+            assert cell(0, 0) == "AAPL"
+            assert cell(0, 1) == "no report"
+            assert "apple" in str(app.screen.query_one("#company-summary", Static).render())
 
             # Let the first layout settle: the header reflows once on mount.
             await pilot.pause()

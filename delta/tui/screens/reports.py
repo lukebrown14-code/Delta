@@ -5,4 +5,4 @@ from delta.tui.screens.research import Research
 
 class Reports(Research):
     name = "reports"
-    initial_tab = "report"
+    initial_view = "report"

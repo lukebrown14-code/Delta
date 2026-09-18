@@ -17,7 +17,7 @@ from delta.evidence import evidence
 from delta.reports import Claim, Report, write_report
 from delta.tui.screens.data import Data
 from delta.tui.screens.reports import Reports
-from delta.tui.screens.research import ResearchState
+from delta.tui.screens.research import Research, ResearchState
 from delta.tui.theme import THEMES
 from delta.tui.widgets import DeltaTable
 from tests.conftest import FakeLLM
@@ -165,20 +165,71 @@ def test_aliases_share_state_and_narrow_details(tmp_engine, tmp_path, monkeypatc
             screen = pilot.app.screen
             screen.query_one("#evidence-search", Input).value = "cloud"
             await pilot.pause()
-            assert screen.query_one("#evidence-list-pane").display
-            assert not screen.query_one("#evidence-preview-pane").display
+            # Narrow: the desk drills in — the evidence list fills the screen
+            # and the preview waits behind it.
+            assert screen.query_one("#evidence-list-stack").display
+            assert not screen.query_one("#evidence-preview").display
             await screen.inspect_evidence("news:news-1")
-            assert not screen.query_one("#evidence-list-pane").display
-            assert screen.query_one("#evidence-preview-pane").display
+            assert not screen.query_one("#evidence-list-stack").display
+            assert screen.query_one("#evidence-preview").display
             await pilot.pause()
             await pilot.press("escape")
-            assert screen.query_one("#evidence-list-pane").display
+            assert screen.query_one("#evidence-list-stack").display
+            await pilot.press("escape")
+            assert screen.query_one("#research-header").display
+            assert not screen.query_one("#evidence-pane").display
             pilot.app.switch_screen("reports")
             await pilot.pause()
-            assert pilot.app.screen.tab == "report"
+            # The compatibility report view opens on the report column and
+            # shares the browse state with the evidence view.
+            assert pilot.app.screen.query_one("#report-doc").display
             assert pilot.app.screen.state.company == INST
             assert pilot.app.screen.view.search == "cloud"
             assert pilot.app.screen.query_one("#report-generate").region.right <= 80
+
+    asyncio.run(run())
+
+
+def test_three_columns_at_wide_and_drill_in_below_100(tmp_engine, tmp_path, monkeypatch):
+    """One desk: Company, Report and Evidence mount left to right when wide.
+
+    The plan's whole point — the report stays visible as the central surface,
+    with evidence actionable alongside it.
+    """
+    delta = setup_rig(tmp_engine, tmp_path, monkeypatch)
+    saved_report(delta)
+
+    class TestApp(App):
+        def on_mount(self):
+            self.push_screen(Research(delta))
+
+    async def run():
+        async with TestApp().run_test(size=(120, 30)) as pilot:
+            screen = pilot.app.screen
+            header, report, evidence = (
+                screen.query_one("#research-header"),
+                screen.query_one("#report-doc"),
+                screen.query_one("#evidence-pane"),
+            )
+            assert header.display and report.display and evidence.display
+            assert header.region.x < report.region.x < evidence.region.x
+            assert header.region.width == 36
+            assert evidence.region.width == 40
+            # Evidence stacks its filters and list above an inline preview.
+            assert screen.query_one("#evidence-list-stack").display
+            assert screen.query_one("#evidence-preview").display
+            # Narrow: Company comes first; r and e open the other columns.
+            await pilot.resize_terminal(80, 24)
+            await pilot.pause()
+            assert screen.query_one("#research-header").display
+            assert not screen.query_one("#report-doc").display
+            await pilot.press("r")
+            assert screen.query_one("#report-doc").display
+            assert not screen.query_one("#research-header").display
+            await pilot.press("e")
+            assert screen.query_one("#evidence-pane").display
+            await pilot.press("escape")
+            assert screen.query_one("#research-header").display
 
     asyncio.run(run())
 
@@ -227,7 +278,7 @@ def test_generation_captures_company_and_handles_failure(tmp_engine, tmp_path, m
     asyncio.run(run())
 
 
-def test_report_citation_opens_evidence_and_returns_to_the_citing_claim(tmp_engine, tmp_path, monkeypatch):
+def test_citation_stays_on_screen_and_v_returns_to_the_claim(tmp_engine, tmp_path, monkeypatch):
     delta = setup_rig(tmp_engine, tmp_path, monkeypatch)
     report = saved_report(delta)
     report.bull = [Claim(text=f"Earlier claim {n}", evidence_ids=["bar:1"]) for n in range(30)]
@@ -240,7 +291,7 @@ def test_report_citation_opens_evidence_and_returns_to_the_citing_claim(tmp_engi
         def on_mount(self):
             self.install_screen(Data(delta, state), "data")
             self.install_screen(Reports(delta, state), "reports")
-            self.push_screen("reports")
+            self.push_screen("data")
 
     async def run():
         async with TestApp().run_test(size=(120, 30)) as pilot:
@@ -249,17 +300,28 @@ def test_report_citation_opens_evidence_and_returns_to_the_citing_claim(tmp_engi
             await pilot.pause()
             viewer.scroll_to(y=10, animate=False)
             await pilot.pause()
+            position = viewer.scroll_y
             await screen.inspect_evidence("news:news-1")
             await pilot.pause()
-            assert pilot.app.screen.name == "data"
+            # The citation selects its source in the Evidence column without
+            # leaving Research, and the report keeps its place.
+            assert pilot.app.screen is screen
+            table = screen.query_one("#evidence-table", DeltaTable)
+            assert table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value == (
+                "news:news-1"
+            )
+            assert "Both companies" in str(screen.query_one("#source-body", Static).render())
+            assert viewer.scroll_y == position
+            # v focuses the Report column and scrolls to the citing claim.
             await pilot.press("v")
             await pilot.pause()
-            assert pilot.app.screen.name == "reports"
+            assert screen.query_one("#report-view").has_focus
+            assert viewer.scroll_y > position
             viewer.scroll_to(y=20, animate=False)
             await pilot.pause()
-            pilot.app.switch_screen("data")
-            await pilot.pause()
             pilot.app.switch_screen("reports")
+            await pilot.pause()
+            pilot.app.switch_screen("data")
             await pilot.pause()
             assert viewer.scroll_y == 20
 
@@ -416,21 +478,21 @@ def test_every_action_is_reachable_from_the_keyboard(tmp_engine, tmp_path, monke
 
     class TestApp(App):
         def on_mount(self):
-            self.push_screen(Reports(delta))
+            self.push_screen(Data(delta))
 
     async def run():
         async with TestApp().run_test() as pilot:
             screen = pilot.app.screen
-            assert screen.query_one("#report-doc").display
-            assert not screen.query_one("#evidence-layout").display
-            assert not {"e", "r"} & {key for key, _, _ in screen.BINDINGS}
+            await pilot.press("e")
+            assert screen.query_one("#evidence-table").has_focus
+            await pilot.press("r")
+            assert screen.query_one("#report-view").has_focus
             await pilot.press("t")
-            from delta.tui.screens.research import CompanyPicker
-
-            assert isinstance(pilot.app.screen, CompanyPicker)
-            await pilot.press("escape")
+            assert screen.query_one("#research-companies").has_focus
+            await pilot.press("slash")
+            assert screen.query_one("#evidence-search", Input).has_focus
             # None of the screen keys may shadow the app-level navigation keys.
-            app_keys = {"1", "2", "3", "4", "5", "c", "h", "m", "p", "g", "q"}
+            app_keys = {"1", "2", "3", "4", "5", "6", "c", "h", "m", "p", "g", "q"}
             assert not app_keys & {key for key, _, _ in screen.BINDINGS}
 
     asyncio.run(run())

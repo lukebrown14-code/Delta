@@ -22,9 +22,9 @@ from delta.tui.widgets import (
 def _own_bindings(screen_type: type) -> list:
     """The nearest class in ``screen_type``'s MRO that declares its own BINDINGS.
 
-    Not ``vars(screen_type)``: ``Data`` and ``Reports`` are thin subclasses of
-    ``Research`` that only set ``name`` and ``initial_tab``, so reading the
-    class dict alone left the whole research keymap out of this list. Stops at
+    Not ``vars(screen_type)``: ``Data`` is a thin subclass of
+    ``Research`` that only sets its name, so reading the class dict alone left
+    the whole research keymap out of this list. Stops at
     the Textual base classes, whose bindings are the stock focus keys and are
     not news to anyone.
     """
@@ -83,19 +83,18 @@ Open the command palette (ctrl+p) and run **Gather evidence**.
 `ingest` pulls prices, news, filings and earnings dates into a local database,
 and `extract` turns the news into structured facts. Gather runs both.
 
-Press 2 for Evidence. Choose a company, then search and filter the sources
-behind its research. Database counts and model spend are under Settings → Diagnostics.
+Press 2 for Research. Its three columns keep the selected company, its report,
+and the supporting evidence visible together. Database counts and model spend
+are under Settings → Diagnostics.
 
 ## 3. Read what it found
 
-Press 3 for Reports. Press t to choose the company you want to read.
-
-Pick a company, press n to generate a report, and wait. You get a written summary with a
-citation on every claim. If a sentence could not be traced back to something
+In Research, pick a company in the left column and press n to generate its
+report. The centre column is the written summary, with a citation on every
+claim. The right column lets you search, filter, and open the supporting
+evidence. Press v on a source to jump to the first report claim that cites it.
+If a sentence could not be traced back to something
 collected in step 2, it gets dropped rather than guessed.
-
-The report is the reading surface. Select a citation to open that source in
-Evidence; there, press o to open its link or v to return to the report that cites it.
 
 ## 4. Ask it questions
 

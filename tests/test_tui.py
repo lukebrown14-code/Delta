@@ -76,6 +76,12 @@ def test_app_mounts_and_navigates(delta):
             for key, name, _label in ALL_ITEMS:
                 await pilot.press(key)
                 assert app.screen.name == name
+            # Research is the one shared desk: no Reports route remains, by
+            # key, by Go picker entry, or in the installed screens.
+            assert "reports" not in app.screens_by_name
+            assert not any(key == "3" for key, _name, _label in ALL_ITEMS)
+            await pilot.press("3")
+            assert app.screen.name != "reports"
 
     asyncio.run(run())
 
@@ -825,7 +831,7 @@ def test_help_lists_per_screen_keys(delta):
             }
             thesis_keys = {binding_key(b) for b in shown_bindings(Theses.BINDINGS)}
             assert thesis_keys and thesis_keys <= keys, thesis_keys - keys
-            # Data and Reports are thin subclasses of Research: their keymap is
+            # Data is a thin subclass of Research: its keymap is
             # inherited, so reading the class dict alone left it out entirely.
             research_keys = {binding_key(b) for b in shown_bindings(Research.BINDINGS)}
             assert research_keys <= keys, research_keys - keys
