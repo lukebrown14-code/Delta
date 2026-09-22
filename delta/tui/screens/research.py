@@ -37,7 +37,6 @@ from delta.reports import (
     read_report,
     render_markdown,
     report_history,
-    section_counts,
     write_report,
 )
 from delta.tui.shell import DeltaScreen, age_text
@@ -178,12 +177,15 @@ class Research(DeltaScreen):
     }}
     #company-actions {{ height: 2; }}
     #company-actions ActionChip {{ margin: 0 1 0 0; }}
-    #report-actions {{ height: 1; margin: 0 1; }}
-    #report-meta {{ height: 1; padding: 0 1; }}
+    #report-summary {{ height: auto; padding: 1 2; }}
+    #report-summary-main {{ height: 1; }}
+    #report-meta {{ width: 1fr; height: 1; }}
     #report-meta StatusDot {{ width: 2; }}
     #report-meta Static, #report-meta Pill {{ width: auto; padding: 0 1 0 0; }}
     #report-age, #report-sentiment-delta {{ color: $text-muted; }}
-    #report-history, #report-legacy {{ height: auto; padding: 0 1; color: $text-muted; }}
+    #report-generate {{ width: auto; }}
+    #report-history {{ height: auto; margin-top: 1; color: $text-muted; }}
+    #report-legacy {{ height: auto; color: $text-muted; }}
     #research-audit {{
         height: 1;
         margin: 0 1;
@@ -264,16 +266,17 @@ class Research(DeltaScreen):
                 hints=hint_markup(("↑↓", "scroll"), ("enter", "citation"), ("n", "regenerate")),
                 id="report-doc",
             ):
-                with Horizontal(id="report-actions"):
-                    yield ActionChip(
-                        "n", "generate report", id="report-generate", classes="-primary"
-                    )
-                with Horizontal(id="report-meta"):
-                    yield StatusDot("warn", id="report-age-dot")
-                    yield Static("", id="report-age", markup=False)
-                    yield Pill("", id="report-sentiment")
-                    yield Static("", id="report-sentiment-delta", markup=False)
-                yield Static("", id="report-history", markup=False)
+                with Vertical(id="report-summary"):
+                    with Horizontal(id="report-summary-main"):
+                        with Horizontal(id="report-meta"):
+                            yield StatusDot("warn", id="report-age-dot")
+                            yield Static("", id="report-age", markup=False)
+                            yield Pill("", id="report-sentiment")
+                            yield Static("", id="report-sentiment-delta", markup=False)
+                        yield ActionChip(
+                            "n", "generate report", id="report-generate", classes="-primary"
+                        )
+                    yield Static("", id="report-history", markup=False)
                 yield Static("", id="report-legacy", markup=False)
                 yield Static("", id="research-audit", markup=False)
                 yield ResearchViewer(
@@ -845,7 +848,16 @@ class Research(DeltaScreen):
         except Exception:
             line.update("")
             return
-        line.update(" · ".join(audit.warnings))
+        parts = list(audit.warnings)
+        from delta.sentiment import stock_sentiment
+
+        summary = stock_sentiment(self.delta.engine, company)
+        if summary is not None:
+            parts.append(
+                f"news stance {summary.score:+.2f} · {summary.bull} bull / "
+                f"{summary.bear} bear / {summary.neutral} neutral · {summary.days}d"
+            )
+        line.update(" · ".join(parts))
 
     def reports_dir(self) -> Path:
         return Path(getattr(self.delta.cfg, "reports_dir", "reports"))
@@ -888,44 +900,49 @@ class Research(DeltaScreen):
         return ("just now" if label == "live" else f"{label} old"), state
 
     def show_report_meta(self, company: str, path: Path | None) -> None:
-        """Surface the two figures a reader acts on: staleness and sentiment."""
+        """Render a compact freshness, sentiment, and previous-run snapshot."""
         meta = self.query_one("#report-meta")
         meta.display = path is not None
+        pill = self.query_one("#report-sentiment", Pill)
+        delta = self.query_one("#report-sentiment-delta", Static)
         if path is None:
             self.query_one("#report-history", Static).display = False
             return
         label, state = self.report_age(path)
         self.query_one("#report-age-dot", StatusDot).set_state(state)
-        self.query_one("#report-age", Static).update(label)
-        pill = self.query_one("#report-sentiment", Pill)
-        delta = self.query_one("#report-sentiment-delta", Static)
+        self.query_one("#report-age", Static).update(f"fresh: {label}")
         if self.report is None:
-            pill.update("sentiment —")
-            pill.set_variant("dim")
+            pill.display = False
+            delta.display = False
             delta.update("")
             self.query_one("#report-history", Static).display = False
             return
+        pill.display = True
+        delta.display = True
         pill.update(f"sentiment {self.report.sentiment:+.2f}")
         pill.set_variant(sentiment_variant(self.report.sentiment))
         delta.update(self.sentiment_delta(company))
         self.show_history(company)
 
     def show_history(self, company: str) -> None:
-        """List prior runs with their sentiment, so the trend is readable.
-
-        Only shown once a company has more than one run: a single report has no
-        trend, and an empty label would just be clutter.
-        """
+        """Show only the immediately previous run, not a dense history chain."""
         line = self.query_one("#report-history", Static)
-        history = report_history(self.reports_dir(), company)
-        if len(history) < 2:
+        previous = next(
+            (
+                report
+                for report in report_history(self.reports_dir(), company)
+                if self.report is not None and report.as_of < self.report.as_of
+            ),
+            None,
+        )
+        if previous is None:
             line.display = False
             return
         line.display = True
-        runs = " ← ".join(
-            f"{report.as_of:%d %b %H:%M} {report.sentiment:+.2f}" for report in history[:5]
+        line.update(
+            f"Previous report: {previous.as_of:%d %b %H:%M} UTC · "
+            f"sentiment {previous.sentiment:+.2f}"
         )
-        line.update(f"runs: {runs}")
 
     def sentiment_delta(self, company: str) -> str:
         """How sentiment moved against the previous run — the change is the signal."""
@@ -939,7 +956,7 @@ class Research(DeltaScreen):
         previous = history[0].sentiment
         assert self.report is not None
         move = self.report.sentiment - previous
-        return f"was {previous:+.2f} ({move:+.2f})"
+        return f"change {move:+.2f}"
 
     async def show_latest(self, target_id: str) -> None:
         company = target_id
@@ -968,8 +985,7 @@ class Research(DeltaScreen):
         await self.query_one("#report-view", MarkdownViewer).document.update(body)
         badge = "no report"
         if path is not None:
-            counts = section_counts(self.report) if self.report else ""
-            badge = " · ".join(part for part in (path.stem, counts) if part)
+            badge = path.stem
         self.query_one("#report-doc", Pane).set_badge(badge)
         companies = self.query_one("#research-companies", DeltaTable)
         if company in companies.rows:

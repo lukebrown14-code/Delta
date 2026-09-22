@@ -104,6 +104,20 @@ class LLMCallTable(SQLModel, table=True):
     response: str | None = None
 
 
+class SentimentTable(SQLModel, table=True):
+    __tablename__ = "sentiment"
+
+    id: str = Field(primary_key=True)
+    instrument_id: str = Field(index=True)
+    evidence_id: str = Field(index=True)
+    ts: datetime = Field(index=True)
+    stance: str
+    confidence: float
+    probabilities: str  # JSON-encoded dict[str, float]
+    model: str
+    prompt_version: str
+
+
 def init_engine(db_path: str | Path) -> Engine:
     path = Path(db_path)
     path.parent.mkdir(parents=True, exist_ok=True)

@@ -15,7 +15,7 @@ from delta.core.db import EventTable, NewsItemTable
 from delta.core.json import to_json
 from delta.core.models import Instrument
 from delta.evidence import cite
-from delta.reports import build_report, gather, render_markdown, write_report
+from delta.reports import Claim, Report, build_report, gather, render_markdown, write_report
 from delta.tui.screens.reports import Reports
 from tests.conftest import FakeConfig, FakeLLM, seed_bars
 
@@ -77,16 +77,21 @@ def _claim(text: str, ids: list[str]) -> dict:
 def _draft() -> dict:
     return {
         "summary": "Apple signed a cloud partnership and closed the window at 102.00.",
+        "bull_summary": "The partnership provides a positive commercial data point.",
         "bull": [
             _claim("Apple and Microsoft announced a partnership.", ["news:news-1"]),
             _claim("Partnership revenue is already accretive.", ["news:ghost"]),
             _claim("No sources given.", []),
         ],
+        "bear_summary": "The price move is positive but limited evidence on its own.",
         "bear": [_claim("The close rose through the window.", ["bar:5", "bar:4"])],
+        "risks_summary": "",
         "risks": [],
+        "catalysts_summary": "The earnings result is a dated positive event.",
         "catalysts": [_claim("Earnings were reported above consensus.", ["event:event-1"])],
         "unknowns": ["What guidance did management give for next quarter?"],
         "sentiment": 0.6,
+        "sentiment_reasons_summary": "The reported earnings result supports a positive reading.",
         "sentiment_reasons": [_claim("EPS came in above consensus.", ["event:event-1"])],
     }
 
@@ -99,7 +104,7 @@ def test_build_report_returns_cited_report(tmp_engine, tmp_path, monkeypatch):
     report = asyncio.run(build_report(FakeRig(tmp_engine, llm), INST))
 
     assert report.target_id == INST
-    assert report.prompt_version == "report_v1"
+    assert report.prompt_version == "report_v2"
     assert report.sentiment == 0.6
     assert report.summary == "Apple signed a cloud partnership and closed the window at 102.00."
     assert report.unknowns == ["What guidance did management give for next quarter?"]
@@ -120,7 +125,7 @@ def test_build_report_returns_cited_report(tmp_engine, tmp_path, monkeypatch):
     call = llm.calls[0]
     assert call["task"] == "report"
     assert call["model"] == "test/model"
-    assert call["prompt_version"] == "report_v1"
+    assert call["prompt_version"] == "report_v2"
     assert "Use only the information provided." in call["prompt"]
     assert "Do not rely on prior knowledge of prices, news or events." in call["prompt"]
     assert "Do not recommend buying, selling or holding." in call["prompt"]
@@ -161,7 +166,7 @@ def test_no_evidence_raises_before_any_call(tmp_engine, tmp_path, monkeypatch):
     assert llm.calls == []
 
 
-def test_render_markdown_cites_claims_and_sentiment(tmp_engine, tmp_path, monkeypatch):
+def test_render_markdown_groups_section_summary_claims_and_sources(tmp_engine, tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     _seed(tmp_engine)
     llm = FakeLLM({"report": _draft()})
@@ -174,8 +179,33 @@ def test_render_markdown_cites_claims_and_sentiment(tmp_engine, tmp_path, monkey
     assert report.citations["event:event-1"] in markdown
     assert "## Summary" in markdown
     assert "## Bull case" in markdown
+    assert "The partnership provides a positive commercial data point." in markdown
+    assert "### Key points" in markdown
+    assert "### Sources" in markdown
     assert "## Unknowns" in markdown
     assert "Partnership revenue is already accretive." not in markdown
+
+
+def test_render_markdown_deduplicates_section_sources_and_keeps_legacy_reports_readable():
+    report = Report(
+        target_id=INST,
+        as_of=START,
+        prompt_version="report_v1",
+        summary="Legacy report.",
+        sentiment=0,
+        bull=[
+            Claim(text="First point.", evidence_ids=["news:one", "news:two"]),
+            Claim(text="Second point.", evidence_ids=["news:two"]),
+        ],
+        citations={"news:one": "First source", "news:two": "Second source"},
+    )
+
+    markdown = render_markdown(report, interactive=True)
+
+    assert "First point." in markdown
+    assert "1. [Inspect source](evidence:news:one) — First source" in markdown
+    assert markdown.count("evidence:news:two") == 1
+    assert "Legacy report." in markdown
 
 
 def test_write_report_writes_target_dir_dated_file(tmp_engine, tmp_path, monkeypatch):

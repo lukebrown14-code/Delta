@@ -27,6 +27,7 @@ report = "anthropic/claude-sonnet-4"
 chat = "anthropic/claude-sonnet-4"
 thesis = "google/gemini-2.5-flash"
 thesis_summary = "google/gemini-2.5-flash"
+sentiment = "typesafe/jev-1.13"
 
 [plugins.yfinance]
 enabled = true
@@ -82,4 +83,20 @@ market = "us"
 asset_class = "equity"
 tickers = [
     "GOOGL",
+]
+
+[targets."NASDAQ Composite"]
+kind = "company"
+market = "us"
+asset_class = "equity"
+tickers = [
+    "^IXIC",
+]
+
+[targets."NIKE, Inc."]
+kind = "company"
+market = "us"
+asset_class = "equity"
+tickers = [
+    "NKE",
 ]

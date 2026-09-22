@@ -52,6 +52,12 @@ class ExtractResult:
     instruments: int
 
 
+@dataclass
+class SentimentResult:
+    classified: int
+    instruments: int
+
+
 @dataclass(frozen=True)
 class DataProviderStatus:
     name: str
@@ -209,6 +215,20 @@ async def extract(
         f"[green]Extracted {len(events)} events across {instrument_count} instruments since {since}.[/green]"
     )
     return ExtractResult(len(events), instrument_count)
+
+
+async def classify_sentiment(
+    delta: Any,
+    *,
+    since: str | None = None,
+    log: Log = _noop_log,
+) -> SentimentResult:
+    """Classify news stances (bull/bear/neutral) via the Jev ``sentiment`` route."""
+    from delta.sentiment import classify_news
+
+    rows = await classify_news(delta, since=since, log=log)
+    instruments = len({row.instrument_id for row in rows})
+    return SentimentResult(len(rows), instruments)
 
 
 def set_plugin_enabled(delta: Any, name: str, value: bool) -> None:

@@ -25,7 +25,7 @@ from delta.targets import WatchTarget
 #: existing ``glob("*.md")`` readers keep working unchanged.
 HISTORY_DIR = "history"
 
-REPORT_TEMPLATE = "report_v1.j2"
+REPORT_TEMPLATE = "report_v2.j2"
 PROMPT_VERSION = REPORT_TEMPLATE.removesuffix(".j2")
 
 #: Claim-list draft fields paired with their markdown headings. A report with
@@ -50,12 +50,17 @@ class ReportDraft(BaseModel):
     """The structured-call output shape for ``report_v1``."""
 
     summary: str
+    bull_summary: str = ""
     bull: list[Claim] = Field(default_factory=list)
+    bear_summary: str = ""
     bear: list[Claim] = Field(default_factory=list)
+    risks_summary: str = ""
     risks: list[Claim] = Field(default_factory=list)
+    catalysts_summary: str = ""
     catalysts: list[Claim] = Field(default_factory=list)
     unknowns: list[str] = Field(default_factory=list)
     sentiment: float = Field(ge=-1, le=1)
+    sentiment_reasons_summary: str = ""
     sentiment_reasons: list[Claim] = Field(default_factory=list)
 
 
@@ -139,24 +144,33 @@ async def build_report(delta: Any, target_id: str, *, since: str | None = None) 
         prompt_version=PROMPT_VERSION,
         citations=citations,
         summary=draft.summary,
+        bull_summary=draft.bull_summary,
         bull=kept["bull"],
+        bear_summary=draft.bear_summary,
         bear=kept["bear"],
+        risks_summary=draft.risks_summary,
         risks=kept["risks"],
+        catalysts_summary=draft.catalysts_summary,
         catalysts=kept["catalysts"],
         unknowns=draft.unknowns,
         sentiment=draft.sentiment,
+        sentiment_reasons_summary=draft.sentiment_reasons_summary,
         sentiment_reasons=kept["sentiment_reasons"],
     )
 
 
+def _section_sources(claims: list[Claim]) -> list[str]:
+    """Evidence IDs in first-seen order across a section's claims."""
+    return list(dict.fromkeys(evidence_id for claim in claims for evidence_id in claim.evidence_ids))
+
+
 def render_markdown(report: Report, *, interactive: bool = False) -> str:
-    """Markdown with every claim followed by the cite lines of its evidence.
+    """Markdown with a section summary, key points, and one source list.
 
     ``interactive`` is the in-app render: cites become ``evidence:`` links and
-    each claim carries its source count, so a claim resting on one source is
-    distinguishable from one resting on several. The plain render is the
-    persisted form and must stay byte-stable — ``show_latest`` compares it
-    against the stored markdown to decide whether the sidecar still matches.
+    source rows become ``evidence:`` links. The plain render is the persisted
+    form and must stay byte-stable — ``show_latest`` compares it against the
+    stored markdown to decide whether the sidecar still matches.
     """
     lines = [
         f"# Report — {report.target_id}",
@@ -173,22 +187,20 @@ def render_markdown(report: Report, *, interactive: bool = False) -> str:
         claims: list[Claim] = getattr(report, field)
         lines += [f"## {title}", ""]
         if claims:
+            section_summary = getattr(report, f"{field}_summary", "")
+            if section_summary:
+                lines += [section_summary, ""]
+            lines += ["### Key points", ""]
             for index, claim in enumerate(claims):
-                suffix = ""
-                if interactive:
-                    count = len(claim.evidence_ids)
-                    plural = "" if count == 1 else "s"
-                    suffix = f" *({count} source{plural})* [+thesis](thesis:{field}:{index})"
+                suffix = f" [+thesis](thesis:{field}:{index})" if interactive else ""
                 lines.append(f"- {claim.text}{suffix}")
-                lines.extend(
-                    (
-                        f"  - [Inspect source](evidence:{evidence_id}) — "
-                        f"{report.citations.get(evidence_id, evidence_id)}"
-                        if interactive
-                        else f"  - {report.citations.get(evidence_id, evidence_id)}"
-                    )
-                    for evidence_id in claim.evidence_ids
-                )
+            lines += ["", "### Sources", ""]
+            for index, evidence_id in enumerate(_section_sources(claims), start=1):
+                citation = report.citations.get(evidence_id, evidence_id)
+                if interactive:
+                    lines.append(f"{index}. [Inspect source](evidence:{evidence_id}) — {citation}")
+                else:
+                    lines.append(f"{index}. {citation}")
         else:
             lines.append("- none supported by the gathered evidence")
         lines.append("")

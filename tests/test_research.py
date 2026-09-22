@@ -368,7 +368,9 @@ def test_settings_diagnostics_and_gather_refresh(tmp_engine, tmp_path, monkeypat
     asyncio.run(run())
 
 
-def test_report_age_and_section_counts_surface_staleness(tmp_engine, tmp_path, monkeypatch):
+def test_report_snapshot_surfaces_staleness_without_cluttering_the_badge(
+    tmp_engine, tmp_path, monkeypatch
+):
     """A week-old report must not read the same as a fresh one."""
     delta = setup_rig(tmp_engine, tmp_path, monkeypatch)
     stale = Report(
@@ -394,14 +396,17 @@ def test_report_age_and_section_counts_surface_staleness(tmp_engine, tmp_path, m
             assert label == "9d old"
             assert state == "error"
             assert screen.query_one("#report-age-dot").state == "error"
+            assert "fresh: 9d old" in str(screen.query_one("#report-age", Static).render())
             # Sentiment is a coloured pill, not buried italic body text.
             assert "-0.50" in str(screen.query_one("#report-sentiment").render())
             assert screen.query_one("#report-sentiment").has_class("-error")
-            # The badge says how much substance the report has.
+            # The title stays scannable: date only, not five section counts.
             badge = screen.query_one("#report-doc")._badge
-            assert "bull 1" in badge and "bear 1" in badge
-            # A claim's source count is visible without counting cite lines.
-            assert "(1 source)" in screen.query_one(MarkdownViewer).document.source
+            assert badge == f"{stale.as_of:%Y-%m-%d}"
+            # Sources are grouped once per section rather than repeated per claim.
+            document = screen.query_one(MarkdownViewer).document.source
+            assert "### Sources" in document
+            assert "(evidence:news:news-1)" in document
 
     asyncio.run(run())
 
@@ -445,10 +450,14 @@ def test_same_day_regeneration_keeps_the_previous_run(tmp_engine, tmp_path, monk
             # show_latest still resolves the newest run, not an archived one.
             assert screen.report is not None
             assert round(screen.report.sentiment, 2) == -0.30
-            assert "was -0.10" in str(screen.query_one("#report-sentiment-delta").render())
+            assert "change -0.20" in str(
+                screen.query_one("#report-sentiment-delta").render()
+            )
             history = screen.query_one("#report-history")
             assert history.display
-            assert "-0.30" in str(history.render()) and "-0.10" in str(history.render())
+            rendered = str(history.render())
+            assert "Previous report:" in rendered
+            assert "-0.10" in rendered and "-0.30" not in rendered
 
     asyncio.run(run())
 
