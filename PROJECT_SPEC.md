@@ -269,10 +269,13 @@ owns caching keyed on
 `sha256(model + prompt_version + prompt)`, persists every call to `llmcall`, and
 applies the retry policy.
 
-**Four routed tasks** in `[llm.routing]`: `extract`, `report`, `chat`, `thesis`.
-`model_for(config, task, plugin=None)` resolves `[plugins.<plugin>].model` first,
-then `[llm.routing].<task>`, and **raises `KeyError` on a miss** — a missing
-route must never silently fall back to a hard-coded literal.
+**Model choice.** `[llm] model` is the one model for all tasks — when set,
+`model_for` returns it for every task and plugin, ignoring everything below.
+Until it is set, per-task routing in `[llm.routing]` (`extract`, `report`,
+`chat`, `thesis`) still applies: `model_for(config, task, plugin=None)`
+resolves `[plugins.<plugin>].model` first, then `[llm.routing].<task>`, and
+**raises `KeyError` on a miss** — a missing route must never silently fall
+back to a hard-coded literal.
 
 `catalog.py` fetches the provider's model list (id, name, context length, prices;
 OpenRouter reuses the pricing fetch it already makes, cached 24h, failures

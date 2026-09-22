@@ -1,4 +1,4 @@
-"""Settings: provider, model routing, plugins and targets beside always-open diagnostics.
+"""Settings: provider, one model for all tasks, plugins and targets beside diagnostics.
 
 Two columns at 100 columns and up (setup on the left, diagnostics on the
 right); one column below that, with diagnostics folded to a one-line summary
@@ -19,7 +19,7 @@ from textual.widgets import Static
 
 from delta import services
 from delta.core.config import read_env_value
-from delta.llm.catalog import ModelInfo, set_llm_route
+from delta.llm.catalog import ModelInfo, set_llm_model
 from delta.llm.providers import PROVIDERS
 from delta.tui.screens.model_picker import ModelPicker
 from delta.tui.shell import DeltaScreen
@@ -52,8 +52,8 @@ class Config(DeltaScreen):
 
     #: Below this terminal width the two columns stack and diagnostics folds.
     NARROW_WIDTH = 100
-    #: Land on the routing table, the pane you most often act in.
-    AUTO_FOCUS = "#cfg-routing"
+    #: Land on the model row, the pane you most often act in.
+    AUTO_FOCUS = "#cfg-model"
 
     CSS = """
     #cfg-body { height: 1fr; }
@@ -65,11 +65,9 @@ class Config(DeltaScreen):
     #cfg-provider-row Static, #cfg-provider-actions Static { width: auto; }
     #cfg-provider-name { text-style: bold; }
     #cfg-provider-status, #cfg-provider-also { color: $text-muted; padding: 0 0 0 1; }
-    #cfg-routing-pane, #cfg-plugins-pane, #cfg-sources-pane { height: auto; }
-    #cfg-routing, #cfg-plugins { height: auto; max-height: 12; }
-    #cfg-sources, #cfg-markets { height: auto; max-height: 4; }
-    #cfg-routing-more, #cfg-routing-empty, #cfg-plugins-empty, #cfg-sources-hint { height: 1; padding: 0 1; color: $text-muted; }
-    #cfg-routing-more { display: none; }
+    #cfg-model-pane, #cfg-plugins-pane, #cfg-sources-pane { height: auto; }
+    #cfg-model, #cfg-plugins { height: auto; max-height: 12; }
+    #cfg-plugins-empty, #cfg-sources-hint { height: 1; padding: 0 1; color: $text-muted; }
     #cfg-targets-pane { height: 1fr; }
     #cfg-targets { height: auto; max-height: 12; }
     #cfg-targets-empty, #cfg-targets-legacy, #cfg-targets-signpost { height: 1; padding: 0 1; color: $text-muted; }
@@ -91,7 +89,7 @@ class Config(DeltaScreen):
     Config.-narrow #cfg-left { width: 1fr; height: auto; }
     Config.-narrow #cfg-diag { width: 1fr; }
     Config.-narrow #cfg-provider-row { display: none; }
-    Config.-narrow #cfg-routing { max-height: 4; }
+    Config.-narrow #cfg-model { max-height: 2; }
     Config.-narrow #cfg-plugins { max-height: 3; }
     Config.-narrow #cfg-targets-pane { height: auto; }
     Config.-narrow #cfg-targets, Config.-narrow #cfg-targets-signpost { display: none; }
@@ -108,7 +106,6 @@ class Config(DeltaScreen):
         self.ready = False
         #: None follows the width (open wide, folded narrow); ``d`` pins it.
         self._diag_open: bool | None = None
-        self._routes: list[str] = []
         self._plugin_rows: list[str] = []
 
     # ------------------------------------------------------------ compose
@@ -130,18 +127,12 @@ class Config(DeltaScreen):
                         yield ActionChip("p", "switch provider", id="cfg-provider-switch")
                         yield Static("", id="cfg-provider-also", markup=False)
                 with Pane(
-                    title="model routing",
+                    title="model",
                     key="m",
-                    hints=hint_markup(("↑↓", "task"), ("enter", "pick model"), ("m", "pick model")),
-                    id="cfg-routing-pane",
+                    hints=hint_markup(("enter", "pick model"), ("m", "pick model")),
+                    id="cfg-model-pane",
                 ):
-                    yield DeltaTable(id="cfg-routing")
-                    yield Static(
-                        "no routes set — press m to pick models",
-                        id="cfg-routing-empty",
-                        markup=False,
-                    )
-                    yield Static("", id="cfg-routing-more", markup=False)
+                    yield DeltaTable(id="cfg-model")
                 with Pane(
                     title="plugins",
                     key="l",
@@ -201,7 +192,7 @@ class Config(DeltaScreen):
     async def on_mount(self) -> None:
         self.query_one("#health-table", DeltaTable).add_columns("Table", "Rows")
         self.query_one("#costs-table", DeltaTable).add_columns("Task", "Model", "Calls", "USD")
-        self.query_one("#cfg-routing", DeltaTable).add_columns("Task", "Model")
+        self.query_one("#cfg-model", DeltaTable).add_columns("Task", "Model")
         self.query_one("#cfg-plugins", DeltaTable).add_columns("", "Plugin", "State")
         self.query_one("#cfg-sources", DeltaTable).add_columns("Source", "Quality", "Status")
         self.query_one("#cfg-markets", DeltaTable).add_columns("ID", "Market", "Currency", "Yahoo")
@@ -234,34 +225,21 @@ class Config(DeltaScreen):
         else:
             hints = [("d", "expand"), ("r", "refresh")]
         diag.set_hints(hint_markup(*hints))
-        self.call_after_refresh(self._update_routing_more)
 
     def on_resize(self) -> None:
         if self.ready:
             self.layout_views()
 
-    def _update_routing_more(self) -> None:
-        """Narrow routing shows three rows; say what scrolled out of view."""
-        table = self.query_one("#cfg-routing", DeltaTable)
-        more = self.query_one("#cfg-routing-more", Static)
-        visible = max(0, table.scrollable_content_region.height - 1)
-        first = int(table.scroll_y)
-        hidden = self._routes[first + visible :] if visible else []
-        if hidden and table.row_count > visible:
-            more.update(f"↓ {len(hidden)} more · {', '.join(hidden)}")
-        more.display = bool(hidden) and table.row_count > visible
-
     # ------------------------------------------------------------ data
 
     async def refresh_view(self) -> None:
         self._refresh_provider()
-        self._refresh_routing()
+        self._refresh_model()
         self._refresh_plugins()
         self._refresh_sources()
         self._refresh_markets()
         self._refresh_targets()
         self._refresh_diagnostics()
-        self.call_after_refresh(self._update_routing_more)
 
     def _refresh_provider(self) -> None:
         cfg = self.delta.cfg
@@ -289,18 +267,13 @@ class Config(DeltaScreen):
             badge += " · connected"
         self.query_one("#cfg-provider-pane", Pane).set_badge(badge)
 
-    def _refresh_routing(self) -> None:
-        table = self.query_one("#cfg-routing", DeltaTable)
+    def _refresh_model(self) -> None:
+        table = self.query_one("#cfg-model", DeltaTable)
         table.clear()
-        routes = dict(getattr(self.delta.cfg, "llm_routing", {}) or {})
-        self._routes = sorted(routes)
-        for task in self._routes:
-            table.add_row(task, routes[task], key=task)
-        table.display = bool(routes)
-        self.query_one("#cfg-routing-empty", Static).display = not routes
-        self.query_one("#cfg-routing-pane", Pane).set_badge(
-            f"{len(routes)} task{'s' if len(routes) != 1 else ''}" if routes else ""
-        )
+        model = str(getattr(self.delta.cfg, "llm_model", "") or "")
+        shown = model if model else "not chosen — press m"
+        table.add_row("all tasks", shown, key="model")
+        self.query_one("#cfg-model-pane", Pane).set_badge(model)
 
     def _refresh_plugins(self) -> None:
         table = self.query_one("#cfg-plugins", DeltaTable)
@@ -517,25 +490,21 @@ class Config(DeltaScreen):
 
     # ------------------------------------------------------------ events
 
-    def on_data_table_row_highlighted(self, event: DeltaTable.RowHighlighted) -> None:
-        if event.data_table.id == "cfg-routing":
-            self.call_after_refresh(self._update_routing_more)
-
     def on_data_table_row_selected(self, event: DeltaTable.RowSelected) -> None:
         key = event.row_key.value if event.row_key else None
-        if event.data_table.id == "cfg-routing" and key:
-            self.pick_model(str(key))
+        if event.data_table.id == "cfg-model" and key:
+            self.pick_model()
         elif event.data_table.id == "cfg-plugins" and key:
             self.show_plugin(str(key))
 
-    def pick_model(self, task: str) -> None:
-        """Open the model picker for one routing task and save the choice to it."""
+    def pick_model(self) -> None:
+        """Open the model picker and save the choice as the one model for all tasks."""
         delta = self.delta
         provider = getattr(getattr(delta, "llm", None), "provider", None)
 
         def on_select(model: ModelInfo) -> None:
-            set_llm_route(task, model.id)
-            self.notify(f"{task} route set to {model.id}")
+            set_llm_model(model.id)
+            self.notify(f"model for all tasks set to {model.id}")
             reload = getattr(delta, "reload_llm", None)
             if callable(reload):
                 reload()
@@ -574,13 +543,13 @@ class Config(DeltaScreen):
         if self.diag_open:
             self.query_one("#cfg-diag-body", VerticalScroll).focus()
         elif self.narrow:
-            self.query_one("#cfg-routing", DeltaTable).focus()
+            self.query_one("#cfg-model", DeltaTable).focus()
 
     def action_close_diagnostics(self) -> None:
         if self.narrow and self.diag_open:
             self._diag_open = False
             self.layout_views()
-            self.query_one("#cfg-routing", DeltaTable).focus()
+            self.query_one("#cfg-model", DeltaTable).focus()
 
     async def action_refresh(self) -> None:
         await self.refresh_view()

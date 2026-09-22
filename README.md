@@ -66,7 +66,7 @@ base_url = "http://localhost:11434/v1"   # e.g. Ollama
 api_key_env = "OLLAMA_KEY"               # optional, for non-local servers
 ```
 
-Four jobs route to models independently in `[llm.routing]` — `extract`, `report`, `chat` and `thesis` — so you can put a cheap fast model on bulk news extraction and a stronger one on reports. Model ids are plain strings; change them freely, or press `m` in the app to browse what your provider offers, with prices. Route ids are provider-native (e.g. `claude-sonnet-4-...` on `anthropic`, `gpt-4o` on `openai`, `vendor/model` on `openrouter`) — switching providers warns when existing routes don't look right.
+One model does everything by default: set `[llm] model`, or press `m` in the app and pick one — every task, including plugin calls, uses it. Model ids are plain strings; the picker browses what your provider offers, with prices, and route ids are provider-native (e.g. `claude-sonnet-4-...` on `anthropic`, `gpt-4o` on `openai`, `vendor/model` on `openrouter`) — switching providers warns when the model doesn't look right. Until a single model is chosen, older per-task tables in `[llm.routing]` (`extract`, `report`, `chat`, `thesis`) keep working.
 
 Set `[plugins.sec_edgar].contact` to a real email before ingesting US filings — the SEC requires a contact address in the User-Agent.
 

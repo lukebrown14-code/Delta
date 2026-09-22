@@ -36,6 +36,7 @@ from delta.tui.screens.provider_picker import (
 def _cfg(**overrides: Any) -> SimpleNamespace:
     values: dict[str, Any] = {
         "llm_provider": "openrouter",
+        "llm_model": "",
         "llm_routing": {
             "report": "anthropic/claude-sonnet-4",
             "extract": "google/gemini-2.5-flash",
@@ -246,6 +247,16 @@ def test_mismatched_routes_by_provider():
     assert mismatched_routes(no_routes, "anthropic") == []
 
 
+def test_mismatched_routes_single_model_overrides_routing():
+    """With one model set, only it is checked; legacy routing rows are ignored."""
+    fits = _cfg(llm_model="claude-sonnet-4", llm_routing={"extract": "gpt-4o"})
+    assert mismatched_routes(fits, "anthropic") == []
+
+    bad = _cfg(llm_model="gpt-4o", llm_routing={"extract": "claude-sonnet-4"})
+    assert mismatched_routes(bad, "anthropic") == ["all tasks"]
+    assert mismatched_routes(bad, "openai") == []
+
+
 def test_provider_key_status_reads_env(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     ENV_PATH.write_text("OPENROUTER_API_KEY=sk-or\n", encoding="utf-8")
@@ -283,7 +294,7 @@ def test_connect_provider_saves_key_verifies_and_switches(monkeypatch, tmp_path)
     assert "openai" in (tmp_path / "config.toml").read_text(encoding="utf-8")
     assert delta.reloaded == 1
     assert any("connected" in msg for msg, _ in app.notifications)
-    assert any("routes may not match" in msg for msg, sev in app.notifications if sev == "warning")
+    assert any("may not match" in msg for msg, sev in app.notifications if sev == "warning")
 
 
 def test_connect_provider_cancelled_modals_do_nothing(monkeypatch, tmp_path):

@@ -43,8 +43,12 @@ def mask_key(key: str) -> str:
 
 
 def mismatched_routes(cfg: Any, provider: str) -> list[str]:
-    """Route tasks whose model id looks wrong for ``provider`` (soft warning)."""
-    routing: dict[str, str] = getattr(cfg, "llm_routing", {}) or {}
+    """Model choices that look wrong for ``provider`` (soft warning).
+
+    With a single ``[llm] model`` set, that is the only thing checked; the
+    legacy ``[llm.routing]`` table is ignored while it is.
+    """
+    single = getattr(cfg, "llm_model", "") or ""
 
     def fits(model: str) -> bool:
         if provider == "openrouter":
@@ -55,6 +59,9 @@ def mismatched_routes(cfg: Any, provider: str) -> list[str]:
             return model.startswith("claude")
         return True  # custom: vendor unknown, no heuristic
 
+    if single:
+        return [] if fits(single) else ["all tasks"]
+    routing: dict[str, str] = getattr(cfg, "llm_routing", {}) or {}
     return [task for task, model in sorted(routing.items()) if not fits(model)]
 
 
@@ -247,6 +254,6 @@ def _activate(app: Any, delta: Any, name: str) -> None:
     bad = mismatched_routes(delta.cfg, name)
     if bad:
         app.notify(
-            f"routes may not match {name}: {', '.join(bad)} — press m to re-pick",
+            f"model for {', '.join(bad)} may not match {name} — press m to re-pick",
             severity="warning",
         )

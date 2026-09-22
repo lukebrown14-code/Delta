@@ -19,6 +19,7 @@ from delta.llm.catalog import (
     _write_cache,
     cached_catalog,
     catalog,
+    set_llm_model,
     set_llm_route,
     set_plugin_model,
 )
@@ -150,6 +151,22 @@ def test_set_llm_route_round_trips(monkeypatch, tmp_path):
 
     routing = load_toml()["llm"]["routing"]
     assert routing == {"analyse": "anthropic/claude-sonnet-4", "extract": "old/model"}
+
+
+def test_set_llm_model_round_trips_and_leaves_routing_alone(monkeypatch, tmp_path):
+    """The one-model setting writes [llm] model and keeps legacy routing rows."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "config.toml").write_text(
+        '[llm]\nprovider = "openrouter"\n\n[llm.routing]\nextract = "old/model"\n',
+        encoding="utf-8",
+    )
+
+    set_llm_model("anthropic/claude-sonnet-4")
+
+    llm = load_toml()["llm"]
+    assert llm["model"] == "anthropic/claude-sonnet-4"
+    assert llm["provider"] == "openrouter"
+    assert llm["routing"] == {"extract": "old/model"}
 
 
 def test_set_plugin_model_round_trips_and_none_removes(monkeypatch, tmp_path):

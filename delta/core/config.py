@@ -51,6 +51,7 @@ class AppConfig(BaseModel):
     universe: dict[str, list[str]] = Field(default_factory=dict)
     targets: dict[str, dict[str, Any]] = Field(default_factory=dict)
     llm_provider: str = "openrouter"
+    llm_model: str = ""
     llm_routing: dict[str, str] = Field(default_factory=dict)
     llm_max_output_tokens: int = 4096
     llm_base_url: str = ""
@@ -99,6 +100,7 @@ def build_config(raw: dict[str, Any] | None = None) -> AppConfig:
 
     llm = raw.get("llm", {})
     cfg.llm_provider = llm.get("provider", cfg.llm_provider)
+    cfg.llm_model = str(llm.get("model", "") or "")
     cfg.llm_routing = llm.get("routing", {})
     cfg.llm_max_output_tokens = llm.get("max_output_tokens", cfg.llm_max_output_tokens)
     cfg.llm_base_url = llm.get("base_url", cfg.llm_base_url)

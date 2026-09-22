@@ -10,7 +10,7 @@ from textual.command import Hit, Hits, Provider
 
 from delta import services
 from delta.core import state
-from delta.llm.catalog import ModelInfo, set_llm_route
+from delta.llm.catalog import ModelInfo, set_llm_model
 from delta.runtime import Delta
 from delta.tui.screens.chat import Chat
 from delta.tui.screens.config import Config
@@ -108,7 +108,7 @@ class DeltaApp(App):
             "c",
             "switch_screen('config')",
             "Settings",
-            tooltip="Providers, routing, plugins and diagnostics",
+            tooltip="Providers, model, plugins and diagnostics",
         ),
         Binding("h", "switch_screen('home')", "Home", tooltip="The landing dashboard"),
         Binding("m", "show_model_picker", "Model", tooltip="Pick the model for this screen"),
@@ -179,25 +179,19 @@ class DeltaApp(App):
             self.push_screen(HelpScreen())
 
     def action_show_model_picker(self, task: str | None = None) -> None:
-        """Pick the model for a routing task.
+        """Pick the one model used by every task.
 
-        With no ``task`` the task is derived from the current screen, which is
-        what the ``m`` binding wants. Settings passes the task explicitly, so
-        it can re-route any row without re-implementing this action.
+        ``task`` is accepted (and ignored) for compatibility with callers that
+        predate the single-model setting; Settings no longer routes per task.
         """
-        task = task or {
-            "data": "report",
-            "chat": "chat",
-            "theses": "thesis",
-        }.get(self.screen.name or "", "extract")
-        provider = getattr(getattr(self.delta, "llm", None), "provider", None)
 
         def on_select(model: ModelInfo) -> None:
-            set_llm_route(task, model.id)
-            self.notify(f"{task} route set to {model.id}")
+            set_llm_model(model.id)
+            self.notify(f"model for all tasks set to {model.id}")
             if isinstance(self.delta, Delta):
                 self.delta.reload_llm()
 
+        provider = getattr(getattr(self.delta, "llm", None), "provider", None)
         self.push_screen(
             ModelPicker(on_select, provider=provider, provider_name=self.delta.cfg.llm_provider)
         )

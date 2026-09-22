@@ -577,7 +577,7 @@ def test_config_two_columns_fold_and_focus_keys(delta):
             assert screen.query_one("#cfg-diag-body").display
             assert not screen.query_one("#cfg-diag-summary").display
             assert screen.query_one("#cfg-left").display
-            assert screen.focused is screen.query_one("#cfg-routing")
+            assert screen.focused is screen.query_one("#cfg-model")
             await pilot.press("d")
             assert screen.query_one("#cfg-diag-summary").display
             assert not screen.query_one("#cfg-diag-body").display
@@ -593,13 +593,50 @@ def test_config_two_columns_fold_and_focus_keys(delta):
             assert "press 1" in empty and "a to add one" in empty
             # …and the pane's own border says where 1 goes.
             assert "watchlist" in screen.query_one("#cfg-targets-pane", Pane).border_subtitle
-            # Enter on a routing row opens the model picker for that task.
-            screen.query_one("#cfg-routing").focus()
+            # Enter on the model row opens the model picker for all tasks.
+            screen.query_one("#cfg-model").focus()
             await pilot.press("enter")
             await pilot.pause()
             assert isinstance(app.screen, ModelPicker)
 
     asyncio.run(run())
+
+
+def test_config_model_row_sets_one_model_for_all_tasks(delta, monkeypatch, tmp_path):
+    """The model pane is one row; picking writes [llm] model, never a route."""
+    import tomllib
+
+    from delta.llm.catalog import ModelInfo
+
+    monkeypatch.chdir(tmp_path)
+    delta = _routed_delta(delta)
+
+    async def run():
+        app = DeltaApp(delta)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.press("c")
+            screen = app.screen
+            table = screen.query_one("#cfg-model")
+            assert table.row_count == 1  # one row: all tasks, one model
+            table.focus()
+            await pilot.press("enter")
+            await pilot.pause()
+            picker = app.screen
+            picker._select(
+                ModelInfo(
+                    id="test/model",
+                    name="Test Model",
+                    context_length=None,
+                    prompt_price=0.0,
+                    completion_price=0.0,
+                )
+            )
+            await pilot.pause(0.2)
+
+    asyncio.run(run())
+    raw = tomllib.loads((tmp_path / "config.toml").read_text(encoding="utf-8"))
+    assert raw["llm"]["model"] == "test/model"
+    assert "routing" not in raw["llm"]
 
 
 def test_config_narrow_folds_diagnostics_until_d(delta):

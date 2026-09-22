@@ -102,6 +102,21 @@ def set_llm_route(task: str, model: str) -> None:
     Path("config.toml").write_text(tomli_w.dumps(raw), encoding="utf-8")
 
 
+def set_llm_model(model: str) -> None:
+    """Write ``[llm] model = model`` — the one model used by every task.
+
+    Existing ``[llm.routing]`` entries are left alone; the router ignores them
+    while this value is set. Comments in config.toml are lost on write.
+    """
+    import tomli_w
+
+    from delta.core import config as config_mod
+
+    raw = config_mod.load_toml()
+    raw.setdefault("llm", {})["model"] = model
+    Path("config.toml").write_text(tomli_w.dumps(raw), encoding="utf-8")
+
+
 def set_llm_provider(name: str) -> None:
     """Write ``[llm] provider = name`` to config.toml in the cwd."""
     import tomli_w
