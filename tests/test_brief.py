@@ -132,22 +132,23 @@ def test_all_sections_render_with_evidence(tmp_engine):
     assert brief is not None
 
     assert brief.news.lines == ["2026-03-20 [rss] Apple announces results"]
-    assert brief.news.evidence_ids == ["news-1"]
+    assert brief.news.evidence_ids == ["news:news-1"]
 
     assert brief.events.lines == [
         "2026-03-19 earnings: Reported EPS above consensus (sentiment +0.4)"
     ]
-    assert brief.events.evidence_ids == ["event-past"]
+    assert brief.events.evidence_ids == ["event:event-past"]
 
     assert brief.calendar.lines == ["2026-04-01 dividend: Ex-dividend 2026-04-01"]
-    assert brief.calendar.evidence_ids == ["event-future"]
+    assert brief.calendar.evidence_ids == ["event:event-future"]
 
     assert brief.fundamentals.lines == ["eps: 6.10 (as of 2025-12-31, edgar)"]
     assert len(brief.fundamentals.evidence_ids) == 1
 
     ids = brief.evidence_ids
-    assert "news-1" in ids and "event-past" in ids and "event-future" in ids
+    assert "news:news-1" in ids and "event:event-past" in ids and "event:event-future" in ids
     assert any(i.startswith("fundamental:") for i in ids)
+    assert any(i.startswith("bar:") for i in ids)
     assert len(ids) == len(set(ids)), "evidence ids must be unique"
 
     text = brief.render()

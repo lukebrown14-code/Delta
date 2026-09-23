@@ -41,6 +41,10 @@ FACT_TAGS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
 
 MAX_REQUESTS_PER_SECOND = 10
 
+#: Transient statuses worth a bounded retry instead of aborting the whole fetch.
+RETRY_STATUSES = frozenset({429, 500, 502, 503})
+MAX_RETRIES = 3
+
 # Used when EDGAR gives no primaryDocDescription (routinely the case for Form 4),
 # so the brief and the extract model see what the filing is rather than "4: FORM 4".
 FORM_LABELS = {
@@ -121,10 +125,27 @@ class SECEdgar(DataPlugin):
         # Each of the MAX_REQUESTS_PER_SECOND slots is held for a full second
         # after its request, so at most that many requests start per second.
         async with self._semaphore:
-            resp = await client.get(url)
-            resp.raise_for_status()
-            await asyncio.sleep(1.0)
-            return resp.json()
+            for attempt in range(MAX_RETRIES + 1):
+                resp = await client.get(url)
+                if resp.status_code == 200:
+                    await asyncio.sleep(1.0)
+                    return resp.json()
+                if resp.status_code in RETRY_STATUSES and attempt < MAX_RETRIES:
+                    delay = self._retry_delay(resp, attempt)
+                    log.info("sec_edgar: %s got %s; retrying in %.1fs", url, resp.status_code, delay)
+                    await asyncio.sleep(delay)
+                    continue
+                resp.raise_for_status()
+        raise RuntimeError(f"sec_edgar: {url} exhausted retries")  # pragma: no cover
+
+    def _retry_delay(self, resp: httpx.Response, attempt: int) -> float:
+        retry_after = resp.headers.get("Retry-After")
+        if retry_after:
+            try:
+                return max(float(retry_after), 0.0)
+            except ValueError:
+                pass
+        return float(2**attempt)
 
     async def _company_tickers(self, client: httpx.AsyncClient) -> dict[str, str]:
         if self._cik_by_symbol is None:

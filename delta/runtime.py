@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
+
 from delta.core import config as config_mod
 from delta.core.db import init_engine
 from delta.core.models import Instrument
@@ -15,7 +17,6 @@ from delta.core.plugin import (
 )
 from delta.llm.client import LLMClient, build_client
 from delta.llm.providers import PROVIDERS
-from delta.plugins.data.yfinance import YFinanceSymbols
 from delta.plugins.targets.tickers import (
     CompanyTarget,
     IndustryTarget,
@@ -25,6 +26,10 @@ from delta.plugins.targets.tickers import (
     ThemeTarget,
 )
 from delta.targets import LEGACY_KIND
+
+#: ``reload`` parts: llm rebuilds the client; data_sources re-reads plugin config
+#: and market profiles; targets additionally rebuilds the target registry.
+RELOAD_PARTS = ("llm", "data_sources", "targets")
 
 _BUILTIN_KINDS: tuple[type[TargetPlugin], ...] = (
     CompanyTarget,
@@ -44,6 +49,9 @@ class Delta:
         self.plugins = discover_plugins()
         apply_config(self.plugins, self.cfg.plugins)
         self._apply_market_profiles()
+        # Target kinds are discovered once; a reload reuses the same classes so a
+        # config change never re-runs entry-point discovery.
+        self._kinds = self._discover_kinds()
 
         for market_name, tickers in self.cfg.universe.items():
             market_plugin = self.plugins.get(market_name)
@@ -55,6 +63,12 @@ class Delta:
         self.targets = self._build_targets()
 
         self.llm = self._build_llm()
+
+    def _discover_kinds(self) -> dict[str, type[TargetPlugin]]:
+        kinds = discover_targets()
+        for cls in _BUILTIN_KINDS:
+            kinds.setdefault(cls.kind, cls)
+        return kinds
 
     def _build_llm(self) -> LLMClient:
         """Compose the provider credentials map and build the LLM client.
@@ -85,33 +99,48 @@ class Delta:
             custom_api_key_env=self.cfg.llm_api_key_env,
         )
 
-    def reload_llm(self) -> None:
-        """Re-read .env + config.toml and rebuild the LLM client in place.
+    def reload(self, parts: str | Iterable[str] = ("data_sources", "targets", "llm")) -> None:
+        """Re-read `.env` + `config.toml` and rebuild the named parts in place.
 
-        Provider, keys, routes, and token caps hot-swap without a restart;
-        the plugin and target registries are untouched.
+        ``parts`` is an iterable of ``llm``, ``data_sources`` and ``targets`` (a
+        single string is accepted).  ``targets`` implies ``data_sources``, since
+        a target registry depends on the market profiles the plugins expose.
         """
+        names = {parts} if isinstance(parts, str) else set(parts)
         self.settings, self.cfg = config_mod.load_config()
-        self.llm = self._build_llm()
+        if "llm" in names:
+            self.llm = self._build_llm()
+        if names & {"data_sources", "targets"}:
+            apply_config(self.plugins, self.cfg.plugins)
+            self._apply_market_profiles()
+            # Re-apply the legacy [universe] shim so its tickers stay current.
+            for market_name, tickers in self.cfg.universe.items():
+                market_plugin = self.plugins.get(market_name)
+                if isinstance(market_plugin, MarketPlugin):
+                    table = dict(self.cfg.plugins.get(market_name, {}))
+                    table["tickers"] = list(tickers)
+                    market_plugin.configure(table)
+        if "targets" in names:
+            self.targets = self._build_targets()
+
+    def reload_llm(self) -> None:
+        """Re-read .env + config.toml and rebuild the LLM client in place."""
+        self.reload("llm")
 
     def reload_data_sources(self) -> None:
         """Re-read source configuration without disturbing the LLM client."""
-        self.settings, self.cfg = config_mod.load_config()
-        apply_config(self.plugins, self.cfg.plugins)
-        self._apply_market_profiles()
+        self.reload("data_sources")
 
     def reload_markets(self) -> None:
         """Re-read exchange definitions and rebuild targets using their currency profiles."""
-        self.settings, self.cfg = config_mod.load_config()
-        apply_config(self.plugins, self.cfg.plugins)
-        self._apply_market_profiles()
-        self.targets = self._build_targets()
+        self.reload("targets")
 
     def _apply_market_profiles(self) -> None:
         suffixes = {name: profile.yahoo_suffix for name, profile in self.cfg.markets.items()}
         for plugin in self.plugins.values():
-            if isinstance(plugin, YFinanceSymbols):
-                plugin.set_market_suffixes(suffixes)
+            set_suffixes = getattr(plugin, "set_market_suffixes", None)
+            if callable(set_suffixes):
+                set_suffixes(suffixes)
 
     def universe(self) -> list[Instrument]:
         merged: dict[str, Instrument] = {}
@@ -153,10 +182,10 @@ class Delta:
         return list(merged.values())
 
     def _build_targets(self) -> dict[str, TargetPlugin]:
-        kinds = discover_targets()
-        for cls in _BUILTIN_KINDS:
-            kinds.setdefault(cls.kind, cls)
-
+        kinds = getattr(self, "_kinds", None)
+        if kinds is None:
+            kinds = self._discover_kinds()
+            self._kinds = kinds
         targets: dict[str, TargetPlugin] = {}
         for name, spec in self.cfg.targets.items():
             kind_name = spec.get("kind", LEGACY_KIND)

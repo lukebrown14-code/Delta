@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import re
 import tomllib
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -65,6 +66,24 @@ def load_toml(path: Path = CONFIG_PATH) -> dict[str, Any]:
         return {}
     with path.open("rb") as f:
         return tomllib.load(f)
+
+
+def update_config(
+    mutator: Callable[[dict[str, Any]], None], path: Path = CONFIG_PATH
+) -> dict[str, Any]:
+    """Load ``path``, let ``mutator`` change the raw TOML, and write it back.
+
+    The one place a config change is persisted: callers pass a mutator over the
+    parsed ``dict`` and never touch ``tomli_w`` or the path themselves, so the
+    ``CONFIG_PATH`` override is honoured everywhere instead of hard-coding
+    ``config.toml`` in half a dozen spots.
+    """
+    import tomli_w
+
+    raw = load_toml(path)
+    mutator(raw)
+    path.write_text(tomli_w.dumps(raw), encoding="utf-8")
+    return raw
 
 
 def _target_tables(raw: dict[str, Any]) -> dict[str, dict[str, Any]]:
