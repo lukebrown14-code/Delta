@@ -23,7 +23,7 @@ from delta.evidence import evidence
 from delta.llm.client import LLMClient, LLMResult
 from delta.llm.providers import ProviderResult
 from delta.tui.screens.chat import Chat
-from delta.tui.widgets import ActionChip, DeltaTable, Pane
+from delta.tui.widgets import DeltaTable, Pane
 from tests.conftest import FakeConfig, seed_bars
 
 INST = "US:AAPL"
@@ -269,7 +269,6 @@ def test_chat_screen_round_trip(tmp_engine, monkeypatch, tmp_path):
             assert reply.source == "stored"
             assert reply.citations == ("bar:1",)
             assert screen.query_one("#chat-input", Input).value == ""
-            assert screen.allow_web is False
             await pilot.pause()
             transcript = "\n".join(
                 str(widget.render()) for widget in screen.query("#chat-scroll Static")
@@ -279,11 +278,13 @@ def test_chat_screen_round_trip(tmp_engine, monkeypatch, tmp_path):
             assert "[1]" in transcript
             assert "1 citation" in transcript
             assert "2 messages" in screen.query_one("#chat-main", Pane).border_title
+            # The citations sidebar lists the answer's evidence.
+            assert screen.query_one("#chat-citations", DeltaTable).row_count == 1
 
     asyncio.run(run())
 
 
-def test_chat_screen_keys_drive_scope_web_citations_and_clear(tmp_engine, monkeypatch, tmp_path):
+def test_chat_screen_keys_drive_scope_citations_and_clear(tmp_engine, monkeypatch, tmp_path):
     _write_targets(tmp_path, monkeypatch)
     seed_bars(tmp_engine, INST, n=3)
     llm = FakeChatLLM([{"answer": "Two bars.", "citations": ["bar:1", "bar:2"]}])
@@ -299,7 +300,6 @@ def test_chat_screen_keys_drive_scope_web_citations_and_clear(tmp_engine, monkey
             await pilot.press("i")
             await pilot.press("w", "x", "t", "space", "a")
             assert screen.query_one("#chat-input", Input).value == "wxt a"
-            assert screen.allow_web is False
             await pilot.press("escape")
             assert not screen.query_one("#chat-input", Input).has_focus
             screen.query_one("#chat-input", Input).value = ""
@@ -310,11 +310,6 @@ def test_chat_screen_keys_drive_scope_web_citations_and_clear(tmp_engine, monkey
             assert screen.scope == set()
             await pilot.press("a")
             assert screen.scope == {"aapl"}
-            # Web toggle is a chip, not a Switch.
-            await pilot.press("w")
-            assert screen.allow_web is True
-            assert "web search: on" in str(screen.query_one("#chat-web", ActionChip).label)
-            await pilot.press("w")
             # Ask, then walk the citations of the answer.
             await pilot.press("enter")
             screen.query_one("#chat-input", Input).value = "Bars?"
@@ -326,6 +321,8 @@ def test_chat_screen_keys_drive_scope_web_citations_and_clear(tmp_engine, monkey
             await pilot.press("escape")
             assert screen.citations() == ("bar:1", "bar:2")
             assert screen.selected_citation == 0
+            # The citations sidebar lists both, mirroring the in-transcript pills.
+            assert screen.query_one("#chat-citations", DeltaTable).row_count == 2
             await pilot.press("right")
             assert screen.selected_citation == 1
             await pilot.press("right")
