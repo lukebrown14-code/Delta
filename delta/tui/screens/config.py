@@ -23,7 +23,7 @@ from delta.llm.catalog import ModelInfo, set_llm_model
 from delta.llm.providers import PROVIDERS
 from delta.tui.screens.model_picker import ModelPicker
 from delta.tui.shell import DeltaScreen
-from delta.tui.widgets import ActionChip, DeltaTable, Pane, StatusDot, hint_markup
+from delta.tui.widgets import DeltaTable, Pane, hint_markup
 
 
 class FocusLine(Static):
@@ -59,13 +59,7 @@ class Config(DeltaScreen):
     #cfg-body { height: 1fr; }
     #cfg-left { width: 62; height: 1fr; }
     #cfg-diag { width: 1fr; height: 1fr; }
-    #cfg-provider-pane { height: auto; }
-    #cfg-provider-row, #cfg-provider-actions { height: 1; padding: 0 1; }
-    #cfg-provider-row StatusDot { width: 2; margin: 0; }
-    #cfg-provider-row Static, #cfg-provider-actions Static { width: auto; }
-    #cfg-provider-name { text-style: bold; }
-    #cfg-provider-status, #cfg-provider-also { color: $text-muted; padding: 0 0 0 1; }
-    #cfg-model-pane, #cfg-plugins-pane, #cfg-sources-pane { height: auto; }
+    #cfg-ai-pane, #cfg-plugins-pane, #cfg-sources-pane { height: auto; }
     #cfg-model, #cfg-plugins { height: auto; max-height: 12; }
     #cfg-plugins-empty, #cfg-sources-hint { height: 1; padding: 0 1; color: $text-muted; }
     #cfg-targets-pane { height: 1fr; }
@@ -88,8 +82,7 @@ class Config(DeltaScreen):
     Config.-narrow #cfg-body { layout: vertical; }
     Config.-narrow #cfg-left { width: 1fr; height: auto; }
     Config.-narrow #cfg-diag { width: 1fr; }
-    Config.-narrow #cfg-provider-row { display: none; }
-    Config.-narrow #cfg-model { max-height: 2; }
+    Config.-narrow #cfg-model { max-height: 3; }
     Config.-narrow #cfg-plugins { max-height: 3; }
     Config.-narrow #cfg-targets-pane { height: auto; }
     Config.-narrow #cfg-targets, Config.-narrow #cfg-targets-signpost { display: none; }
@@ -114,25 +107,12 @@ class Config(DeltaScreen):
         with Horizontal(id="cfg-body"):
             with Vertical(id="cfg-left"):
                 with Pane(
-                    title="provider",
+                    title="provider & model",
                     key="p",
-                    hints=hint_markup(("p", "switch")),
-                    id="cfg-provider-pane",
+                    hints=hint_markup(("↑↓", "choose"), ("enter", "change"), ("m", "model")),
+                    id="cfg-ai-pane",
                 ):
-                    with Horizontal(id="cfg-provider-row"):
-                        yield StatusDot("warn", id="cfg-provider-dot")
-                        yield FocusLine("—", id="cfg-provider-name", markup=False)
-                        yield Static("", id="cfg-provider-status", markup=False)
-                    with Horizontal(id="cfg-provider-actions"):
-                        yield ActionChip("p", "switch provider", id="cfg-provider-switch")
-                        yield Static("", id="cfg-provider-also", markup=False)
-                with Pane(
-                    title="model",
-                    key="m",
-                    hints=hint_markup(("enter", "pick model"), ("m", "pick model")),
-                    id="cfg-model-pane",
-                ):
-                    yield DeltaTable(id="cfg-model")
+                    yield DeltaTable(id="cfg-model", show_header=False)
                 with Pane(
                     title="plugins",
                     key="l",
@@ -192,7 +172,7 @@ class Config(DeltaScreen):
     async def on_mount(self) -> None:
         self.query_one("#health-table", DeltaTable).add_columns("Table", "Rows")
         self.query_one("#costs-table", DeltaTable).add_columns("Task", "Model", "Calls", "USD")
-        self.query_one("#cfg-model", DeltaTable).add_columns("Task", "Model")
+        self.query_one("#cfg-model", DeltaTable).add_columns("", "Status")
         self.query_one("#cfg-plugins", DeltaTable).add_columns("", "Plugin", "State")
         self.query_one("#cfg-sources", DeltaTable).add_columns("Source", "Quality", "Status")
         self.query_one("#cfg-markets", DeltaTable).add_columns("ID", "Market", "Currency", "Yahoo")
@@ -233,47 +213,52 @@ class Config(DeltaScreen):
     # ------------------------------------------------------------ data
 
     async def refresh_view(self) -> None:
-        self._refresh_provider()
-        self._refresh_model()
+        self._refresh_ai()
         self._refresh_plugins()
         self._refresh_sources()
         self._refresh_markets()
         self._refresh_targets()
         self._refresh_diagnostics()
 
-    def _refresh_provider(self) -> None:
+    def _refresh_ai(self) -> None:
+        """Two rows: which provider you use, and the one model for all tasks."""
         cfg = self.delta.cfg
+        table = self.query_one("#cfg-model", DeltaTable)
+        table.clear()
+        tokens = self.app.theme_variables
+
         name = str(getattr(cfg, "llm_provider", "") or "")
         spec = PROVIDERS.get(name)
         env = (
             (getattr(cfg, "llm_api_key_env", "") or (spec.env_var if spec else "")) if name else ""
         )
         connected = bool(env and read_env_value(env))
-        self.query_one("#cfg-provider-dot", StatusDot).set_state("ok" if connected else "warn")
-        self.query_one("#cfg-provider-name", FocusLine).update(name or "none")
         if not name:
-            status, short = "not connected", "p connect"
+            provider = Text("no provider — press p", style=tokens["text-error"])
         elif connected:
-            status, short = f"connected · key from {env}", f"key from {env}"
+            provider = Text.assemble(
+                ("● ", tokens["text-success"]),
+                (name, "bold"),
+                f" · connected · key from {env}",
+            )
         else:
-            status, short = f"no key · {env} unset", f"{env} unset"
-        self.query_one("#cfg-provider-status", Static).update(status)
-        others = " · ".join(sorted(other for other in PROVIDERS if other != name))
-        self.query_one("#cfg-provider-also", Static).update(
-            short if self.narrow else f"also: {others}"
-        )
-        badge = f"● {name}" if name else "○ none"
-        if self.narrow and connected:
-            badge += " · connected"
-        self.query_one("#cfg-provider-pane", Pane).set_badge(badge)
+            provider = Text.assemble(
+                ("○ ", tokens["text-error"]),
+                (name, "bold"),
+                (f" · no key · {env} unset", tokens["text-warning"]),
+            )
+        table.add_row("provider", provider, key="provider")
 
-    def _refresh_model(self) -> None:
-        table = self.query_one("#cfg-model", DeltaTable)
-        table.clear()
-        model = str(getattr(self.delta.cfg, "llm_model", "") or "")
-        shown = model if model else "not chosen — press m"
-        table.add_row("all tasks", shown, key="model")
-        self.query_one("#cfg-model-pane", Pane).set_badge(model)
+        model = str(getattr(cfg, "llm_model", "") or "")
+        model_cell = (
+            Text(model) if model else Text("not chosen — press m", style=tokens["text-warning"])
+        )
+        table.add_row("model", model_cell, key="model")
+
+        badge = f"{name or 'none'} · {model or 'choose'}"
+        if name and not connected:
+            badge += " · no key"
+        self.query_one("#cfg-ai-pane", Pane).set_badge(badge)
 
     def _refresh_plugins(self) -> None:
         table = self.query_one("#cfg-plugins", DeltaTable)
@@ -492,8 +477,10 @@ class Config(DeltaScreen):
 
     def on_data_table_row_selected(self, event: DeltaTable.RowSelected) -> None:
         key = event.row_key.value if event.row_key else None
-        if event.data_table.id == "cfg-model" and key:
+        if event.data_table.id == "cfg-model" and key == "model":
             self.pick_model()
+        elif event.data_table.id == "cfg-model" and key == "provider":
+            self.app.action_show_provider_picker()
         elif event.data_table.id == "cfg-plugins" and key:
             self.show_plugin(str(key))
 
@@ -529,11 +516,6 @@ class Config(DeltaScreen):
         if settings:
             detail += f" · {settings}"
         self.notify(detail, title="plugin")
-
-    def on_button_pressed(self, event: Any) -> None:
-        if event.button.id == "cfg-provider-switch":
-            event.stop()
-            self.app.action_show_provider_picker()
 
     # ------------------------------------------------------------ actions
 

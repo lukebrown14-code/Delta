@@ -593,8 +593,18 @@ def test_config_two_columns_fold_and_focus_keys(delta):
             assert "press 1" in empty and "a to add one" in empty
             # …and the pane's own border says where 1 goes.
             assert "watchlist" in screen.query_one("#cfg-targets-pane", Pane).border_subtitle
-            # Enter on the model row opens the model picker for all tasks.
+            # Enter acts on the highlighted row: provider opens the provider picker…
+            from delta.tui.screens.provider_picker import ProviderPicker
+
             screen.query_one("#cfg-model").focus()
+            await pilot.press("enter")
+            await pilot.pause()
+            assert isinstance(app.screen, ProviderPicker)
+            await pilot.press("escape")
+            await pilot.pause()
+            assert app.screen is screen
+            # …and the model row opens the model picker.
+            await pilot.press("down")
             await pilot.press("enter")
             await pilot.pause()
             assert isinstance(app.screen, ModelPicker)
@@ -603,7 +613,7 @@ def test_config_two_columns_fold_and_focus_keys(delta):
 
 
 def test_config_model_row_sets_one_model_for_all_tasks(delta, monkeypatch, tmp_path):
-    """The model pane is one row; picking writes [llm] model, never a route."""
+    """The AI pane is two rows; picking the model row writes [llm] model, never a route."""
     import tomllib
 
     from delta.llm.catalog import ModelInfo
@@ -617,8 +627,9 @@ def test_config_model_row_sets_one_model_for_all_tasks(delta, monkeypatch, tmp_p
             await pilot.press("c")
             screen = app.screen
             table = screen.query_one("#cfg-model")
-            assert table.row_count == 1  # one row: all tasks, one model
+            assert table.row_count == 2  # provider + model, nothing else
             table.focus()
+            await pilot.press("down")  # land on the model row
             await pilot.press("enter")
             await pilot.pause()
             picker = app.screen
