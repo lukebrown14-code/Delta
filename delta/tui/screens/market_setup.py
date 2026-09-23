@@ -2,7 +2,7 @@
 
 Typing an exchange id suggests known world exchanges; picking one fills the
 id, name, currency and Yahoo suffix, so adding a market is one keystroke
-instead of four fields by hand.
+instead of four fields by hand. Styled as the watchlist's "add" dialog.
 """
 
 from __future__ import annotations
@@ -14,11 +14,10 @@ from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
-from textual.screen import ModalScreen
-from textual.widgets import Button, Input, OptionList, Static
+from textual.widgets import Button, Input, Label, OptionList, Static
 from textual.widgets.option_list import Option
 
-from delta.tui.widgets import token_color
+from delta.tui.widgets import MODAL_WIDTH, Dialog, hint_markup, token_color
 
 
 @dataclass(frozen=True)
@@ -55,51 +54,89 @@ KNOWN_EXCHANGES: tuple[Exchange, ...] = (
 )
 
 
-class MarketSetupModal(ModalScreen[dict[str, str] | None]):
-    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+class MarketSetupModal(Dialog):
+    """Add or edit a market; autocomplete fills the form when adding."""
+
+    dialog_width = MODAL_WIDTH
+
+    BINDINGS = [Binding("escape", "dismiss_dialog", "Close")]
 
     #: Suggestions shown at most in the autocomplete dropdown.
     SUGGESTION_CAP = 5
+    #: Suggestion rows kept in reserve while empty, so the form never reflows.
+    SUGGESTION_ROWS = 4
 
-    DEFAULT_CSS = """
-    MarketSetupModal > Vertical { width: 64; }
-    MarketSetupModal Input { margin: 1 0 0 0; }
-    MarketSetupModal #market-suggestions {
-        display: none;
-        height: auto;
-        max-height: 5;
+    DEFAULT_CSS = f"""
+    MarketSetupModal #market-form {{ height: auto; }}
+    MarketSetupModal .market-field {{ height: 3; }}
+    MarketSetupModal .market-field Label {{ width: 10; padding: 1 0; color: $text-muted; }}
+    MarketSetupModal .market-field Input {{ width: 1fr; margin: 0; }}
+    MarketSetupModal #market-hint {{ height: 1; color: $text-muted; content-align-horizontal: center; }}
+    MarketSetupModal #market-suggestions {{
+        height: {SUGGESTION_ROWS};
+        margin: 0 0 0 10;
         border: none;
         background: $panel;
         scrollbar-size-horizontal: 0;
-    }
-    MarketSetupModal.-suggesting #market-suggestions { display: block; }
+    }}
+    MarketSetupModal #market-modal-actions {{ height: 1; margin-top: 1; }}
+    MarketSetupModal #market-modal-actions Button {{
+        height: 1; min-width: 0; border: none; padding: 0 1; margin: 0 1 0 0;
+    }}
     """
 
     def __init__(self, current: dict[str, str] | None = None, *, editable_id: bool = True) -> None:
         super().__init__()
         self.current = current or {}
         self.editable_id = editable_id
+        self.dialog_title = "add market" if editable_id else "edit market"
+        self.dialog_hint = (
+            hint_markup(("↑↓", "choose"), ("enter", "pick · save"), ("esc", "cancel"))
+            if editable_id
+            else hint_markup(("enter", "save"), ("esc", "cancel"))
+        )
         self._suppress = False
         self._suggestions: list[Exchange] = []
         self._highlight = 0
 
-    def compose(self) -> ComposeResult:
-        title = "Add market" if self.editable_id else "Edit market"
+    def compose_dialog(self) -> ComposeResult:
+        if self.editable_id:
+            yield Static("type an exchange id to autocomplete", id="market-hint", markup=False)
         yield Vertical(
-            Static(f"[bold]{title}[/bold]", markup=True),
-            Static("Type an exchange id to autocomplete, or fill the fields below.", markup=False),
-            Input(value=self.current.get("id", ""), placeholder="ID, e.g. lse", id="market-id", disabled=not self.editable_id),
-            OptionList(id="market-suggestions"),
-            Input(value=self.current.get("label", ""), placeholder="Exchange name", id="market-label"),
-            Input(value=self.current.get("currency", ""), placeholder="Currency, e.g. GBP", id="market-currency"),
-            Input(value=self.current.get("yahoo_suffix", ""), placeholder="Yahoo suffix, e.g. .L (optional)", id="market-suffix"),
-            Horizontal(Button("Save", id="market-save"), Button("Cancel", id="market-cancel")),
+            Horizontal(
+                Label("ID"),
+                Input(value=self.current.get("id", ""), placeholder="e.g. lse", id="market-id", disabled=not self.editable_id),
+                classes="market-field",
+            ),
+            *(OptionList(id="market-suggestions"),) if self.editable_id else (),
+            Horizontal(
+                Label("Name"),
+                Input(value=self.current.get("label", ""), placeholder="Exchange name", id="market-label"),
+                classes="market-field",
+            ),
+            Horizontal(
+                Label("Currency"),
+                Input(value=self.current.get("currency", ""), placeholder="GBP", id="market-currency"),
+                classes="market-field",
+            ),
+            Horizontal(
+                Label("Yahoo"),
+                Input(value=self.current.get("yahoo_suffix", ""), placeholder=".L (optional)", id="market-suffix"),
+                classes="market-field",
+            ),
+            id="market-form",
+        )
+        yield Horizontal(
+            Button("Save", id="market-save", variant="primary"),
+            Button("Cancel", id="market-cancel"),
+            id="market-modal-actions",
         )
 
     def on_mount(self) -> None:
-        # Suggestions are browsed through the id field's arrows; the list must
-        # never steal focus or tab stops.
-        self.query_one("#market-suggestions", OptionList).can_focus = False
+        if self.editable_id:
+            # Suggestions are browsed through the id field's arrows; the list
+            # must never steal focus or tab stops.
+            self.query_one("#market-suggestions", OptionList).can_focus = False
 
     # ----- autocomplete ----------------------------------------------------
 
@@ -120,6 +157,8 @@ class MarketSetupModal(ModalScreen[dict[str, str] | None]):
         return (starts + rest)[: self.SUGGESTION_CAP]
 
     def _update_suggestions(self, value: str) -> None:
+        if not self.editable_id:
+            return
         options = self.query_one("#market-suggestions", OptionList)
         options.clear_options()
         self._suggestions = self._matching(value)
@@ -134,7 +173,6 @@ class MarketSetupModal(ModalScreen[dict[str, str] | None]):
         self._highlight = 0
         if self._suggestions:
             options.highlighted = 0
-        self.set_class(bool(self._suggestions), "-suggesting")
 
     def _adopt(self, exchange: Exchange) -> None:
         self._suppress = True
@@ -155,9 +193,9 @@ class MarketSetupModal(ModalScreen[dict[str, str] | None]):
 
     def on_key(self, event: Any) -> None:
         """Arrows browse the dropdown while the id field keeps focus."""
-        if getattr(self.focused, "id", None) != "market-id" or not self._suggestions:
+        if not self.editable_id or getattr(self.focused, "id", None) != "market-id":
             return
-        if event.key not in {"down", "up"}:
+        if not self._suggestions or event.key not in {"down", "up"}:
             return
         event.stop()
         event.prevent_default()
@@ -200,7 +238,7 @@ class MarketSetupModal(ModalScreen[dict[str, str] | None]):
             return
         self.dismiss(values)
 
-    def action_cancel(self) -> None:
+    def action_dismiss_dialog(self) -> None:
         """Escape: close the dropdown first, the dialog second."""
         if self._suggestions:
             self._update_suggestions("")
