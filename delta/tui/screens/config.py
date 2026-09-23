@@ -337,7 +337,12 @@ class Config(DeltaScreen):
 
     async def _save_market(self, values: dict[str, str]) -> None:
         try:
-            services.save_market(**values)
+            services.save_market(
+                name=values["id"],
+                label=values["label"],
+                currency=values["currency"],
+                yahoo_suffix=values.get("yahoo_suffix", ""),
+            )
         except ValueError as exc:
             self.notify(str(exc), severity="error")
             return
