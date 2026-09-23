@@ -650,6 +650,58 @@ def test_config_model_row_sets_one_model_for_all_tasks(delta, monkeypatch, tmp_p
     assert "routing" not in raw["llm"]
 
 
+def test_model_picker_autocomplete_in_the_real_flow(delta, monkeypatch, tmp_path):
+    """Open the picker the way the app does and just type: the dropdown must
+    open with the field already focused — no manual .focus() help."""
+    import tomli_w
+
+    from delta.llm.catalog import ModelInfo, _write_cache
+    from delta.tui.screens.model_picker import ModelPicker
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "config.toml").write_text(tomli_w.dumps({}), encoding="utf-8")
+    _write_cache(
+        "openrouter",
+        [
+            ModelInfo(
+                id="anthropic/claude-sonnet-4",
+                name="Claude Sonnet 4",
+                context_length=200000,
+                prompt_price=0.0,
+                completion_price=0.0,
+            ),
+            ModelInfo(
+                id="openai/gpt-4o",
+                name="GPT-4o",
+                context_length=128000,
+                prompt_price=0.0,
+                completion_price=0.0,
+            ),
+        ],
+    )
+
+    async def run():
+        app = DeltaApp(delta)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.press("c")
+            screen = app.screen
+            screen.query_one("#cfg-model").focus()
+            await pilot.press("down", "enter")  # model row
+            await pilot.pause()
+            picker = app.screen
+            assert isinstance(picker, ModelPicker)
+            for char in "gpt":
+                await pilot.press(char)
+            await pilot.pause()
+            filt = picker.query_one("#mp-filter", Input)
+            assert filt.has_focus, f"filter never took focus (focused={picker.focused!r})"
+            assert filt.value == "gpt"
+            suggestions = picker.query_one("#mp-suggestions")
+            assert suggestions.display, "dropdown did not open while typing"
+
+    asyncio.run(run())
+
+
 def test_config_narrow_folds_diagnostics_until_d(delta):
     """80x24: one column, diagnostics folded; d expands full-height, esc closes."""
 

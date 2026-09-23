@@ -40,9 +40,10 @@ def _price_style(price_per_million: float) -> str:
 class ModelPicker(Dialog):
     """Browse and pick a model; typing autocompletes, enter selects, esc cancels.
 
-    Loads from the on-disk catalog cache so it opens instantly. While typing,
-    a dropdown suggests matching ids — ↑↓ browse, enter adopts the highlighted
-    one. An empty catalog degrades to free-text model entry.
+    Loads from the on-disk catalog cache so it opens instantly; with no cache
+    it fetches the provider's catalog in the background. While typing, a
+    dropdown suggests matching ids — ↑↓ browse, enter adopts the highlighted
+    one. An empty catalog after a failed fetch degrades to free-text entry.
     """
 
     BINDINGS = [Binding("ctrl+r", "refresh", "Refresh catalog")]
@@ -51,6 +52,8 @@ class ModelPicker(Dialog):
     dialog_hint = hint_markup(("enter", "select"), ("esc", "cancel"))
     #: The documented exception to MODAL_WIDTH: four columns of catalog.
     dialog_width = MODAL_WIDTH_WIDE
+    #: The field autocomplete types into; focus lands here when the dialog opens.
+    AUTO_FOCUS = "#mp-filter"
     #: Suggestions shown at most in the autocomplete dropdown.
     SUGGESTION_CAP = 5
 
@@ -123,7 +126,23 @@ class ModelPicker(Dialog):
         # Suggestions are browsed through the filter's arrows; the list itself
         # must never steal focus or tab stops.
         self.query_one("#mp-suggestions", OptionList).can_focus = False
-        self._load(cached_catalog(self.provider_name))
+        models = cached_catalog(self.provider_name)
+        self._load(models)
+        # An empty cache means autocomplete has nothing to suggest, so fetch
+        # the catalog now rather than waiting for a manual ctrl+r.
+        if not models and self.provider is not None:
+            self.query_one("#mp-status", Static).update("fetching catalog…")
+            self.run_worker(self._fetch_and_load(), exclusive=True)
+
+    async def _fetch_and_load(self) -> None:
+        """Populate the catalog in the background; ``catalog`` never raises."""
+        models = await catalog(self.provider, force=False)
+        if self._models:
+            return  # a ctrl+r refresh landed first
+        try:
+            self._load(models)
+        except Exception:
+            pass  # the dialog closed before the fetch landed
 
     def _load(self, models: list[ModelInfo]) -> None:
         self._models = models

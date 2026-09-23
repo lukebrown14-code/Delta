@@ -260,6 +260,39 @@ def test_model_picker_escape_closes_suggestions_first(monkeypatch, tmp_path):
     assert picked == []
 
 
+@respx.mock
+def test_model_picker_empty_cache_fetches_on_open(monkeypatch, tmp_path):
+    """No cache: the picker fetches the catalog on open instead of waiting for ctrl+r."""
+    monkeypatch.chdir(tmp_path)
+    respx.get(MODELS_URL).mock(return_value=httpx.Response(200, json=MODELS_PAYLOAD))
+    picked: list[ModelInfo] = []
+    provider = OpenRouterProvider(api_key="k")
+
+    async def run():
+        app = App()
+        async with app.run_test() as pilot:
+            picker = ModelPicker(picked.append, provider=provider, provider_name="openrouter")
+            app.push_screen(picker)
+            await pilot.pause()
+            table = picker.query_one("#mp-table", DataTable)
+            for _ in range(40):
+                await pilot.pause(0.05)
+                if table.row_count:
+                    break
+            assert table.row_count == 3
+            picker.query_one("#mp-filter", Input).value = "gpt"
+            await pilot.pause()
+            suggestions = picker.query_one("#mp-suggestions", OptionList)
+            assert suggestions.display
+            assert [option.id for option in suggestions.options] == [GPT.id]
+            await pilot.press("enter")
+            await pilot.pause()
+
+    asyncio.run(run())
+    assert picked == [GPT]
+    assert cached_catalog("openrouter")  # the fetched catalog landed in the disk cache
+
+
 def test_model_picker_empty_catalog_degrades_to_free_text(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     picked: list[ModelInfo] = []

@@ -560,9 +560,13 @@ class Home(DeltaScreen):
 
     def _tick(self) -> None:
         now = datetime.now().astimezone()
-        self.query_one("#home-clock", Static).update(
-            f"{now:%A %d %B %Y} · {now:%H:%M:%S} {now:%Z}".rstrip()
-        )
+        # The clock is cosmetic: a tick landing while the screen is mid-rebuild
+        # must never raise, or the app stores the exception and dies later.
+        clock = self.query("#home-clock")
+        if clock:
+            clock.first().update(
+                f"{now:%A %d %B %Y} · {now:%H:%M:%S} {now:%Z}".rstrip()
+            )
 
     def _token(self, name: str) -> str:
         """A theme colour Rich can parse; empty (default colour) when unknown.
