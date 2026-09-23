@@ -1,4 +1,4 @@
-"""Settings: provider, one model for all tasks, plugins and targets beside diagnostics.
+"""Settings: provider and model, plugins, data sources, markets, diagnostics.
 
 Two columns at 100 columns and up (setup on the left, diagnostics on the
 right); one column below that, with diagnostics folded to a one-line summary
@@ -26,12 +26,6 @@ from delta.tui.shell import DeltaScreen
 from delta.tui.widgets import DeltaTable, Pane, hint_markup
 
 
-class FocusLine(Static):
-    """A one-row static that can take focus, so tab lands on a table-less pane."""
-
-    can_focus = True
-
-
 class Config(DeltaScreen):
     name = "config"
 
@@ -42,7 +36,6 @@ class Config(DeltaScreen):
         ("d", "toggle_diagnostics", "diagnostics"),
         ("r", "refresh", "refresh"),
         ("l", "focus_plugins", "plugins"),
-        ("t", "focus_targets", "targets"),
         ("s", "configure_source", "source"),
         ("a", "add_market", "market"),
         ("e", "edit_market", "edit market"),
@@ -63,10 +56,6 @@ class Config(DeltaScreen):
     #cfg-model, #cfg-plugins { height: auto; max-height: 12; }
     #cfg-model { scrollbar-size-horizontal: 0; }
     #cfg-plugins-empty, #cfg-sources-hint { height: 1; padding: 0 1; color: $text-muted; }
-    #cfg-targets-pane { height: 1fr; }
-    #cfg-targets { height: auto; max-height: 12; }
-    #cfg-targets-empty, #cfg-targets-legacy, #cfg-targets-signpost { height: 1; padding: 0 1; color: $text-muted; }
-    #cfg-targets-line { display: none; height: 1; padding: 0 1; }
     #cfg-diag-body { height: 1fr; }
     #cfg-diag-summary { display: none; height: 1; padding: 0 1; }
     .cfg-heading { height: 1; padding: 0 1; }
@@ -85,9 +74,6 @@ class Config(DeltaScreen):
     Config.-narrow #cfg-diag { width: 1fr; }
     Config.-narrow #cfg-model { max-height: 3; }
     Config.-narrow #cfg-plugins { max-height: 3; }
-    Config.-narrow #cfg-targets-pane { height: auto; }
-    Config.-narrow #cfg-targets, Config.-narrow #cfg-targets-signpost { display: none; }
-    Config.-narrow #cfg-targets-line { display: block; }
     Config.-diag-folded #cfg-diag { height: auto; }
     Config.-diag-folded #cfg-diag-body { display: none; }
     Config.-diag-folded #cfg-diag-summary { display: block; }
@@ -131,21 +117,6 @@ class Config(DeltaScreen):
                     yield DeltaTable(id="cfg-sources")
                     yield DeltaTable(id="cfg-markets")
                     yield Static("s configure source · a add · e edit · x remove market", id="cfg-sources-hint", markup=False)
-                with Pane(
-                    title="targets",
-                    key="t",
-                    hints=hint_markup(("2", "watchlist")),
-                    id="cfg-targets-pane",
-                ):
-                    yield DeltaTable(id="cfg-targets")
-                    yield FocusLine("", id="cfg-targets-line")
-                    yield Static(
-                        "no targets yet — press 1, then a to add one",
-                        id="cfg-targets-empty",
-                        markup=False,
-                    )
-                    yield Static("", id="cfg-targets-legacy", markup=False)
-                    yield Static("", id="cfg-targets-signpost")
             with Pane(
                 title="diagnostics",
                 key="d",
@@ -177,7 +148,6 @@ class Config(DeltaScreen):
         self.query_one("#cfg-plugins", DeltaTable).add_columns("", "Plugin", "State")
         self.query_one("#cfg-sources", DeltaTable).add_columns("Source", "Quality", "Status")
         self.query_one("#cfg-markets", DeltaTable).add_columns("ID", "Market", "Currency", "Yahoo")
-        self.query_one("#cfg-targets", DeltaTable).add_columns("Name", "Kind", "Market", "Tickers")
         self.ready = True
         await self.refresh_view()
         self.layout_views()
@@ -218,7 +188,6 @@ class Config(DeltaScreen):
         self._refresh_plugins()
         self._refresh_sources()
         self._refresh_markets()
-        self._refresh_targets()
         self._refresh_diagnostics()
 
     def _refresh_ai(self) -> None:
@@ -376,47 +345,6 @@ class Config(DeltaScreen):
             reload_markets()
         await self.refresh_view()
 
-    def _refresh_targets(self) -> None:
-        table = self.query_one("#cfg-targets", DeltaTable)
-        table.clear()
-        targets = dict(getattr(self.delta.cfg, "targets", {}) or {})
-        configured = {name: spec for name, spec in targets.items() if not spec.get("legacy", False)}
-        parts: list[str] = []
-        for name, spec in sorted(configured.items()):
-            kind = str(spec.get("kind", ""))
-            market = str(spec.get("market", "")).upper() or "—"
-            tickers = ",".join(spec.get("tickers", [])) or "—"
-            table.add_row(name, kind, market, tickers, key=name)
-            parts.append(" ".join(part for part in (name, kind, market, tickers) if part != "—"))
-        tokens = self.app.theme_variables
-        line = Text()
-        for index, part in enumerate(parts):
-            if index:
-                line.append("  ·  ", style=tokens["text-muted"])
-            head, _, rest = part.partition(" ")
-            line.append(head)
-            line.append(f" {rest}", style=tokens["text-muted"])
-        self.query_one("#cfg-targets-line", FocusLine).update(line)
-        legacy = len(targets) - len(configured)
-        legacy_note = self.query_one("#cfg-targets-legacy", Static)
-        legacy_note.update(
-            f"{legacy} legacy universe entr{'y' if legacy == 1 else 'ies'} active · hidden here"
-        )
-        legacy_note.display = bool(legacy)
-        self.query_one("#cfg-targets-empty", Static).display = not configured
-        # With no targets the empty line above already names the keys; saying
-        # it twice in one pane reads as two different instructions.
-        self.query_one("#cfg-targets-signpost", Static).update(
-            "[$text-muted]targets live on the[/] [bold $text-primary]1[/] [$text-muted]watchlist —[/]"
-            " [bold $text-primary]a[/] [$text-muted]add,[/] [bold $text-primary]d[/] [$text-muted]remove[/]"
-            if configured
-            else ""
-        )
-        badge = str(len(configured)) if configured else ""
-        if self.narrow and configured:
-            badge += " · edit on the 1 watchlist"
-        self.query_one("#cfg-targets-pane", Pane).set_badge(badge)
-
     def _refresh_diagnostics(self) -> None:
         health = services.data_health(self.delta)
         table = self.query_one("#health-table", DeltaTable)
@@ -540,12 +468,6 @@ class Config(DeltaScreen):
 
     def action_focus_plugins(self) -> None:
         self.query_one("#cfg-plugins", DeltaTable).focus()
-
-    def action_focus_targets(self) -> None:
-        if self.narrow:
-            self.query_one("#cfg-targets-line", FocusLine).focus()
-        else:
-            self.query_one("#cfg-targets", DeltaTable).focus()
 
 
 def _stamp(stamp: datetime) -> str:

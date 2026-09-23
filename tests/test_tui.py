@@ -19,7 +19,6 @@ from delta.tui.widgets import (
     MODAL_WIDTH_WIDE,
     Dialog,
     KeyHint,
-    Pane,
     binding_key,
     shown_bindings,
 )
@@ -564,7 +563,7 @@ def _routed_delta(delta):
 
 
 def test_config_two_columns_fold_and_focus_keys(delta):
-    """Wide: diagnostics open beside the stack; d folds; l/t move focus; enter opens the picker."""
+    """Wide: diagnostics open beside the stack; d folds; l moves focus; enter opens the picker."""
     from delta.tui.screens.model_picker import ModelPicker
 
     async def run():
@@ -585,14 +584,9 @@ def test_config_two_columns_fold_and_focus_keys(delta):
             assert screen.query_one("#cfg-diag-body").display
             await pilot.press("l")
             assert screen.focused is screen.query_one("#cfg-plugins")
-            await pilot.press("t")
-            assert screen.focused is screen.query_one("#cfg-targets")
-            # The targets pane is a signpost: it names keys that are bound.
-            empty = str(screen.query_one("#cfg-targets-empty").render())
-            assert "press w " not in empty
-            assert "press 1" in empty and "a to add one" in empty
-            # …and the pane's own border says where 1 goes.
-            assert "watchlist" in screen.query_one("#cfg-targets-pane", Pane).border_subtitle
+            # The targets pane is gone from Settings: watching is managed on
+            # the watchlist alone, and nothing here may reference it.
+            assert not screen.query("#cfg-targets-pane")
             # Enter acts on the highlighted row: provider opens the provider picker…
             from delta.tui.screens.provider_picker import ProviderPicker
 
