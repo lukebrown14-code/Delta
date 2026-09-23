@@ -1,5 +1,5 @@
 [project]
-name = "rigger"
+name = "delta"
 version = "0.1.0"
 description = "AI-driven investment research assistant"
 readme = "README.md"
@@ -22,24 +22,24 @@ dependencies = [
 ]
 
 [project.scripts]
-rig = "rigger.tui.app:run_tui"
+delta = "delta.tui.app:run_tui"
 
-[project.entry-points."rigger.plugins"]
-us_market = "rigger.plugins.markets.us:USMarket"
-asx_market = "rigger.plugins.markets.asx:ASXMarket"
-yfinance_data = "rigger.plugins.data.yfinance:YFinanceData"
-asx_announcements = "rigger.plugins.data.asx_announcements:ASXAnnouncements"
-sec_edgar = "rigger.plugins.data.sec_edgar:SECEdgar"
-yfinance_calendar = "rigger.plugins.data.yfinance_calendar:YFinanceCalendar"
-rss = "rigger.plugins.data.rss:RSSData"
+[project.entry-points."delta.plugins"]
+us_market = "delta.plugins.markets.us:USMarket"
+asx_market = "delta.plugins.markets.asx:ASXMarket"
+yfinance_data = "delta.plugins.data.yfinance:YFinanceData"
+asx_announcements = "delta.plugins.data.asx_announcements:ASXAnnouncements"
+sec_edgar = "delta.plugins.data.sec_edgar:SECEdgar"
+yfinance_calendar = "delta.plugins.data.yfinance_calendar:YFinanceCalendar"
+rss = "delta.plugins.data.rss:RSSData"
 
-[project.entry-points."rigger.targets"]
-company = "rigger.plugins.targets.tickers:CompanyTarget"
-sector = "rigger.plugins.targets.tickers:SectorTarget"
-industry = "rigger.plugins.targets.tickers:IndustryTarget"
-theme = "rigger.plugins.targets.tickers:ThemeTarget"
-market = "rigger.plugins.targets.tickers:MarketTarget"
-tickers = "rigger.plugins.targets.tickers:LegacyTickersTarget"
+[project.entry-points."delta.targets"]
+company = "delta.plugins.targets.tickers:CompanyTarget"
+sector = "delta.plugins.targets.tickers:SectorTarget"
+industry = "delta.plugins.targets.tickers:IndustryTarget"
+theme = "delta.plugins.targets.tickers:ThemeTarget"
+market = "delta.plugins.targets.tickers:MarketTarget"
+tickers = "delta.plugins.targets.tickers:LegacyTickersTarget"
 
 [build-system]
 requires = ["uv_build>=0.12.13,<0.13.0"]

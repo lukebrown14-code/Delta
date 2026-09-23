@@ -1,8 +1,8 @@
-# Rigger
+# Delta
 
 A personal investment research assistant for people who enjoy investing as a hobby.
 
-You tell Rigger what you're interested in — a company, a sector, an industry, a market, a theme. It gathers evidence about them from public sources, an AI synthesises that evidence into reports you can check line by line, and an optional thesis layer tracks a long-horizon idea as evidence accumulates for and against it.
+You tell Delta what you're interested in — a company, a sector, an industry, a market, a theme. It gathers evidence about them from public sources, an AI synthesises that evidence into reports you can check line by line, and an optional thesis layer tracks a long-horizon idea as evidence accumulates for and against it.
 
 **It does not trade, and it does not tell you what to buy.** The product is clarity: organised facts, cited summaries, and somewhere to reason about an idea. Nothing here is financial advice.
 
@@ -38,8 +38,8 @@ Four rules the code actually enforces:
 ## Install
 
 ```bash
-git clone https://github.com/lukebrown14-code/Rigger.git
-cd Rigger
+git clone https://github.com/lukebrown14-code/Delta.git
+cd Delta
 uv sync
 cp .env.example .env      # then fill in your key(s)
 ```
@@ -66,7 +66,7 @@ base_url = "http://localhost:11434/v1"   # e.g. Ollama
 api_key_env = "OLLAMA_KEY"               # optional, for non-local servers
 ```
 
-Four jobs route to models independently in `[llm.routing]` — `extract`, `report`, `chat` and `thesis` — so you can put a cheap fast model on bulk news extraction and a stronger one on reports. Model ids are plain strings; change them freely, or press `m` in the app to browse what your provider offers, with prices. Route ids are provider-native (e.g. `claude-sonnet-4-...` on `anthropic`, `gpt-4o` on `openai`, `vendor/model` on `openrouter`) — switching providers warns when existing routes don't look right.
+One model does everything by default: set `[llm] model`, or press `m` in the app and pick one — every task, including plugin calls, uses it. Model ids are plain strings; the picker browses what your provider offers, with prices, and route ids are provider-native (e.g. `claude-sonnet-4-...` on `anthropic`, `gpt-4o` on `openai`, `vendor/model` on `openrouter`) — switching providers warns when the model doesn't look right. Until a single model is chosen, older per-task tables in `[llm.routing]` (`extract`, `report`, `chat`, `thesis`) keep working.
 
 Set `[plugins.sec_edgar].contact` to a real email before ingesting US filings — the SEC requires a contact address in the User-Agent.
 
@@ -75,13 +75,13 @@ Set `[plugins.sec_edgar].contact` to a real email before ingesting US filings �
 Open the app:
 
 ```bash
-uv run rig
+uv run delta
 ```
 
 | Key | Screen |
 |-----|--------|
 | `1` | Watchlist |
-| `2` / `3` | Research: Evidence / Report |
+| `2` | Research: companies, reports and evidence |
 | `4` / `5` | Theses / Ask |
 | `c` | Settings |
 | `h` | Home |
@@ -94,14 +94,14 @@ Watchlist entries come in five kinds — `company`, `sector`, `industry`, `marke
 
 Theses are optional. Skip them entirely and you still get a watchlist, evidence and reports. On the Theses screen (**4**) write down something you believe, let the model propose candidate evidence, and accept or reject each piece yourself.
 
-Press **2** for Research: choose a watch target and company, then search and filter its sources. **Gather all** collects evidence across configured targets. **Generate report** writes a report for the selected company; browsing filters do not change its inputs. Press **3** to read the latest report and follow its citations back to Evidence.
+Press **2** for Research. Its three columns keep the selected company, the latest report, and its supporting evidence visible together. Choose a watch target and company on the left; use the right column to search and filter sources. **Gather all** collects evidence across configured targets, and **Generate report** writes a report for the selected company without changing the evidence filters. Citations select their source in the Evidence column on the same screen, and **v** jumps to the report claim that cites a source.
 
 Reports keep their Markdown export alongside a structured JSON sidecar for citation navigation. Older Markdown-only reports remain readable; regenerate them to enable interactive citations. Database counts, price timestamps and cumulative model spend are under **Settings → Diagnostics** (**c**).
 
 ## Project layout
 
 ```
-rigger/
+delta/
 ├── core/            models, SQLite (SQLModel), config, plugin registry, event bus
 ├── llm/             provider-agnostic client, model catalog, routing, structured calls
 ├── plugins/
@@ -119,14 +119,22 @@ rigger/
 tests/               pytest, fully offline (respx + a fake LLM)
 ```
 
-Plugins are discovered through the `rigger.plugins` and `rigger.targets` entry-point groups in `pyproject.toml`. A new data source is one file implementing one class.
+Plugins are discovered through the `delta.plugins` and `delta.targets` entry-point groups in `pyproject.toml`. A new data source is one file implementing one class.
+
+### Configuring data sources
+
+Press `c` for Settings, select a source in **data sources**, then press `d` to configure it. Source adapters declare the settings they accept; ordinary settings are saved in `config.toml`, while declared API-key fields are saved only in `.env` and are masked in the UI. Delta deliberately does not offer a generic authenticated-HTTP connector: a commercial source such as Financial Times needs a dedicated adapter built against its licensed API contract, pagination rules and content-use rights.
+
+### Adding an exchange
+
+Press `c`, then `a` in Settings to add an exchange-level market. Enter its ID, currency and Yahoo suffix (for example, `lse`, `GBP`, `.L`). Yahoo Finance prices/calendar data and RSS work for every configured market; country-specific disclosure plugins are enabled separately and can be assigned to selected markets in their source setup form.
 
 ## Develop
 
 ```bash
 uv run pytest
 uv run ruff check . && uv run ruff format .
-uv run mypy --strict rigger/core rigger/llm
+uv run mypy --strict delta/core delta/llm
 ```
 
 The same three run in CI on every push. Tests never touch the network.

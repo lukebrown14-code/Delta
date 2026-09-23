@@ -11,10 +11,10 @@ import httpx
 import pytest
 import respx
 
-from rigger.core.http import user_agent
-from rigger.core.ids import stable_id
-from rigger.core.models import Fundamental, Instrument, NewsItem
-from rigger.plugins.data.sec_edgar import (
+from delta.core.http import user_agent
+from delta.core.ids import stable_id
+from delta.core.models import Fundamental, Instrument, NewsItem
+from delta.plugins.data.sec_edgar import (
     COMPANYFACTS_URL,
     SUBMISSIONS_URL,
     TICKERS_URL,

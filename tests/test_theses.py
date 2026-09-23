@@ -12,12 +12,12 @@ from textual.containers import VerticalScroll
 from textual.content import Content
 from textual.widgets import Input
 
-from rigger import theses
-from rigger.core.db import NewsItemTable
-from rigger.core.json import to_json
-from rigger.evidence import evidence
-from rigger.tui.screens.theses import Theses
-from rigger.tui.widgets import Pane
+from delta import theses
+from delta.core.db import NewsItemTable
+from delta.core.json import to_json
+from delta.evidence import evidence
+from delta.tui.screens.theses import Theses
+from delta.tui.widgets import Pane
 from tests.conftest import FakeConfig, FakeLLM, seed_bars
 
 INST = "US:AAPL"
@@ -29,7 +29,7 @@ SCOPE = "Global electricity generation"
 
 
 class FakeRig:
-    """Duck-typed stand-in for Rigger: engine, routed config, LLM client."""
+    """Duck-typed stand-in for Delta: engine, routed config, LLM client."""
 
     def __init__(self, engine, llm=None, cfg=None):
         self.engine = engine
@@ -168,9 +168,9 @@ def test_propose_evidence_stores_candidates_never_accepts(tmp_engine):
             }
         }
     )
-    rig = FakeRig(tmp_engine, llm, FakeConfig({"thesis": "fake/thesis-model"}))
+    delta = FakeRig(tmp_engine, llm, FakeConfig({"thesis": "fake/thesis-model"}))
 
-    stored = asyncio.run(theses.propose_evidence(rig, thesis.id))
+    stored = asyncio.run(theses.propose_evidence(delta, thesis.id))
 
     assert [row.evidence_id for row in stored] == ["news:n1", "news:n2"]
     assert {row.side for row in stored} == {"support", "against"}
@@ -209,13 +209,13 @@ def test_propose_evidence_skips_linked_ids(tmp_engine):
             }
         }
     )
-    rig = FakeRig(tmp_engine, llm, FakeConfig({"thesis": "fake/thesis-model"}))
+    delta = FakeRig(tmp_engine, llm, FakeConfig({"thesis": "fake/thesis-model"}))
 
-    first = asyncio.run(theses.propose_evidence(rig, thesis.id))
+    first = asyncio.run(theses.propose_evidence(delta, thesis.id))
     assert {row.evidence_id for row in first} == {"news:n1", "news:n2"}
     theses.set_accepted(tmp_engine, thesis.id, "news:n1", True)
 
-    second = asyncio.run(theses.propose_evidence(rig, thesis.id))
+    second = asyncio.run(theses.propose_evidence(delta, thesis.id))
     assert second == []
     assert len(llm.calls) == 1
     assert theses.evidence_for(tmp_engine, thesis.id)[0].evidence_id == "news:n1"
@@ -224,9 +224,9 @@ def test_propose_evidence_skips_linked_ids(tmp_engine):
 def test_propose_evidence_without_evidence_makes_no_call(tmp_engine):
     thesis = theses.create_thesis(tmp_engine, CLAIM, targets=(INST,))
     llm = FakeLLM({"thesis": {"candidates": []}})
-    rig = FakeRig(tmp_engine, llm, FakeConfig({"thesis": "fake/thesis-model"}))
+    delta = FakeRig(tmp_engine, llm, FakeConfig({"thesis": "fake/thesis-model"}))
 
-    assert asyncio.run(theses.propose_evidence(rig, thesis.id)) == []
+    assert asyncio.run(theses.propose_evidence(delta, thesis.id)) == []
     assert llm.calls == []
 
 
@@ -234,9 +234,9 @@ def test_propose_evidence_without_targets_gathers_all(tmp_engine):
     _seed_news(tmp_engine)
     thesis = theses.create_thesis(tmp_engine, CLAIM)
     llm = FakeLLM({"thesis": {"candidates": []}})
-    rig = FakeRig(tmp_engine, llm, FakeConfig({"thesis": "fake/thesis-model"}))
+    delta = FakeRig(tmp_engine, llm, FakeConfig({"thesis": "fake/thesis-model"}))
 
-    stored = asyncio.run(theses.propose_evidence(rig, thesis.id))
+    stored = asyncio.run(theses.propose_evidence(delta, thesis.id))
 
     assert stored == []
     assert "news:m1" in llm.calls[0]["prompt"]
@@ -499,12 +499,12 @@ def test_screen_find_evidence_fills_the_review_queue(tmp_engine):
             }
         }
     )
-    rig = FakeRig(tmp_engine, llm, FakeConfig({"thesis": "fake/thesis-model"}))
+    delta = FakeRig(tmp_engine, llm, FakeConfig({"thesis": "fake/thesis-model"}))
 
     async def run():
         app = App()
         async with app.run_test(size=(130, 32)) as pilot:
-            screen = Theses(rig)
+            screen = Theses(delta)
             await app.push_screen(screen)
             await pilot.pause()
             assert screen.query_one("#thesis-ledger").row_count == 0
@@ -700,7 +700,7 @@ def test_pane_width_constants_match_the_stylesheet():
     Textual CSS cannot read a Python constant, so the numbers are written twice.
     This is the mechanism that keeps the two copies honest.
     """
-    from rigger.tui.screens import theses as screen
+    from delta.tui.screens import theses as screen
 
     assert f"#thesis-claims {{ width: {screen.CLAIMS_WIDTH}; }}" in screen.Theses.CSS
     assert f"#thesis-evidence-pane {{ width: {screen.EVIDENCE_WIDTH}; }}" in screen.Theses.CSS

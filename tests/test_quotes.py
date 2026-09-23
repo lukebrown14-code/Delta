@@ -6,8 +6,8 @@ from datetime import UTC, datetime
 
 import pytest
 
-from rigger.core.models import Instrument
-from rigger.quotes import YahooQuotes, classify_yahoo_asset, parse_quote, yahoo_search
+from delta.core.models import Instrument
+from delta.quotes import YahooQuotes, classify_yahoo_asset, parse_quote, yahoo_search
 
 
 @pytest.mark.parametrize(

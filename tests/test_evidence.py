@@ -13,9 +13,9 @@ from datetime import UTC, date, datetime
 
 from sqlmodel import Session
 
-from rigger.core.db import EventTable, FundamentalTable, NewsItemTable
-from rigger.core.json import to_json
-from rigger.evidence import cite, evidence, evidence_by_ids
+from delta.core.db import EventTable, FundamentalTable, NewsItemTable
+from delta.core.json import to_json
+from delta.evidence import cite, evidence, evidence_by_ids
 from tests.conftest import seed_bars
 
 INST = "US:AAPL"
@@ -211,6 +211,25 @@ def test_filings_detected_from_sec_edgar_source(tmp_engine):
     assert {item.id: item.kind for item in items} == {"news:n1": "news", "filing:f1": "filing"}
     assert all(item.source == "sec_edgar" for item in items if item.kind == "filing")
     assert [item.id for item in evidence(tmp_engine, kind="news")] == ["news:n1"]
+
+
+def test_asx_announcements_are_primary_filings(tmp_engine):
+    with Session(tmp_engine) as session:
+        session.add(
+            NewsItemTable(
+                id="asx-1",
+                instrument_ids=to_json([INST]),
+                published=datetime(2026, 3, 21, tzinfo=UTC),
+                title="Price sensitive announcement",
+                url="https://example.com/asx-1",
+                source="asx_announcements",
+            )
+        )
+        session.commit()
+
+    item = evidence(tmp_engine, kind="filing")[0]
+    assert item.id == "filing:asx-1"
+    assert item.quality == "primary"
 
 
 def test_cite_is_deterministic_and_omits_url(tmp_engine):

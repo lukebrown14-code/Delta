@@ -1,4 +1,4 @@
-# Rigger — Project Specification
+# Delta — Project Specification
 
 > **Audience:** AI coding agents and developers working on this repository. This
 > is the source of truth for scope, architecture, contracts and conventions.
@@ -13,13 +13,13 @@
 
 ## 1. Purpose
 
-Rigger is a personal investment research assistant for someone who enjoys
+Delta is a personal investment research assistant for someone who enjoys
 investing as a hobby and would like to make some money at it. It is **not** for
 a professional desk, and every design decision should be read through that lens:
 plain words over industry terms, minimum required configuration, expert knobs
 optional and out of the way.
 
-The user names the things they are interested in. Rigger gathers evidence about
+The user names the things they are interested in. Delta gathers evidence about
 them from public sources, an AI synthesises that evidence into reports the user
 can check line by line, and an optional thesis layer tracks a long-horizon idea
 as evidence accumulates for and against it.
@@ -40,7 +40,7 @@ demonstrably beats naive baselines, tested before anything ever trades.
 
 Trading, order routing, portfolio accounting, position sizing, backtesting,
 automated recommendations, and any claim that the tool improves returns. Nothing
-Rigger produces is financial advice.
+Delta produces is financial advice.
 
 ---
 
@@ -77,7 +77,7 @@ should fail a test.
 ## 3. Architecture
 
 ```
-rigger/
+delta/
 ├── core/
 │   ├── models.py        Pydantic domain models (§4)
 │   ├── db.py            SQLModel engine, tables, migrations, bulk store
@@ -106,7 +106,7 @@ rigger/
 ├── chat.py              grounded Q&A, local evidence first, web search opt-in
 ├── theses.py            long-horizon claims, candidate evidence, own tables
 ├── thesis_health.py     pure function over accepted evidence
-├── runtime.py           shared Rigger wiring
+├── runtime.py           shared Delta wiring
 ├── services.py          pipeline operations and read-side queries
 ├── tui/                 Textual app, screens, widgets, styles
 tests/                   pytest, fully offline (respx + FakeLLM)
@@ -214,7 +214,7 @@ class Plugin:
 
 
 class TargetPlugin(Plugin):  # instantiated once per [targets.<name>] table
-    kind: str  # entry-point name in the `rigger.targets` group
+    kind: str  # entry-point name in the `delta.targets` group
     label: str = ""
 
     def instruments(self) -> list[Instrument]: ...
@@ -249,9 +249,9 @@ class Scope:  # AND across axes, OR within one; None = unrestricted
 `DataPlugin.__init_subclass__` wraps a subclass's `configure` so scope parsing
 always runs — a subclass overriding `configure` cannot accidentally drop it.
 
-**Discovery.** Three entry-point groups: `rigger.plugins` (one instance per
-class, keyed by `name`), `rigger.targets` (a *factory* per kind — one class backs
-many differently-named targets), and `rigger.watchlists` (legacy, still
+**Discovery.** Three entry-point groups: `delta.plugins` (one instance per
+class, keyed by `name`), `delta.targets` (a *factory* per kind — one class backs
+many differently-named targets), and `delta.watchlists` (legacy, still
 honoured). Third-party plugins are ordinary pip packages using the same groups.
 
 **Back-compat that must keep working:** `[watchlists.<name>]` tables and the
@@ -269,10 +269,13 @@ owns caching keyed on
 `sha256(model + prompt_version + prompt)`, persists every call to `llmcall`, and
 applies the retry policy.
 
-**Four routed tasks** in `[llm.routing]`: `extract`, `report`, `chat`, `thesis`.
-`model_for(config, task, plugin=None)` resolves `[plugins.<plugin>].model` first,
-then `[llm.routing].<task>`, and **raises `KeyError` on a miss** — a missing
-route must never silently fall back to a hard-coded literal.
+**Model choice.** `[llm] model` is the one model for all tasks — when set,
+`model_for` returns it for every task and plugin, ignoring everything below.
+Until it is set, per-task routing in `[llm.routing]` (`extract`, `report`,
+`chat`, `thesis`) still applies: `model_for(config, task, plugin=None)`
+resolves `[plugins.<plugin>].model` first, then `[llm.routing].<task>`, and
+**raises `KeyError` on a miss** — a missing route must never silently fall
+back to a hard-coded literal.
 
 `catalog.py` fetches the provider's model list (id, name, context length, prices;
 OpenRouter reuses the pricing fetch it already makes, cached 24h, failures
@@ -290,7 +293,7 @@ validation failure.
 
 ## 7. Surfaces
 
-**TUI** (`uv run rig`) — `1`–`5` Watchlist, Data, Reports, Theses, Chat;
+**TUI** (`uv run delta`) — `1`–`5` Watchlist, Data, Reports, Theses, Chat;
 `c` Config; `h` Home; `m` model picker; `?` help; `q` quit. What is watched
 is managed on the Watchlist panel; the command palette has a **Gather
 evidence** action (ingest + extract).
@@ -302,12 +305,12 @@ Reports are written to `reports/<target_id>/<YYYY-MM-DD>.md`.
 ## 8. Coding standards
 
 - Python 3.12+, type hints everywhere. `ruff` (line length 100) and
-  `mypy --strict` on `rigger/core` and `rigger/llm`.
+  `mypy --strict` on `delta/core` and `delta/llm`.
 - Async for I/O (fetching, LLM calls); sync for glue.
 - **No network in tests.** `respx` for HTTP, `FakeLLM` for the model provider.
 - Conventional commits (`feat:`, `fix:`, `docs:`, `chore:`).
 - Never commit `.env`, `data/*.db` or `reports/`.
-- CI runs `ruff check`, `mypy --strict rigger/core rigger/llm` and `pytest` on
+- CI runs `ruff check`, `mypy --strict delta/core delta/llm` and `pytest` on
   every push.
 
 ---

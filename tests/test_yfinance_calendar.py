@@ -7,10 +7,10 @@ from datetime import UTC, datetime, timedelta
 
 import yfinance
 
-from rigger.core.models import Instrument
-from rigger.core.plugin import apply_config
-from rigger.plugins.data.yfinance import YFinanceData
-from rigger.plugins.data.yfinance_calendar import YFinanceCalendar, calendar_event_id
+from delta.core.models import Instrument
+from delta.core.plugin import apply_config
+from delta.plugins.data.yfinance import YFinanceData
+from delta.plugins.data.yfinance_calendar import YFinanceCalendar, calendar_event_id
 
 AAPL = Instrument(id="US:AAPL", market="us", symbol="AAPL", currency="USD")
 BHP = Instrument(id="ASX:BHP", market="asx", symbol="BHP", currency="AUD")

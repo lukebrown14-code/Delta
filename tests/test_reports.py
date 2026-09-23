@@ -9,14 +9,14 @@ from types import SimpleNamespace
 import pytest
 from sqlmodel import Session
 from textual.app import App
-from textual.widgets import DataTable, MarkdownViewer
+from textual.widgets import DataTable, MarkdownViewer, Static
 
-from rigger.core.db import EventTable, NewsItemTable
-from rigger.core.json import to_json
-from rigger.core.models import Instrument
-from rigger.evidence import cite
-from rigger.reports import build_report, gather, render_markdown, write_report
-from rigger.tui.screens.reports import Reports
+from delta.core.db import EventTable, NewsItemTable
+from delta.core.json import to_json
+from delta.core.models import Instrument
+from delta.evidence import cite
+from delta.reports import Claim, Report, build_report, gather, render_markdown, write_report
+from delta.tui.screens.reports import Reports
 from tests.conftest import FakeConfig, FakeLLM, seed_bars
 
 INST = "US:AAPL"
@@ -77,16 +77,21 @@ def _claim(text: str, ids: list[str]) -> dict:
 def _draft() -> dict:
     return {
         "summary": "Apple signed a cloud partnership and closed the window at 102.00.",
+        "bull_summary": "The partnership provides a positive commercial data point.",
         "bull": [
             _claim("Apple and Microsoft announced a partnership.", ["news:news-1"]),
             _claim("Partnership revenue is already accretive.", ["news:ghost"]),
             _claim("No sources given.", []),
         ],
+        "bear_summary": "The price move is positive but limited evidence on its own.",
         "bear": [_claim("The close rose through the window.", ["bar:5", "bar:4"])],
+        "risks_summary": "",
         "risks": [],
+        "catalysts_summary": "The earnings result is a dated positive event.",
         "catalysts": [_claim("Earnings were reported above consensus.", ["event:event-1"])],
         "unknowns": ["What guidance did management give for next quarter?"],
         "sentiment": 0.6,
+        "sentiment_reasons_summary": "The reported earnings result supports a positive reading.",
         "sentiment_reasons": [_claim("EPS came in above consensus.", ["event:event-1"])],
     }
 
@@ -99,7 +104,7 @@ def test_build_report_returns_cited_report(tmp_engine, tmp_path, monkeypatch):
     report = asyncio.run(build_report(FakeRig(tmp_engine, llm), INST))
 
     assert report.target_id == INST
-    assert report.prompt_version == "report_v1"
+    assert report.prompt_version == "report_v2"
     assert report.sentiment == 0.6
     assert report.summary == "Apple signed a cloud partnership and closed the window at 102.00."
     assert report.unknowns == ["What guidance did management give for next quarter?"]
@@ -120,7 +125,7 @@ def test_build_report_returns_cited_report(tmp_engine, tmp_path, monkeypatch):
     call = llm.calls[0]
     assert call["task"] == "report"
     assert call["model"] == "test/model"
-    assert call["prompt_version"] == "report_v1"
+    assert call["prompt_version"] == "report_v2"
     assert "Use only the information provided." in call["prompt"]
     assert "Do not rely on prior knowledge of prices, news or events." in call["prompt"]
     assert "Do not recommend buying, selling or holding." in call["prompt"]
@@ -161,7 +166,7 @@ def test_no_evidence_raises_before_any_call(tmp_engine, tmp_path, monkeypatch):
     assert llm.calls == []
 
 
-def test_render_markdown_cites_claims_and_sentiment(tmp_engine, tmp_path, monkeypatch):
+def test_render_markdown_groups_section_summary_claims_and_sources(tmp_engine, tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     _seed(tmp_engine)
     llm = FakeLLM({"report": _draft()})
@@ -174,8 +179,33 @@ def test_render_markdown_cites_claims_and_sentiment(tmp_engine, tmp_path, monkey
     assert report.citations["event:event-1"] in markdown
     assert "## Summary" in markdown
     assert "## Bull case" in markdown
+    assert "The partnership provides a positive commercial data point." in markdown
+    assert "### Key points" in markdown
+    assert "### Sources" in markdown
     assert "## Unknowns" in markdown
     assert "Partnership revenue is already accretive." not in markdown
+
+
+def test_render_markdown_deduplicates_section_sources_and_keeps_legacy_reports_readable():
+    report = Report(
+        target_id=INST,
+        as_of=START,
+        prompt_version="report_v1",
+        summary="Legacy report.",
+        sentiment=0,
+        bull=[
+            Claim(text="First point.", evidence_ids=["news:one", "news:two"]),
+            Claim(text="Second point.", evidence_ids=["news:two"]),
+        ],
+        citations={"news:one": "First source", "news:two": "Second source"},
+    )
+
+    markdown = render_markdown(report, interactive=True)
+
+    assert "First point." in markdown
+    assert "1. [Inspect source](evidence:news:one) — First source" in markdown
+    assert markdown.count("evidence:news:two") == 1
+    assert "Legacy report." in markdown
 
 
 def test_write_report_writes_target_dir_dated_file(tmp_engine, tmp_path, monkeypatch):
@@ -200,19 +230,27 @@ def test_reports_screen_lists_targets_and_generates(tmp_engine, tmp_path, monkey
     _seed(tmp_engine)
     reports_dir = tmp_path / "reports"
     aapl = Instrument(id=INST, market="us", symbol="AAPL", currency="USD", watchlists=("apple",))
-    rig = ScreenRig(tmp_engine, FakeLLM({"report": _draft()}), [aapl], str(reports_dir))
+    delta = ScreenRig(tmp_engine, FakeLLM({"report": _draft()}), [aapl], str(reports_dir))
 
     class ReportsApp(App):
         def on_mount(self) -> None:
-            self.push_screen(Reports(rig))
+            self.push_screen(Reports(delta))
 
     async def run():
         app = ReportsApp()
         async with app.run_test() as pilot:
             table = app.screen.query_one("#research-companies", DataTable)
+
+            def cell(row: int, col: int) -> str:
+                value = table.get_row_at(row)[col]
+                return getattr(value, "plain", value)
+
             assert table.row_count == 1
-            assert table.get_row_at(0)[1] == INST
-            assert "apple" in table.get_row_at(0)[2]
+            # The 36-cell company column carries the name and the report age;
+            # symbol and target moved to the summary under the list.
+            assert cell(0, 0) == "AAPL"
+            assert cell(0, 1) == "no report"
+            assert "apple" in str(app.screen.query_one("#company-summary", Static).render())
 
             # Let the first layout settle: the header reflows once on mount.
             await pilot.pause()
@@ -249,11 +287,11 @@ def test_reports_screen_shows_newest_report_across_instruments(tmp_engine, tmp_p
         Instrument(id=INST, market="us", symbol="AAPL", currency="USD", watchlists=("pair",)),
         Instrument(id=other, market="us", symbol="MSFT", currency="USD", watchlists=("pair",)),
     ]
-    rig = ScreenRig(tmp_engine, FakeLLM({}), universe, str(reports_dir))
+    delta = ScreenRig(tmp_engine, FakeLLM({}), universe, str(reports_dir))
 
     class ReportsApp(App):
         def on_mount(self) -> None:
-            self.push_screen(Reports(rig))
+            self.push_screen(Reports(delta))
 
     async def run():
         app = ReportsApp()
@@ -269,11 +307,11 @@ def test_reports_screen_shows_newest_report_across_instruments(tmp_engine, tmp_p
 def test_reports_screen_generate_with_no_targets_notifies(tmp_engine, tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     (tmp_path / "config.toml").write_text("", encoding="utf-8")
-    rig = ScreenRig(tmp_engine, FakeLLM({}), [], str(tmp_path / "reports"))
+    delta = ScreenRig(tmp_engine, FakeLLM({}), [], str(tmp_path / "reports"))
 
     class ReportsApp(App):
         def on_mount(self) -> None:
-            self.push_screen(Reports(rig))
+            self.push_screen(Reports(delta))
 
     async def run():
         app = ReportsApp()

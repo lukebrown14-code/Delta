@@ -17,13 +17,13 @@ from sqlmodel import Session, select
 from textual.app import App
 from textual.widgets import Input
 
-from rigger.chat import ChatMessage, OfflineSearchTool, WebHit, chat
-from rigger.core.db import BarTable, EventTable, FundamentalTable, LLMCallTable, NewsItemTable
-from rigger.evidence import evidence
-from rigger.llm.client import LLMClient, LLMResult
-from rigger.llm.providers import ProviderResult
-from rigger.tui.screens.chat import Chat
-from rigger.tui.widgets import ActionChip, Pane, RiggerTable
+from delta.chat import ChatMessage, OfflineSearchTool, WebHit, chat
+from delta.core.db import BarTable, EventTable, FundamentalTable, LLMCallTable, NewsItemTable
+from delta.evidence import evidence
+from delta.llm.client import LLMClient, LLMResult
+from delta.llm.providers import ProviderResult
+from delta.tui.screens.chat import Chat
+from delta.tui.widgets import ActionChip, DeltaTable, Pane
 from tests.conftest import FakeConfig, seed_bars
 
 INST = "US:AAPL"
@@ -99,9 +99,9 @@ def _row_counts(engine: Any) -> dict[str, int]:
 def test_stored_citations_resolve_to_seeded_evidence(tmp_engine):
     seed_bars(tmp_engine, INST, n=3)
     llm = FakeChatLLM([{"answer": "AAPL closed at 100.00.", "citations": ["bar:1", "bar:2"]}])
-    rig = FakeRig(tmp_engine, llm, ROUTING)
+    delta = FakeRig(tmp_engine, llm, ROUTING)
 
-    reply = asyncio.run(chat(rig, _history("How did AAPL do?"), targets=[INST]))
+    reply = asyncio.run(chat(delta, _history("How did AAPL do?"), targets=[INST]))
 
     assert reply.role == "assistant"
     assert reply.source == "stored"
@@ -118,9 +118,9 @@ def test_stored_citations_resolve_to_seeded_evidence(tmp_engine):
 def test_unmatched_citations_are_dropped_and_noted(tmp_engine):
     seed_bars(tmp_engine, INST, n=3)
     llm = FakeChatLLM([{"answer": "Solar demand is booming.", "citations": ["bogus:9"]}])
-    rig = FakeRig(tmp_engine, llm, ROUTING)
+    delta = FakeRig(tmp_engine, llm, ROUTING)
 
-    reply = asyncio.run(chat(rig, _history("What about solar?"), targets=[INST]))
+    reply = asyncio.run(chat(delta, _history("What about solar?"), targets=[INST]))
 
     assert reply.source == "inference"
     assert reply.citations == ()
@@ -131,9 +131,9 @@ def test_unmatched_citations_are_dropped_and_noted(tmp_engine):
 def test_partially_verified_answer_is_inference_without_the_note(tmp_engine):
     seed_bars(tmp_engine, INST, n=3)
     llm = FakeChatLLM([{"answer": "Partly grounded.", "citations": ["bar:1", "bogus:9"]}])
-    rig = FakeRig(tmp_engine, llm, ROUTING)
+    delta = FakeRig(tmp_engine, llm, ROUTING)
 
-    reply = asyncio.run(chat(rig, _history("Anything?"), targets=[INST]))
+    reply = asyncio.run(chat(delta, _history("Anything?"), targets=[INST]))
 
     assert reply.source == "inference"
     assert reply.citations == ("bar:1",)
@@ -146,10 +146,10 @@ def test_web_disabled_never_calls_the_search_tool(tmp_engine):
         [{"answer": "Grounded.", "citations": ["bar:1"], "web_queries": ["solar demand"]}]
     )
     tool = CountingSearch()
-    rig = FakeRig(tmp_engine, llm, ROUTING)
+    delta = FakeRig(tmp_engine, llm, ROUTING)
 
     reply = asyncio.run(
-        chat(rig, _history("Anything?"), targets=[INST], allow_web=False, search=tool)
+        chat(delta, _history("Anything?"), targets=[INST], allow_web=False, search=tool)
     )
 
     assert tool.queries == []
@@ -173,11 +173,11 @@ def test_web_enabled_labels_web_citations_and_persists_nothing(tmp_engine):
         ]
     )
     tool = CountingSearch(hits)
-    rig = FakeRig(tmp_engine, llm, ROUTING)
+    delta = FakeRig(tmp_engine, llm, ROUTING)
     before = _row_counts(tmp_engine)
 
     reply = asyncio.run(
-        chat(rig, _history("Anything?"), targets=[INST], allow_web=True, search=tool)
+        chat(delta, _history("Anything?"), targets=[INST], allow_web=True, search=tool)
     )
 
     assert tool.queries == ["solar demand"]
@@ -193,10 +193,10 @@ def test_web_enabled_labels_web_citations_and_persists_nothing(tmp_engine):
 
 
 def test_unrouted_chat_task_raises_loud_keyerror(tmp_engine):
-    rig = FakeRig(tmp_engine, FakeChatLLM([]), {"analyse": "test/model"})
+    delta = FakeRig(tmp_engine, FakeChatLLM([]), {"analyse": "test/model"})
 
     with pytest.raises(KeyError, match=r"no model routed for task 'chat'"):
-        asyncio.run(chat(rig, _history("Anything?"), targets=[INST]))
+        asyncio.run(chat(delta, _history("Anything?"), targets=[INST]))
 
 
 def test_offline_search_tool_returns_no_hits():
@@ -242,16 +242,16 @@ def test_chat_screen_round_trip(tmp_engine, monkeypatch, tmp_path):
     _write_targets(tmp_path, monkeypatch)
     seed_bars(tmp_engine, INST, n=3)
     llm = FakeChatLLM([{"answer": "AAPL closed at 100.00.", "citations": ["bar:1"]}])
-    rig = FakeRig(tmp_engine, llm, ROUTING)
+    delta = FakeRig(tmp_engine, llm, ROUTING)
 
     async def run() -> None:
         app = App()
         async with app.run_test(size=(120, 40)) as pilot:
-            screen = Chat(rig)
+            screen = Chat(delta)
             app.push_screen(screen)
             await pilot.pause()
             assert screen.name == "chat"
-            table = screen.query_one("#chat-targets", RiggerTable)
+            table = screen.query_one("#chat-targets", DeltaTable)
             assert table.row_count == 1
             # Every configured target starts in scope; the header says so.
             assert screen.scope == {"aapl"}
@@ -287,12 +287,12 @@ def test_chat_screen_keys_drive_scope_web_citations_and_clear(tmp_engine, monkey
     _write_targets(tmp_path, monkeypatch)
     seed_bars(tmp_engine, INST, n=3)
     llm = FakeChatLLM([{"answer": "Two bars.", "citations": ["bar:1", "bar:2"]}])
-    rig = FakeRig(tmp_engine, llm, ROUTING)
+    delta = FakeRig(tmp_engine, llm, ROUTING)
 
     async def run() -> None:
         app = App()
         async with app.run_test(size=(120, 40)) as pilot:
-            screen = Chat(rig)
+            screen = Chat(delta)
             app.push_screen(screen)
             await pilot.pause()
             # Letters typed into the prompt stay in the prompt.
@@ -305,7 +305,7 @@ def test_chat_screen_keys_drive_scope_web_citations_and_clear(tmp_engine, monkey
             screen.query_one("#chat-input", Input).value = ""
             # Targets: t focuses, space toggles, a flips all.
             await pilot.press("t")
-            assert screen.query_one("#chat-targets", RiggerTable).has_focus
+            assert screen.query_one("#chat-targets", DeltaTable).has_focus
             await pilot.press("space")
             assert screen.scope == set()
             await pilot.press("a")

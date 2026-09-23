@@ -1,4 +1,4 @@
-# Rigger TUI Style — "One Terminal"
+# Delta TUI Style — "One Terminal"
 
 > **Status: not started.** Written 17 September 2026 against `feat/chrome-redesign`
 > at `d7d0606`. Successor to `TUI_REDESIGN_PLAN.md`, which is delivered and
@@ -40,7 +40,7 @@ The split is systemic, not local to one screen:
    (`model_picker.py`) — skip `Dialog` and re-implement it, so they render with no
    frame, no backdrop dim and no centring. `HelpScreen` copies `Dialog`'s CSS by
    hand. `provider_picker.py:88` and `model_picker.py:68` use raw `DataTable`
-   instead of `RiggerTable`, giving **three different table cursor behaviours**.
+   instead of `DeltaTable`, giving **three different table cursor behaviours**.
    `help.py` hand-rolls the exact grid `KeyGrid` exists to draw. `KeyStrip` exists
    and **only Theses uses it**.
 3. **Constants are copy-pasted, not shared.** **Six modal widths**
@@ -92,7 +92,7 @@ Target shape — verified working on Textual 8.2.8, no custom rendering needed:
   `app.current_theme.to_color_system().generate()` — the pattern already in
   `theses.py:350-352`. Do not add a fifth colouring mechanism.
 - **Screens that mount standalone must keep working.** Layout for shared widgets
-  lives in `DEFAULT_CSS` on the widget class, not in `rigger.tcss` — see the
+  lives in `DEFAULT_CSS` on the widget class, not in `delta.tcss` — see the
   docstrings in `widgets.py:1-11` and `shell.py:1-11`.
 - **80×24 must not clip.** A border costs 2 rows where the winbar cost 1, so every
   pane gets **+1 row**. Against that, retiring the `KeyStrip` row (§2.3) and the
@@ -103,7 +103,7 @@ Target shape — verified working on Textual 8.2.8, no custom rendering needed:
 
 ---
 
-## 1. Primitives — `widgets.py`, `theme.py`, `rigger.tcss`
+## 1. Primitives — `widgets.py`, `theme.py`, `delta.tcss`
 
 Everything else follows from this section. No screen should carry its own frame or
 chrome after it.
@@ -125,7 +125,7 @@ Replaces the hand-toggled `-tab-active` Button hack at `research.py:620-624`, wh
 currently collides with the permanently-primary `#report-generate` (`:153`) so two
 buttons read as primary at once.
 
-**De-chrome the stock widgets** globally in `rigger.tcss`, once:
+**De-chrome the stock widgets** globally in `delta.tcss`, once:
 `Button { border: none; height: 1 }` (kills the `hkey` slab), `Select` flattened off
 its `panel` border, `Input` to the one-row left-bar treatment `ThesisForm`
 (`theses.py:65-93`) already proved, and an inverted `DataTable` header.
@@ -160,7 +160,7 @@ Same pattern per screen — repetitive, not novel:
    (`Refresh company`, `Load more`), **`targets.py`** (group collapse/expand),
    **`help.py`** (switch tabs).
 5. Route the four rogue modals through `Dialog`; swap the two raw `DataTable`s for
-   `RiggerTable`; move `help.py` onto `KeyGrid`.
+   `DeltaTable`; move `help.py` onto `KeyGrid`.
 6. Settle the vocabulary — one word each for evidence, watchlist and gather — and
    one key notation (`[ a ]`) everywhere, including `help.py`'s prose.
 
@@ -217,8 +217,8 @@ Small, independent, worth landing regardless of the rest:
    - every `show=True` binding is advertised somewhere on its screen — a pane's
      `hints` or, failing that, a `KeyStrip` — and no screen does both;
    - every modal subclasses `Dialog`;
-   - every `DataTable` in a screen is a `RiggerTable`.
-4. **Live run** — `uv run rig`, then walk it: `1` watchlist → `2` evidence → `3`
+   - every `DataTable` in a screen is a `DeltaTable`.
+4. **Live run** — `uv run delta`, then walk it: `1` watchlist → `2` evidence → `3`
    report → `4` theses → `5` ask, using only the keyboard. Anything that needs the
    mouse is a bug.
 5. **Compare against the canvas** — https://claude.ai/artifact/3Hcgp7FmoWzwv5ZGTbhajt
@@ -226,10 +226,10 @@ Small, independent, worth landing regardless of the rest:
 
 ## 6. Suggested commit order
 
-1. `feat(tui): bordered Pane with border-title hotkeys` — `widgets.py`, `rigger.tcss`
-2. `feat(tui): ActionChip and TabStrip, retire stock Buttons` — `widgets.py`, `rigger.tcss`
+1. `feat(tui): bordered Pane with border-title hotkeys` — `widgets.py`, `delta.tcss`
+2. `feat(tui): ActionChip and TabStrip, retire stock Buttons` — `widgets.py`, `delta.tcss`
 3. `feat(tui): evidence-kind colours and shared layout constants` — `theme.py`, `widgets.py`, `shell.py`
-4. `refactor(tui): route every modal through Dialog and RiggerTable` — pickers, `help.py`
+4. `refactor(tui): route every modal through Dialog and DeltaTable` — pickers, `help.py`
 5. `feat(tui): key strips and missing bindings on every screen` — the sweep
 6. `feat(tui): evidence rows by kind, collapsed price series, readable preview` — `research.py`
 7. `fix(tui): signed change colour, dead key hint, phantom control name`

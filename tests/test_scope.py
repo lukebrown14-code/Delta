@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from rigger.core.models import Instrument
-from rigger.core.plugin import DataPlugin, Scope, parse_scope
+from delta.core.models import Instrument
+from delta.core.plugin import DataPlugin, Scope, parse_scope
 
 
 def _inst(

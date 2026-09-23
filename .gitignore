@@ -6,7 +6,7 @@ __pycache__/
 .venv/
 *.pyc
 .claude/
-/data/.rigger_state.json
+/data/.delta_state.json
 /tui-shots/
 /tui-shots-live/
 /tui-shots-real/

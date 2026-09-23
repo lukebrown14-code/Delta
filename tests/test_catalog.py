@@ -9,24 +9,25 @@ import time
 import httpx
 import respx
 from textual.app import App
-from textual.widgets import DataTable, Input
+from textual.widgets import DataTable, Input, OptionList
 
-from rigger.core.config import load_toml
-from rigger.llm.catalog import (
+from delta.core.config import load_toml
+from delta.llm.catalog import (
     CATALOG_PATH,
     ModelInfo,
     _read_cache_entry,
     _write_cache,
     cached_catalog,
     catalog,
+    set_llm_model,
     set_llm_route,
     set_plugin_model,
 )
-from rigger.llm.providers import (
+from delta.llm.providers import (
     OPENROUTER_BASE_URL,
     OpenRouterProvider,
 )
-from rigger.tui.screens.model_picker import ModelPicker
+from delta.tui.screens.model_picker import ModelPicker
 
 MODELS_URL = f"{OPENROUTER_BASE_URL}/models"
 
@@ -152,6 +153,22 @@ def test_set_llm_route_round_trips(monkeypatch, tmp_path):
     assert routing == {"analyse": "anthropic/claude-sonnet-4", "extract": "old/model"}
 
 
+def test_set_llm_model_round_trips_and_leaves_routing_alone(monkeypatch, tmp_path):
+    """The one-model setting writes [llm] model and keeps legacy routing rows."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "config.toml").write_text(
+        '[llm]\nprovider = "openrouter"\n\n[llm.routing]\nextract = "old/model"\n',
+        encoding="utf-8",
+    )
+
+    set_llm_model("anthropic/claude-sonnet-4")
+
+    llm = load_toml()["llm"]
+    assert llm["model"] == "anthropic/claude-sonnet-4"
+    assert llm["provider"] == "openrouter"
+    assert llm["routing"] == {"extract": "old/model"}
+
+
 def test_set_plugin_model_round_trips_and_none_removes(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     (tmp_path / "config.toml").write_text("[plugins.sec_edgar]\nenabled = true\n", encoding="utf-8")
@@ -186,6 +203,94 @@ def test_model_picker_filter_and_enter_selects(monkeypatch, tmp_path):
 
     asyncio.run(run())
     assert picked == [SONNET]
+
+
+def test_model_picker_autocomplete_browses_and_picks(monkeypatch, tmp_path):
+    """Typing opens the dropdown, arrows browse it, enter adopts the highlight."""
+    monkeypatch.chdir(tmp_path)
+    _write_cache("openrouter", [SONNET, GPT, LLAMA])
+    picked: list[ModelInfo] = []
+
+    async def run():
+        app = App()
+        async with app.run_test() as pilot:
+            picker = ModelPicker(picked.append, provider_name="openrouter")
+            app.push_screen(picker)
+            await pilot.pause()
+            picker.query_one("#mp-filter", Input).focus()
+            await pilot.press("4")  # hits sonnet-4 and gpt-4o, not llama
+            await pilot.pause()
+            suggestions = picker.query_one("#mp-suggestions", OptionList)
+            assert suggestions.display
+            assert [option.id for option in suggestions.options] == [SONNET.id, GPT.id]
+            await pilot.press("down")
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+
+    asyncio.run(run())
+    assert picked == [GPT]
+
+
+def test_model_picker_escape_closes_suggestions_first(monkeypatch, tmp_path):
+    """One escape shuts the dropdown; the dialog only leaves on the second."""
+    monkeypatch.chdir(tmp_path)
+    _write_cache("openrouter", [SONNET, GPT])
+    picked: list[ModelInfo] = []
+
+    async def run():
+        app = App()
+        async with app.run_test() as pilot:
+            picker = ModelPicker(picked.append, provider_name="openrouter")
+            app.push_screen(picker)
+            await pilot.pause()
+            picker.query_one("#mp-filter", Input).focus()
+            picker.query_one("#mp-filter", Input).value = "sonnet"
+            await pilot.pause()
+            assert picker.query_one("#mp-suggestions", OptionList).display
+            await pilot.press("escape")
+            await pilot.pause()
+            assert app.screen is picker  # still open…
+            assert not picker.query_one("#mp-suggestions", OptionList).display  # …dropdown shut
+            await pilot.press("escape")
+            await pilot.pause()
+            assert app.screen is not picker
+
+    asyncio.run(run())
+    assert picked == []
+
+
+@respx.mock
+def test_model_picker_empty_cache_fetches_on_open(monkeypatch, tmp_path):
+    """No cache: the picker fetches the catalog on open instead of waiting for ctrl+r."""
+    monkeypatch.chdir(tmp_path)
+    respx.get(MODELS_URL).mock(return_value=httpx.Response(200, json=MODELS_PAYLOAD))
+    picked: list[ModelInfo] = []
+    provider = OpenRouterProvider(api_key="k")
+
+    async def run():
+        app = App()
+        async with app.run_test() as pilot:
+            picker = ModelPicker(picked.append, provider=provider, provider_name="openrouter")
+            app.push_screen(picker)
+            await pilot.pause()
+            table = picker.query_one("#mp-table", DataTable)
+            for _ in range(40):
+                await pilot.pause(0.05)
+                if table.row_count:
+                    break
+            assert table.row_count == 3
+            picker.query_one("#mp-filter", Input).value = "gpt"
+            await pilot.pause()
+            suggestions = picker.query_one("#mp-suggestions", OptionList)
+            assert suggestions.display
+            assert [option.id for option in suggestions.options] == [GPT.id]
+            await pilot.press("enter")
+            await pilot.pause()
+
+    asyncio.run(run())
+    assert picked == [GPT]
+    assert cached_catalog("openrouter")  # the fetched catalog landed in the disk cache
 
 
 def test_model_picker_empty_catalog_degrades_to_free_text(monkeypatch, tmp_path):
