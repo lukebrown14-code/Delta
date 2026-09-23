@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 import pandas as pd
+import pytest
 import yfinance
 
 from delta.asset_metrics import (
@@ -12,6 +13,7 @@ from delta.asset_metrics import (
     _group_values,
     _values,
     chart_window,
+    clear_metrics_cache,
     fetch_asset_metrics,
     profile_for,
 )
@@ -19,6 +21,14 @@ from delta.core.models import Instrument
 from tests.conftest import seed_bars
 
 AAPL = Instrument(id="US:AAPL", market="us", symbol="AAPL", currency="USD")
+
+
+@pytest.fixture(autouse=True)
+def _no_cache_leak():
+    """The B12 cache must never bleed one test's canned answer into the next."""
+    clear_metrics_cache()
+    yield
+    clear_metrics_cache()
 
 
 def _frame(closes: list[float]) -> pd.DataFrame:
@@ -120,7 +130,9 @@ def test_equity_groups_fit_the_eight_card_pool():
         "Analyst View",
         "Price Context",
     }
-    assert {"Valuation", "Analyst View", "Price Context", "Size", "Trading & Ownership"} <= set(grouped)
+    assert {"Valuation", "Analyst View", "Price Context", "Size", "Trading & Ownership"} <= set(
+        grouped
+    )
 
 
 def test_bond_fund_style_keys_fire_for_etf_bonds():
@@ -161,9 +173,7 @@ def test_analyst_estimates_merge_into_the_analyst_view(monkeypatch):
 
 
 def test_missing_estimate_endpoints_do_not_fail_the_fetch(monkeypatch):
-    monkeypatch.setattr(
-        yfinance, "Ticker", _fake_ticker({("1mo", "1d"): _frame([100.0, 110.0])})
-    )
+    monkeypatch.setattr(yfinance, "Ticker", _fake_ticker({("1mo", "1d"): _frame([100.0, 110.0])}))
     metric = fetch_asset_metrics(AAPL, "month")
     assert metric.error is None
     assert "EPS est (next q)" not in metric.groups.get("Analyst View", {})
@@ -262,3 +272,94 @@ def test_all_time_falls_back_to_local_bars_when_provider_is_empty(tmp_engine, mo
     assert metric.series_times[-1].startswith(str(datetime.now(UTC).year))
     assert metric.values["Current price"] == "139.50"
     assert metric.change_label == "+39.5%"
+
+
+def test_metric_tables_load_from_toml():
+    """C10: the tables and glossary come from the data file, order preserved."""
+    assert len(_TABLES) == 8  # equity..other
+    assert "equity" in _TABLES
+    keys, groups = _TABLES["equity"]
+    # First equity key and first group keep their file order.
+    assert next(iter(keys)) == "Revenue growth"
+    assert groups[0][0] == "Profitability"
+    # A known help entry survives the move.
+    assert METRIC_HELP["P/E"] == "Price per dollar of past-year profit."
+
+
+def test_fetch_is_cached_briefly(monkeypatch):
+    """B12: a repeat fetch within the TTL reuses the cached answer."""
+    calls = {"n": 0}
+
+    class CountingTicker(_fake_ticker({("1mo", "1d"): _frame([100.0, 110.0])})):
+        def __init__(self, symbol: str) -> None:
+            super().__init__(symbol)
+            calls["n"] += 1
+
+    monkeypatch.setattr(yfinance, "Ticker", CountingTicker)
+    clear_metrics_cache()
+    first = fetch_asset_metrics(AAPL, "month")
+    second = fetch_asset_metrics(AAPL, "month")
+    assert calls["n"] == 1, "the second call should hit the cache, not Yahoo"
+    assert first is second
+
+
+def test_fetch_cache_is_keyed_by_range(monkeypatch):
+    """B12: the same instrument under two ranges still fetches twice."""
+    calls = {"n": 0}
+
+    class CountingTicker(_fake_ticker({("1mo", "1d"): _frame([100.0, 110.0])})):
+        def __init__(self, symbol: str) -> None:
+            super().__init__(symbol)
+            calls["n"] += 1
+
+    monkeypatch.setattr(yfinance, "Ticker", CountingTicker)
+    clear_metrics_cache()
+    fetch_asset_metrics(AAPL, "1m")
+    fetch_asset_metrics(AAPL, "1y")
+    assert calls["n"] == 2
+
+
+def test_new_ranges_map_to_yahoo_periods(monkeypatch):
+    """K8: the 1D/5D/1M/6M/YTD/1Y ranges request the right Yahoo windows."""
+    requested: list[tuple[str, str]] = []
+
+    class RecordingTicker(_fake_ticker({})):
+        def history(self, period: str, interval: str, auto_adjust: bool) -> pd.DataFrame:
+            requested.append((period, interval))
+            return _frame([100.0, 110.0])
+
+    monkeypatch.setattr(yfinance, "Ticker", RecordingTicker)
+    clear_metrics_cache()
+    for range_name, period in (
+        ("1d", "1d"),
+        ("5d", "5d"),
+        ("1m", "1mo"),
+        ("6m", "6mo"),
+        ("ytd", "ytd"),
+        ("1y", "1y"),
+        ("all", "max"),
+    ):
+        requested.clear()
+        fetch_asset_metrics(AAPL, range_name)
+        assert requested and requested[0][0] == period, (range_name, requested)
+
+
+def test_52_week_spread_is_captured(monkeypatch):
+    """K7: the raw 52-week high/low feed the header position bar."""
+
+    class TickerWithSpread(_fake_ticker({("1mo", "1d"): _frame([80.0, 90.0])})):
+        info = {"fiftyTwoWeekHigh": 120.0, "fiftyTwoWeekLow": 60.0}
+
+    monkeypatch.setattr(yfinance, "Ticker", TickerWithSpread)
+    clear_metrics_cache()
+    metric = fetch_asset_metrics(AAPL, "month")
+    assert metric.week_52_high == 120.0
+    assert metric.week_52_low == 60.0
+
+
+def test_52_week_spread_defaults_to_none_when_absent(monkeypatch):
+    monkeypatch.setattr(yfinance, "Ticker", _fake_ticker({("1mo", "1d"): _frame([80.0, 90.0])}))
+    clear_metrics_cache()
+    metric = fetch_asset_metrics(AAPL, "month")
+    assert metric.week_52_high is None
+    assert metric.week_52_low is None
