@@ -14,6 +14,7 @@ from textual.widgets.option_list import Option
 
 from delta.llm.catalog import ModelInfo, cached_catalog, catalog
 from delta.llm.providers import Provider
+from delta.tui.components import SuggestionList
 from delta.tui.widgets import (
     MODAL_WIDTH_WIDE,
     ActionChip,
@@ -107,12 +108,11 @@ class ModelPicker(Dialog):
         self._models: list[ModelInfo] = []
         self._visible: list[ModelInfo] = []
         self._suggestions: list[ModelInfo] = []
-        self._highlight = 0
         self.dialog_title = f"select a model ({self.provider_name or 'any'})"
 
     def compose_dialog(self) -> ComposeResult:
         yield Input(placeholder="filter by id or name", id="mp-filter")
-        yield OptionList(id="mp-suggestions")
+        yield SuggestionList(id="mp-suggestions")
         yield DeltaTable(id="mp-table")
         yield Horizontal(
             ActionChip("ctrl+r", "refresh", id="mp-refresh"),
@@ -123,9 +123,6 @@ class ModelPicker(Dialog):
     def on_mount(self) -> None:
         table = self.query_one("#mp-table", DataTable)
         table.add_columns("Model", "Context", "$/1M in", "$/1M out")
-        # Suggestions are browsed through the filter's arrows; the list itself
-        # must never steal focus or tab stops.
-        self.query_one("#mp-suggestions", OptionList).can_focus = False
         models = cached_catalog(self.provider_name)
         self._load(models)
         # An empty cache means autocomplete has nothing to suggest, so fetch
@@ -167,19 +164,13 @@ class ModelPicker(Dialog):
         return (starts + rest)[: self.SUGGESTION_CAP]
 
     def _update_suggestions(self, value: str) -> None:
-        options = self.query_one("#mp-suggestions", OptionList)
-        options.clear_options()
         self._suggestions = self._matching(value)
-        for m in self._suggestions:
-            prompt = Text.assemble(
-                (m.id, "bold"),
-                # Rich styles need a resolved colour, not a CSS token name.
-                (f" — {m.name}", token_color(self.app, "text-muted", "dim")),
-            )
-            options.add_option(Option(prompt, id=m.id))
-        self._highlight = 0
-        if self._suggestions:
-            options.highlighted = 0
+        # Rich styles need a resolved colour, not a CSS token name.
+        muted = token_color(self.app, "text-muted", "dim")
+        self.query_one("#mp-suggestions", SuggestionList).show(
+            Option(Text.assemble((m.id, "bold"), (f" — {m.name}", muted)), id=m.id)
+            for m in self._suggestions
+        )
         self.set_class(bool(self._suggestions), "-suggesting")
 
     def _update_rows(self) -> None:
@@ -219,22 +210,16 @@ class ModelPicker(Dialog):
 
     def on_key(self, event: Any) -> None:
         """Arrows browse the dropdown while the filter keeps focus."""
-        if getattr(self.focused, "id", None) != "mp-filter" or not self._suggestions:
-            return
-        if event.key not in {"down", "up"}:
-            return
-        event.stop()
-        event.prevent_default()
-        delta = 1 if event.key == "down" else -1
-        self._highlight = (self._highlight + delta) % len(self._suggestions)
-        self.query_one("#mp-suggestions", OptionList).highlighted = self._highlight
+        if getattr(self.focused, "id", None) == "mp-filter":
+            self.query_one("#mp-suggestions", SuggestionList).browse(event)
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         if event.input.id != "mp-filter":
             return
         # Enter with the dropdown open adopts the highlighted suggestion.
         if self._suggestions:
-            self._select(self._suggestions[min(self._highlight, len(self._suggestions) - 1)])
+            index = self.query_one("#mp-suggestions", SuggestionList).highlighted_index
+            self._select(self._suggestions[index])
             return
         value = event.value.strip()
         if not self._models:

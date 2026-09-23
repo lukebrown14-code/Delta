@@ -23,6 +23,7 @@ from textual.screen import Screen
 from textual.widgets import Static
 
 from delta import services
+from delta.tui.components import goto
 from delta.tui.widgets import StatusDot
 
 NAV_ITEMS: list[tuple[str, str, str]] = [
@@ -45,6 +46,11 @@ CHROME_ITEMS: list[tuple[str, str, str]] = [
 OFF_BAR_ITEMS: list[tuple[str, str, str]] = []
 
 ALL_ITEMS: list[tuple[str, str, str]] = NAV_ITEMS + CHROME_ITEMS + OFF_BAR_ITEMS
+
+#: The one screen breakpoint: below this terminal width a multi-pane screen
+#: stacks its panes or drills into one at a time. Screens style against the
+#: ``-narrow`` class ``DeltaScreen.apply_breakpoint`` sets, never their own width.
+NARROW_WIDTH = 100
 
 #: The bar's trailing hint. ``g`` opens the Go picker; the caret notation this
 #: used to carry pointed at ctrl+p, which is Textual's command palette, not Go.
@@ -235,7 +241,7 @@ class StatusBar(Horizontal):
                 self._freshness.update("data none")
                 self._dot.set_state("error")
             self._model.update(str(getattr(self.delta.cfg, "llm_provider", "") or "—"))
-            total = sum(row.cost_usd for row in services.llm_costs(self.delta.engine))
+            total = services.total_spend(self.delta.engine)
             self._spend.update(f"${total:.2f}")
         except Exception:
             self._freshness.update("data ?")
@@ -298,6 +304,17 @@ class DeltaScreen(Screen):
         raise NotImplementedError
         yield  # pragma: no cover
 
+    @property
+    def narrow(self) -> bool:
+        """True below the shared breakpoint (``NARROW_WIDTH``)."""
+        return self.size.width < NARROW_WIDTH
+
+    def apply_breakpoint(self) -> bool:
+        """Set the screen's ``-narrow`` class from its width and return it."""
+        narrow = self.narrow
+        self.set_class(narrow, "-narrow")
+        return narrow
+
     def set_context(self, text: str) -> None:
         """Update the status bar's context cell, if it is mounted."""
         try:
@@ -306,9 +323,7 @@ class DeltaScreen(Screen):
             pass
 
     def on_nav_key_selected(self, event: NavKey.Selected) -> None:
-        switch = getattr(self.app, "action_switch_screen", None)
-        if callable(switch):
-            switch(event.screen_name)
+        goto(self.app, event.screen_name)
 
     async def on_screen_resume(self) -> None:
         self.query_one(StatusBar).set_active(self.name or "")

@@ -102,6 +102,33 @@ def test_llm_costs_groups_by_task_and_model(tmp_engine):
     assert rows == [services.CostRow("analyse", "m", 3, 1.5)]
 
 
+def test_total_spend_sums_all_calls_and_respects_since(tmp_engine):
+    assert services.total_spend(tmp_engine) == 0.0
+    with Session(tmp_engine) as session:
+        for i, (task, ts) in enumerate(
+            [("analyse", datetime(2026, 1, 1, tzinfo=UTC)), ("chat", datetime.now(UTC))]
+        ):
+            session.add(
+                LLMCallTable(
+                    id=f"t{i}",
+                    ts=ts,
+                    task=task,
+                    model="m",
+                    prompt_version="v",
+                    prompt_hash=f"t{i}",
+                    input_tokens=1,
+                    output_tokens=1,
+                    cost_usd=0.25,
+                    latency_ms=1,
+                    cached=False,
+                )
+            )
+        session.commit()
+    assert services.total_spend(tmp_engine) == 0.5
+    assert services.total_spend(tmp_engine, since="2026-06-01") == 0.25
+    assert [row.task for row in services.llm_costs(tmp_engine)] == ["analyse", "chat"]
+
+
 def test_target_add_and_remove(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     (tmp_path / "config.toml").write_text('[universe]\nus = ["AAPL"]\n', encoding="utf-8")
