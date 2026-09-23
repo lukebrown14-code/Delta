@@ -138,3 +138,46 @@ def test_public_apis_create_tables_idempotently(tmp_engine):
     created = _create(tmp_engine)
     assert decisions.review_history(tmp_engine, created.id) == []
     assert decisions.due_reviews(tmp_engine, as_of=date(2026, 4, 1)) == [created]
+
+
+def test_update_decision_edits_framing_and_keeps_identity(tmp_engine):
+    created = _create(tmp_engine)
+    updated = decisions.update_decision(
+        tmp_engine,
+        created.id,
+        instrument_id=OTHER,
+        rationale="Revised rationale.",
+        valuation_context="25x forward earnings.",
+        time_horizon="3 years",
+        review_date=date(2026, 6, 1),
+        invalidation_criteria="Growth stalls.",
+    )
+
+    assert updated.id == created.id
+    assert updated.created_at == created.created_at
+    assert updated.instrument_id == OTHER
+    assert updated.rationale == "Revised rationale."
+    assert decisions.get_decision(tmp_engine, created.id).rationale == "Revised rationale."
+    with pytest.raises(KeyError, match="unknown decision"):
+        decisions.update_decision(
+            tmp_engine,
+            "nope",
+            instrument_id=INST,
+            rationale="x",
+            valuation_context="y",
+            time_horizon="z",
+            review_date=date(2026, 4, 1),
+            invalidation_criteria="w",
+        )
+
+
+def test_delete_decision_removes_decision_and_reviews(tmp_engine):
+    created = _create(tmp_engine)
+    decisions.append_review(tmp_engine, created.id, "A note.")
+    decisions.delete_decision(tmp_engine, created.id)
+
+    assert decisions.list_decisions(tmp_engine) == []
+    with pytest.raises(KeyError, match="unknown decision"):
+        decisions.get_decision(tmp_engine, created.id)
+    with pytest.raises(KeyError, match="unknown decision"):
+        decisions.delete_decision(tmp_engine, "nope")

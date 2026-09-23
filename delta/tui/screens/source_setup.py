@@ -6,57 +6,77 @@ from collections.abc import Callable
 from typing import Any
 
 from textual.app import ComposeResult
-from textual.binding import Binding
-from textual.containers import Horizontal, Vertical
-from textual.screen import ModalScreen
-from textual.widgets import Button, Input, Static
+from textual.containers import Horizontal
+from textual.widgets import Button, Input, Label, Static
 
 from delta.core.plugin import DataProviderSpec
+from delta.tui.widgets import Dialog, hint_markup
 
 
-class SourceSetupModal(ModalScreen[tuple[dict[str, str], list[str]] | None]):
+class SourceSetupModal(Dialog):
     """Collect only the explicitly declared non-secret settings for a source."""
 
-    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+    dialog_title = "configure source"
+    dialog_hint = hint_markup(("enter", "save"), ("esc", "cancel"))
 
     DEFAULT_CSS = """
-    SourceSetupModal > Vertical { width: 68; }
-    SourceSetupModal Input { margin: 1 0 0 0; }
+    SourceSetupModal #source-notice { height: auto; margin: 0 0 1 0; }
+    SourceSetupModal .form-row { height: 1; margin: 1 0 0 0; }
+    SourceSetupModal .form-row Label { width: 14; padding: 1 1 0 0; color: $text-muted; }
+    SourceSetupModal .form-row Input { width: 1fr; margin: 0; }
+    SourceSetupModal #source-actions { height: 1; margin-top: 1; }
+    SourceSetupModal #source-actions Button {
+        height: 1; min-width: 0; border: none; padding: 0 1; margin: 0 1 0 0;
+    }
     """
 
     def __init__(self, spec: DataProviderSpec, current: dict[str, Any]) -> None:
         super().__init__()
         self.spec = spec
         self.current = current
+        self.dialog_title = f"configure {spec.label}"
 
-    def compose(self) -> ComposeResult:
-        scope = self.current.get("scope", {})
-        markets = ",".join(scope.get("markets", [])) if isinstance(scope, dict) else ""
-        yield Vertical(
-            Static(f"[bold]Configure {self.spec.label}[/bold]", markup=True),
-            Static(self.spec.notice, markup=False) if self.spec.notice else Static("", markup=False),
-            *(
+    def compose_dialog(self) -> ComposeResult:
+        if self.spec.notice:
+            yield Static(self.spec.notice, id="source-notice", markup=False)
+        for field in self.spec.fields:
+            yield Horizontal(
+                Label(field.label),
                 Input(
                     value=str(self.current.get(field.name, "")),
                     placeholder=field.placeholder or field.label,
                     password=field.secret,
                     id=f"source-{field.name}",
-                )
-                for field in self.spec.fields
-            ),
-            Input(value=markets, placeholder="Markets to attach, e.g. lse,asx (optional)", id="source-markets"),
-            Horizontal(Button("Save", id="source-save"), Button("Cancel", id="source-cancel")),
+                ),
+                classes="form-row",
+            )
+        scope = self.current.get("scope", {})
+        markets = ",".join(scope.get("markets", [])) if isinstance(scope, dict) else ""
+        yield Horizontal(
+            Label("markets"),
+            Input(value=markets, placeholder="lse,asx (optional)", id="source-markets"),
+            classes="form-row",
+        )
+        yield Horizontal(
+            Button("Save", id="source-save", variant="primary"),
+            Button("Cancel", id="source-cancel"),
+            id="source-actions",
         )
 
+    def on_mount(self) -> None:
+        inputs = self.query(Input)
+        if inputs:
+            inputs.first().focus()
+
     def on_input_submitted(self, event: Input.Submitted) -> None:
-        if event.input.id and event.input.id.startswith("source-"):
+        if event.input.id == "source-markets":
             self._save()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "source-save":
             self._save()
         else:
-            self.action_cancel()
+            self.dismiss(None)
 
     def _save(self) -> None:
         values = {
@@ -73,9 +93,6 @@ class SourceSetupModal(ModalScreen[tuple[dict[str, str], list[str]] | None]):
             if market.strip()
         ]
         self.dismiss((values, markets))
-
-    def action_cancel(self) -> None:
-        self.dismiss(None)
 
 
 async def configure_source(app: Any, delta: Any, name: str, refresh: Callable[[], Any]) -> None:
