@@ -9,7 +9,7 @@ import time
 import httpx
 import respx
 from textual.app import App
-from textual.widgets import DataTable, Input
+from textual.widgets import DataTable, Input, OptionList
 
 from delta.core.config import load_toml
 from delta.llm.catalog import (
@@ -203,6 +203,61 @@ def test_model_picker_filter_and_enter_selects(monkeypatch, tmp_path):
 
     asyncio.run(run())
     assert picked == [SONNET]
+
+
+def test_model_picker_autocomplete_browses_and_picks(monkeypatch, tmp_path):
+    """Typing opens the dropdown, arrows browse it, enter adopts the highlight."""
+    monkeypatch.chdir(tmp_path)
+    _write_cache("openrouter", [SONNET, GPT, LLAMA])
+    picked: list[ModelInfo] = []
+
+    async def run():
+        app = App()
+        async with app.run_test() as pilot:
+            picker = ModelPicker(picked.append, provider_name="openrouter")
+            app.push_screen(picker)
+            await pilot.pause()
+            picker.query_one("#mp-filter", Input).focus()
+            await pilot.press("4")  # hits sonnet-4 and gpt-4o, not llama
+            await pilot.pause()
+            suggestions = picker.query_one("#mp-suggestions", OptionList)
+            assert suggestions.display
+            assert [option.id for option in suggestions.options] == [SONNET.id, GPT.id]
+            await pilot.press("down")
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+
+    asyncio.run(run())
+    assert picked == [GPT]
+
+
+def test_model_picker_escape_closes_suggestions_first(monkeypatch, tmp_path):
+    """One escape shuts the dropdown; the dialog only leaves on the second."""
+    monkeypatch.chdir(tmp_path)
+    _write_cache("openrouter", [SONNET, GPT])
+    picked: list[ModelInfo] = []
+
+    async def run():
+        app = App()
+        async with app.run_test() as pilot:
+            picker = ModelPicker(picked.append, provider_name="openrouter")
+            app.push_screen(picker)
+            await pilot.pause()
+            picker.query_one("#mp-filter", Input).focus()
+            picker.query_one("#mp-filter", Input).value = "sonnet"
+            await pilot.pause()
+            assert picker.query_one("#mp-suggestions", OptionList).display
+            await pilot.press("escape")
+            await pilot.pause()
+            assert app.screen is picker  # still open…
+            assert not picker.query_one("#mp-suggestions", OptionList).display  # …dropdown shut
+            await pilot.press("escape")
+            await pilot.pause()
+            assert app.screen is not picker
+
+    asyncio.run(run())
+    assert picked == []
 
 
 def test_model_picker_empty_catalog_degrades_to_free_text(monkeypatch, tmp_path):
