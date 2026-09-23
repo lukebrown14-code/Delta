@@ -746,8 +746,8 @@ def test_home_refreshes_twice_without_duplicate_ids(delta, monkeypatch, tmp_path
             for _ in range(3):
                 await home.refresh_view()
                 await pilot.pause()
-            assert len(app.screen.query("#system-db")) == 1
-            assert len(app.screen.query("#system-plugins")) == 1
+            assert len(app.screen.query("#agenda-reviews")) == 1
+            assert len(app.screen.query("#agenda-stale")) == 1
 
     asyncio.run(run())
 
@@ -918,7 +918,7 @@ def test_home_survives_several_seconds_of_ticks(delta, monkeypatch, tmp_path):
             for _ in range(12):
                 await pilot.pause(0.25)
             assert app._exception is None
-            assert len(app.screen.query("#system-db")) == 1
+            assert len(app.screen.query("#agenda-reviews")) == 1
             assert len(app.screen.query("#watch-head")) == 1
             assert "1,234.50" in _frame(app)
 

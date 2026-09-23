@@ -1,4 +1,4 @@
-"""Home: the desk overview — six btop-style boxes on a 2×3 grid.
+"""Home: the desk overview — a watchlist, an activity pulse and a to-do agenda.
 
 A ``DeltaScreen`` like every other panel, so the status bar is there where
 a new user lands and ``h`` round-trips cleanly. One header row (an inked
@@ -8,11 +8,13 @@ a new user lands and ``h`` round-trips cleanly. One header row (an inked
   otherwise, 40-close sparks) and ``since you last looked`` (new evidence,
   the pulse histogram, stale bars and stale reports);
 * middle — ``upcoming`` (calendar events) and ``theses`` (fleet health);
-* bottom — ``go`` (every app hotkey) and ``system`` (plugins, data, spend).
+* bottom — ``needs you today`` (the agenda: reviews due, falsifier hits,
+  earnings in the next week, stale sources — each line a jump key).
 
 Below 40 rows the middle row goes first and its content folds into two
 summary lines under the watchlist. Below 100 columns only the watchlist and
-go boxes survive, with a one-line system summary inside ``go``.
+the agenda survive. On a first run with no targets, the whole grid is
+replaced by the setup checklist (one key per step).
 
 Every letter key on Home is an app-level binding; the screen only adds the
 arrows, enter and tab, so nothing here can shadow navigation.
@@ -22,10 +24,10 @@ from __future__ import annotations
 
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from typing import Any
 
 from rich.text import Text
+from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
@@ -45,9 +47,7 @@ from delta.tui.widgets import (
     DeltaTable,
     Pane,
     PaneRow,
-    binding_key,
     hint_markup,
-    shown_bindings,
     token_color,
 )
 
@@ -64,26 +64,6 @@ QUOTE_PAINT_SECONDS = 0.5
 #: Below this height the middle row folds into the watchlist summary lines.
 TALL_HEIGHT = 40
 
-#: Short labels for the go grid, keyed by the Textual key name; anything not
-#: listed falls back to the binding's own description.
-GO_LABELS: dict[str, str] = {
-    "1": "home",
-    "2": "watchlist",
-    "3": "research",
-    "4": "theses",
-    "5": "ask",
-    "6": "decisions",
-    "c": "settings",
-    "m": "model",
-    "p": "provider",
-    "g": "go to…",
-    "question_mark": "help",
-    "q": "quit",
-    "f2": "theme",
-}
-#: Home itself: you are here, so the grid drops it and the border hint keeps it.
-GO_SKIP = {"h"}
-
 #: Health state -> theme text token for its dot.
 STATE_TOKEN: dict[str, str] = {
     "building": "text-success",
@@ -94,20 +74,18 @@ STATE_TOKEN: dict[str, str] = {
     "idle": "text-muted",
 }
 
+#: How far ahead the agenda looks for earnings.
+EARNINGS_WINDOW = timedelta(days=7)
 
-def go_items(bindings: Any) -> list[tuple[str, str, str]]:
-    """``(key, label, action)`` for every shown app binding except Home.
 
-    Derived from the bindings rather than written out, so the grid cannot
-    drift from the keys the app actually answers to.
-    """
-    items = []
-    for binding in shown_bindings(bindings):
-        if binding.key in GO_SKIP:
-            continue
-        label = GO_LABELS.get(binding.key, binding.description.casefold())
-        items.append((binding_key(binding), label, binding.action))
-    return items
+def _setup_link(check: services.Check) -> tuple[str, str]:
+    """The key and app action that resolves a setup-check step."""
+    name = check.name
+    if name.startswith("LLM provider"):
+        return "p", "show_provider_picker"
+    if name == "Price history":
+        return "2", "switch_screen('targets')"
+    return "c", "switch_screen('config')"
 
 
 def _plural(count: int, noun: str) -> str:
@@ -116,15 +94,6 @@ def _plural(count: int, noun: str) -> str:
 
 def _theses(count: int) -> str:
     return "1 thesis" if count == 1 else f"{count} theses"
-
-
-def _compact(count: int) -> str:
-    """41k / 1.9k / 96: table counts at the width the system box allows."""
-    if count >= 10_000:
-        return f"{count / 1000:.0f}k"
-    if count >= 1000:
-        return f"{count / 1000:.1f}k"
-    return str(count)
 
 
 def _when(ts: datetime, now: datetime) -> str:
@@ -207,7 +176,15 @@ class WatchRow(Horizontal):
         with suppress(Exception):
             self.query_one(".w-close", Static).update("—" if price is None else _price(price))
             chg = self.query_one(".w-chg", Static)
-            chg.update("" if price is None else "—" if pct is None else f"{pct:+.2f}%")
+            if price is None or pct is None:
+                glyph, value = "", "—"
+            elif pct > 0:
+                glyph, value = "▲ ", f"{pct:+.2f}%"
+            elif pct < 0:
+                glyph, value = "▼ ", f"{pct:+.2f}%"
+            else:
+                glyph, value = "", f"{pct:+.2f}%"
+            chg.update(f"{glyph}{value}")
             chg.set_class(bool(pct and pct > 0), "-up")
             chg.set_class(bool(pct and pct < 0), "-down")
             cell = self.query_one(".w-age", Static)
@@ -289,33 +266,29 @@ class WatchRows(Vertical):
             row.set_class(row.index == self.cursor, "-cursor")
 
 
-class GoCell(Horizontal):
-    """One ``▸ key label`` row in the go grid. Clickable: runs the app action."""
+class HomeLink(Horizontal):
+    """One ``▸ key label`` row in the agenda or the setup checklist.
 
-    def __init__(self, key: str, label: str, action: str) -> None:
-        super().__init__(classes="go-cell")
+    Clickable: runs the app action, so an agenda line or a setup step is a
+    jump, not a paragraph. The label is updated in place by the screen so
+    the rows never remount and keep their ids across refreshes.
+    """
+
+    def __init__(self, key: str, action: str, id: str | None = None) -> None:
+        super().__init__(id=id, classes="home-link")
         self.key = key
-        self.label = label
         self.action = action
 
     def compose(self) -> ComposeResult:
-        yield Static("▸", classes="go-glyph", markup=False)
-        yield Static(self.key, classes="go-key", markup=False)
-        yield Static(self.label, classes="go-label", markup=False)
+        yield Static("▸", classes="home-link-glyph", markup=False)
+        yield Static(self.key, classes="home-link-key", markup=False)
+        yield Static("", classes="home-link-label")
 
-    def retune(self, key: str, label: str, action: str) -> None:
-        """Repoint an existing cell, so the grid never remounts its children."""
-        self.key, self.label, self.action = key, label, action
-        self.query_one(".go-key", Static).update(key)
-        self.query_one(".go-label", Static).update(label)
+    def set_label(self, text: str) -> None:
+        self.query_one(".home-link-label", Static).update(text)
 
     async def on_click(self) -> None:
         await self.app.run_action(self.action)
-
-
-#: The system box's rows, in order. Mounted once in ``compose_content`` and
-#: updated in place, so their ids stay unique across refreshes.
-SYSTEM_ROWS = ("plugins", "data", "llm", "spend", "setup", "db")
 
 
 class Home(QuoteFeedMixin, DeltaScreen):
@@ -333,14 +306,12 @@ class Home(QuoteFeedMixin, DeltaScreen):
     Home #home-clock { width: 1fr; text-align: right; color: $text-muted; }
     Home #home-grid { height: 1fr; }
 
-    /* Wide and tall: 13 / 13 / 12 at 40 rows; the top two rows share what a
-       taller terminal adds. Folded (short or narrow): the middle row is gone
-       and the go row is as tall as its grid needs. */
+    /* Wide and tall: the top two rows share what a taller terminal adds. The
+       agenda row is fixed at four lines plus its border. Folded (short or
+       narrow): the middle row is gone. */
     Home #home-top { height: 1fr; }
     Home #home-mid { height: 1fr; }
-    Home #home-bottom { height: 12; }
-    Home.-folded #home-bottom { height: 8; }
-    Home.-narrow #home-bottom { height: 9; }
+    Home #home-bottom { height: 7; }
 
     /* watchlist */
     Home #watch-head { height: 1; color: $text-muted; }
@@ -397,36 +368,20 @@ class Home(QuoteFeedMixin, DeltaScreen):
     Home #upcoming-note { height: 1; padding: 0 1; color: $text-muted; }
     Home #theses-summary { height: 1; padding: 0 1; margin-bottom: 1; text-wrap: nowrap; text-overflow: ellipsis; }
 
-    /* go */
-    Home #go-grid {
-        height: auto;
-        margin-top: 1;
-        padding: 0 1;
-        layout: grid;
-        grid-size: 3;
-        grid-rows: 1;
-        grid-gutter: 0 1;
-    }
-    Home.-narrow #go-grid { grid-size: 4; margin-top: 0; }
-    Home .go-cell { height: 1; }
-    Home .go-glyph { width: 2; color: $text-primary; }
-    Home .go-key { width: 3; color: $text-primary; text-style: bold; }
-    Home .go-label { width: 1fr; color: $text-muted; }
-    Home .go-cell:hover .go-label { color: $foreground; }
-    Home #go-system {
-        height: 1;
-        margin-top: 1;
-        padding: 0 1;
-        color: $text-muted;
-        text-wrap: nowrap;
-        text-overflow: ellipsis;
-    }
+    /* agenda */
+    Home #agenda-rows { height: auto; padding: 0 1; }
+    Home .home-link { height: 1; }
+    Home .home-link-glyph { width: 2; color: $text-primary; }
+    Home .home-link-key { width: 3; color: $text-primary; text-style: bold; }
+    Home .home-link-label { width: 1fr; color: $text-muted; }
+    Home .home-link:hover .home-link-label { color: $foreground; }
 
-    /* system */
-    Home #system-rows { height: auto; padding: 0 1; }
-    Home .sys-row { height: 1; text-wrap: nowrap; text-overflow: ellipsis; }
-    Home #system-db { margin-top: 1; }
-    Home.-short #system-db { display: none; }
+    /* first-run setup checklist */
+    Home #home-setup { height: 1fr; padding: 1 1; }
+    Home #home-setup.-hidden { display: none; }
+    Home #setup-title { height: 1; color: $foreground; text-style: bold; }
+    Home #setup-sub { height: 1; margin-bottom: 1; color: $text-muted; }
+    Home #setup-rows { height: auto; }
     """
 
     def __init__(self, delta: Any, last_seen: datetime | None = None) -> None:
@@ -438,6 +393,8 @@ class Home(QuoteFeedMixin, DeltaScreen):
         self._watched_rows: list[tuple[str, Instrument]] = []
         self._events: list[services.Upcoming] | None = None
         self._fleet: list[services.ThesisHealth] = []
+        # True while the no-targets setup checklist replaces the grid.
+        self._first_run = False
         # Ephemeral quotes (QuoteFeedMixin), started on resume and cancelled
         # on suspend/unmount.
         self.active = False
@@ -505,18 +462,21 @@ class Home(QuoteFeedMixin, DeltaScreen):
                     yield Static("", id="theses-empty", markup=False)
             with PaneRow(id="home-bottom"):
                 with Pane(
-                    title="go", hints=hint_markup(("g", "palette"), ("h", "home")), id="go-pane"
+                    title="needs you today",
+                    hints=hint_markup(("enter", "open"), ("tab", "next box")),
+                    id="agenda-pane",
                 ):
-                    yield Vertical(id="go-grid")
-                    yield Static("", id="go-system")
-                with Pane(
-                    title="system",
-                    hints=hint_markup(("c", "settings"), ("p", "provider"), ("m", "model")),
-                    id="system-pane",
-                ):
-                    with Vertical(id="system-rows"):
-                        for row in SYSTEM_ROWS:
-                            yield Static("", classes="sys-row", id=f"system-{row}")
+                    with Vertical(id="agenda-rows"):
+                        yield HomeLink("6", "switch_screen('decisions')", id="agenda-reviews")
+                        yield HomeLink("4", "switch_screen('theses')", id="agenda-falsifier")
+                        yield HomeLink("3", "switch_screen('data')", id="agenda-earnings")
+                        yield HomeLink("2", "switch_screen('targets')", id="agenda-stale")
+            with Vertical(id="home-setup", classes="-hidden"):
+                yield Static("setup", id="setup-title", markup=False)
+                yield Static("", id="setup-sub", markup=False)
+                with Vertical(id="setup-rows"):
+                    for index in range(5):
+                        yield HomeLink("", "", id=f"setup-{index}")
 
     async def on_mount(self) -> None:
         self.layout_views()
@@ -529,21 +489,20 @@ class Home(QuoteFeedMixin, DeltaScreen):
             self.layout_views()
 
     def layout_views(self) -> None:
-        """Wide+tall: six boxes. Short: no middle row. Narrow: watchlist and go only."""
+        """Wide+tall: watchlist + pulse. Short: no middle row. Narrow: watchlist and agenda."""
         narrow = self.apply_breakpoint()
         short = self.size.height < TALL_HEIGHT
         folded = narrow or short
         self.set_class(short, "-short")
         self.set_class(folded, "-folded")
-        self.query_one("#home-mid").display = not folded
-        self.query_one("#since-pane").display = not narrow
-        self.query_one("#system-pane").display = not narrow
-        self.query_one("#watch-note").display = not folded
-        self.query_one("#watch-since").display = folded
-        self.query_one("#watch-next").display = folded
-        self.query_one("#go-system").display = narrow
+        if not self._first_run:
+            self.query_one("#home-mid").display = not folded
+            self.query_one("#since-pane").display = not narrow
+            self.query_one("#watch-note").display = not folded
+            self.query_one("#watch-since").display = folded
+            self.query_one("#watch-next").display = folded
         # Table columns are sized to the box, so a resize re-lays them.
-        if self._events is not None and not folded:
+        if self._events is not None and not folded and not self._first_run:
             self._refresh_upcoming(self._watched_rows, self._events)
             self._refresh_theses(self._fleet)
 
@@ -635,13 +594,30 @@ class Home(QuoteFeedMixin, DeltaScreen):
         return watched
 
     async def refresh_view(self) -> None:
+        """Reload the desk, running the blocking reads off the event loop.
+
+        The SQL work runs in a ``@work(thread=True)`` worker; ``wait()`` keeps
+        this awaitable so ``on_mount`` / ``on_screen_resume`` and the tests keep
+        their synchronous refresh semantics.
+        """
         self._tick()
+        self._set_shimmer(True)
+        await self._reload().wait()
+
+    @work(exclusive=True, group="home-refresh", thread=True)
+    async def _reload(self) -> None:
+        data = self._gather()  # blocking reads, in the worker thread
+        self.app.call_from_thread(self._apply, data)  # blocks until _apply finishes
+
+    def _gather(self) -> dict[str, Any]:
+        """All blocking reads (SQL and the report dir) in one place, off the loop."""
         engine = self.delta.engine
         watched = self._watched()
         ids = [instrument.id for _target, instrument in watched]
         health = services.data_health(self.delta)
         pulse = services.pulse(engine, instrument_ids=ids, since=self.last_seen, days=PULSE_DAYS)
         events = services.upcoming_events(engine, instrument_ids=ids, limit=UPCOMING_ROWS)
+        earnings = self._earnings_soon(ids)
         try:
             fleet = services.thesis_fleet(engine)
         except Exception:
@@ -652,16 +628,67 @@ class Home(QuoteFeedMixin, DeltaScreen):
             for _target, instrument in watched
         }
         stale = self._stale(watched, closes, health)
-        self._watched_rows, self._events, self._fleet = watched, events, fleet
+        try:
+            prompts = review.review_queue(
+                self.delta, instrument_ids=ids, since=self.last_seen
+            )
+            due = decisions.due_reviews(engine)
+        except Exception:
+            prompts, due = [], []
+        return {
+            "watched": watched,
+            "health": health,
+            "pulse": pulse,
+            "events": events,
+            "earnings": earnings,
+            "fleet": fleet,
+            "checks": checks,
+            "closes": closes,
+            "stale": stale,
+            "prompts": prompts,
+            "due": due,
+        }
 
-        await self._refresh_watchlist(watched, closes)
-        self._refresh_since(watched, pulse, stale)
-        self._refresh_review([instrument.id for _target, instrument in watched])
-        self._refresh_upcoming(watched, events)
-        self._refresh_theses(fleet)
-        self._refresh_go()
-        self._refresh_system(health, checks)
-        self._refresh_summary(watched, pulse, events, fleet, stale)
+    def _earnings_soon(self, ids: list[str]) -> list[services.Upcoming]:
+        """Earnings events in the next ``EARNINGS_WINDOW``, reusing the calendar read."""
+        now = datetime.now(UTC)
+        horizon = now + EARNINGS_WINDOW
+        return [
+            event
+            for event in services.upcoming_events(self.delta.engine, instrument_ids=ids, limit=30)
+            if event.kind == "earnings" and event.ts <= horizon
+        ]
+
+    async def _apply(self, data: dict[str, Any]) -> None:
+        watched = data["watched"]
+        self._watched_rows = watched
+        self._events = data["events"]
+        self._fleet = data["fleet"]
+        self._set_shimmer(False)
+
+        if not watched:
+            self._show_setup(data["checks"])
+            return
+        self._show_setup([])
+
+        await self._refresh_watchlist(watched, data["closes"])
+        self._refresh_since(watched, data["pulse"], data["stale"])
+        self._refresh_review(data["due"], data["prompts"])
+        self._refresh_upcoming(watched, data["events"])
+        self._refresh_theses(data["fleet"])
+        self._refresh_agenda(data)
+        self._refresh_summary(watched, data["pulse"], data["events"], data["fleet"], data["stale"])
+
+    def _set_shimmer(self, on: bool) -> None:
+        """A lightweight loading signal while the threaded reload runs.
+
+        A shared shimmer widget does not exist yet (see the phase-0 backlog):
+        the watchlist badge stands in until one lands in ``components.py``.
+        """
+        if not self.is_mounted:
+            return
+        with suppress(Exception):
+            self.query_one("#watch-pane", Pane).set_badge("…" if on else "")
 
     def _stale(
         self,
@@ -716,9 +743,9 @@ class Home(QuoteFeedMixin, DeltaScreen):
         hidden = len(watched) - WATCH_ROWS
         note = self.query_one("#watch-note", Static)
         if not watched:
-            note.update("nothing yet — 1 builds the watchlist")
+            note.update("nothing yet — 2 builds the watchlist")
         elif hidden > 0:
-            note.update(f"+{hidden} more · 1 watchlist")
+            note.update(f"+{hidden} more · 2 watchlist")
         else:
             note.update(f"spark: {SPARK_CLOSES} daily closes · chg%: move on the day")
 
@@ -785,21 +812,13 @@ class Home(QuoteFeedMixin, DeltaScreen):
             else "[$text-muted]✓ bars and reports fresh · all plugins on[/]"
         )
 
-    def _refresh_review(self, instrument_ids: list[str]) -> None:
+    def _refresh_review(self, due: list[Any], prompts: list[Any]) -> None:
         """Expose evidence and journal prompts without making an investment call."""
         line = self.query_one("#since-review", Static)
-        try:
-            prompts = review.review_queue(
-                self.delta, instrument_ids=instrument_ids, since=self.last_seen
-            )
-            due = decisions.due_reviews(self.delta.engine)
-        except Exception:
-            line.update("")
-            return
         if due:
             line.update(f"⚠ {len(due)} decision review{'s' if len(due) != 1 else ''} due · 6 decisions")
         elif prompts:
-            line.update(f"⚠ {len(prompts)} evidence prompt{'s' if len(prompts) != 1 else ''} · 2 evidence")
+            line.update(f"⚠ {len(prompts)} evidence prompt{'s' if len(prompts) != 1 else ''} · 3 evidence")
         else:
             line.update("✓ no decision or evidence reviews due")
 
@@ -827,7 +846,7 @@ class Home(QuoteFeedMixin, DeltaScreen):
         table.display = bool(events)
         empty = self.query_one("#upcoming-empty", Static)
         empty.display = not events
-        empty.update("nothing scheduled — press 2, then U to gather evidence")
+        empty.update("nothing scheduled — press 3, then U to gather evidence")
         self.query_one("#upcoming-pane", Pane).set_badge(str(len(events)) if events else "")
 
     def _refresh_theses(self, fleet: list[services.ThesisHealth]) -> None:
@@ -845,7 +864,7 @@ class Home(QuoteFeedMixin, DeltaScreen):
             summary.update("[$text-muted]no theses yet[/]")
             table.display = False
             empty.display = True
-            empty.update("4 opens the theses desk — a tracks a claim")
+            empty.update("4 opens the theses desk — n tracks a claim")
             self.query_one("#theses-pane", Pane).set_badge("")
             return
         counts: dict[str, int] = {}
@@ -880,110 +899,67 @@ class Home(QuoteFeedMixin, DeltaScreen):
             width = max(self.size.width - 2, NARROW_WIDTH) // 2 - 2
         return width
 
-    def _refresh_go(self) -> None:
-        grid = self.query_one("#go-grid", Vertical)
-        items = go_items(getattr(self.app, "BINDINGS", []))
-        cells = list(grid.query(GoCell))
-        if [(cell.key, cell.label, cell.action) for cell in cells] == items:
+    def _refresh_agenda(self, data: dict[str, Any]) -> None:
+        """The "needs you today" agenda: four lines, each a jump key."""
+        due = data["due"]
+        fleet = data["fleet"]
+        earnings = data["earnings"]
+        stale = data["stale"]
+
+        challenged = [entry for entry in fleet if entry.state == "challenged"]
+
+        def set_row(link_id: str, text: str) -> None:
+            self.query_one(f"#{link_id}", HomeLink).set_label(text)
+
+        set_row(
+            "agenda-reviews",
+            f"[b]{_plural(len(due), 'decision review')} due[/b]"
+            if due
+            else "[$text-muted]✓ no decision reviews due[/]",
+        )
+        set_row(
+            "agenda-falsifier",
+            f"[b]{_plural(len(challenged), 'falsifier hit')}[/b]"
+            if challenged
+            else "[$text-muted]✓ no falsifier hits[/]",
+        )
+        set_row(
+            "agenda-earnings",
+            f"[b]{_plural(len(earnings), 'earnings')}[/b] in the next 7 days"
+            if earnings
+            else "[$text-muted]✓ no earnings in the next 7 days[/]",
+        )
+        set_row(
+            "agenda-stale",
+            f"[$text-warning]⚠ {_plural(len(stale), 'stale source')}[/]"
+            if stale
+            else "[$text-muted]✓ bars and reports fresh[/]",
+        )
+        needs = len(due) + len(challenged) + len(earnings) + len(stale)
+        self.query_one("#agenda-pane", Pane).set_badge(str(needs) if needs else "clear")
+
+    def _show_setup(self, checks: list[services.Check]) -> None:
+        """First run: no targets, so the whole grid becomes the setup checklist."""
+        first_run = bool(checks)
+        self._first_run = first_run
+        setup = self.query_one("#home-setup")
+        setup.set_class(not first_run, "-hidden")
+        for row_id in ("home-top", "home-mid", "home-bottom"):
+            self.query_one(f"#{row_id}").display = not first_run
+        if not first_run:
             return
-        # Mount once; afterwards retune the existing cells rather than
-        # remove-then-mount, which races the async removal.
-        if not cells:
-            grid.mount(*(GoCell(key, label, action) for key, label, action in items))
-            return
-        for cell, (key, label, action) in zip(cells, items, strict=False):
-            cell.retune(key, label, action)
-
-    def _refresh_system(self, health: Any, checks: list[services.Check]) -> None:
-        plugins = getattr(self.delta, "plugins", {}) or {}
-        on = [name for name, plugin in plugins.items() if getattr(plugin, "enabled", False)]
-        off = [name for name in plugins if name not in on]
-        now = datetime.now(UTC)
-
-        if health.latest_bar:
-            bars_label, bars_state = age_text(now - to_utc(max(health.latest_bar.values())))
-            bars = f"bars {bars_label} old" if bars_label != "live" else "bars live"
-        else:
-            bars_label, bars_state, bars = "none", "error", "no bars"
-        counts = health.counts
-        provider = str(getattr(self.delta.cfg, "llm_provider", "") or "—")
-        try:
-            from delta.llm.router import model_for
-
-            model = model_for(self.delta.cfg, "report")
-        except Exception:
-            model = "no route"
-        last_llm = (
-            f" · last call {age_text(now - to_utc(health.last_llm))[0]}" if health.last_llm else ""
+        self.query_one("#setup-title", Static).update("setup")
+        self.query_one("#setup-sub", Static).update(
+            "a few things before Delta can gather anything — each jumps to its fix"
         )
-        rows = services.llm_costs(self.delta.engine)
-        total = sum(row.cost_usd for row in rows)
-        calls = sum(row.calls for row in rows)
-        today = services.total_spend(self.delta.engine, since=now.strftime("%Y-%m-%d"))
-        failing = [check.name for check in checks if not check.ok]
-
-        def dot(state: str) -> str:
-            token = {"ok": "text-success", "warn": "text-warning"}.get(state, "text-error")
-            return f"[${token}]●[/]"
-
-        def label(text: str) -> str:
-            return f"[$text-muted]{text:<9}[/]"
-
-        lines: list[tuple[str, str]] = [
-            (
-                "plugins",
-                f"{dot('ok' if not off else 'warn')} {len(on)}/{len(plugins)} on"
-                + (f"[$text-muted] · {escape(' '.join(off))} off[/]" if off else "")
-                + (f"[$text-muted] · {escape(' '.join(on))}[/]" if on else ""),
-            ),
-            (
-                "data",
-                f"{dot(bars_state)} {bars}[$text-muted] · {_compact(counts.get('bar', 0))} bars"
-                f" · {_compact(counts.get('newsitem', 0))} news"
-                f" · {_compact(counts.get('event', 0))} events[/]",
-            ),
-            ("llm", f"{escape(provider)}[$text-muted] · {escape(model)}{escape(last_llm)}[/]"),
-            (
-                "spend",
-                f"${total:.2f} total[$text-muted] · ${today:.2f} today · {_plural(calls, 'call')}[/]",
-            ),
-            (
-                "setup",
-                f"[$text-warning]⚠ {len(failing)} failing: {escape(', '.join(failing))}[/]"
-                if failing
-                else f"[$text-success]✓ {len(checks)} checks passed[/]",
-            ),
-        ]
-        # Update in place: ``remove_children`` is async, so a remove-then-mount
-        # here would race the next refresh and duplicate the row ids.
-        for name, text in lines:
-            self.query_one(f"#system-{name}", Static).update(label(name) + text)
-        db = self._db_line()
-        db_row = self.query_one("#system-db", Static)
-        db_row.display = bool(db)
-        db_row.update(label("db") + db if db else "")
-        self.query_one("#system-pane", Pane).set_badge(
-            "ok" if not failing else f"{len(failing)} to fix"
-        )
-        summary = (
-            f"{len(on)}/{len(plugins)} plugins · {bars} · {escape(provider)} · ${total:.2f} · "
-            + (
-                f"[$text-warning]⚠ {len(failing)} to fix[/]"
-                if failing
-                else "[$text-success]✓ setup ok[/]"
-            )
-        )
-        self.query_one("#go-system", Static).update(summary)
-
-    def _db_line(self) -> str:
-        path = Path(str(getattr(self.delta.cfg, "db_path", "") or ""))
-        try:
-            size = path.stat().st_size
-        except OSError:
-            return ""
-        mb = size / 1_048_576
-        shown = f"{mb:.1f} MB" if mb >= 1 else f"{size / 1024:.0f} KB"
-        return f"[$text-muted]{escape(path.name)} · {shown}[/]"
+        for index, check in enumerate(checks[:5]):
+            key, action = _setup_link(check)
+            link = self.query_one(f"#setup-{index}", HomeLink)
+            link.key = key
+            link.action = action
+            link.query_one(".home-link-key", Static).update(key)
+            state = "[$text-success]✓[/]" if check.ok else "[$text-error]✗[/]"
+            link.set_label(f"{escape(check.name)} [$text-muted]— {escape(check.fix)}[/]  {state}")
 
     def _refresh_summary(
         self,
