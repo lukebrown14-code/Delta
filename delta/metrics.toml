@@ -1,0 +1,1133 @@
+# Static metric tables and glossary for the Watchlist inspector.
+# Order matters: asset_metrics.py preserves key/group ordering.
+
+[profiles.equity]
+keys = [
+    [
+        "Revenue growth",
+        "revenueGrowth",
+        "ratio",
+    ],
+    [
+        "EPS growth",
+        "earningsGrowth",
+        "ratio",
+    ],
+    [
+        "Gross margin",
+        "grossMargins",
+        "ratio",
+    ],
+    [
+        "Operating margin",
+        "operatingMargins",
+        "ratio",
+    ],
+    [
+        "Net margin",
+        "profitMargins",
+        "ratio",
+    ],
+    [
+        "EBITDA margin",
+        "ebitdaMargins",
+        "ratio",
+    ],
+    [
+        "ROIC",
+        "returnOnInvestedCapital",
+        "ratio",
+    ],
+    [
+        "ROE",
+        "returnOnEquity",
+        "ratio",
+    ],
+    [
+        "EPS (trailing)",
+        "trailingEps",
+        "number",
+    ],
+    [
+        "EPS (forward)",
+        "forwardEps",
+        "number",
+    ],
+    [
+        "Revenue / share",
+        "revenuePerShare",
+        "number",
+    ],
+    [
+        "P/E",
+        "trailingPE",
+        "x",
+    ],
+    [
+        "Forward P/E",
+        "forwardPE",
+        "x",
+    ],
+    [
+        "PEG ratio",
+        "trailingPegRatio",
+        "x",
+    ],
+    [
+        "Price / Book",
+        "priceToBook",
+        "x",
+    ],
+    [
+        "Price / Sales",
+        "priceToSalesTrailing12Months",
+        "x",
+    ],
+    [
+        "EV / EBITDA",
+        "enterpriseToEbitda",
+        "x",
+    ],
+    [
+        "Free cash flow",
+        "freeCashflow",
+        "money",
+    ],
+    [
+        "Operating cash flow",
+        "operatingCashflow",
+        "money",
+    ],
+    [
+        "Total cash",
+        "totalCash",
+        "money",
+    ],
+    [
+        "Total debt",
+        "totalDebt",
+        "money",
+    ],
+    [
+        "Debt / EBITDA",
+        "netDebtToEBITDA",
+        "x",
+    ],
+    [
+        "Interest coverage",
+        "interestCoverage",
+        "x",
+    ],
+    [
+        "Current ratio",
+        "currentRatio",
+        "x",
+    ],
+    [
+        "Quick ratio",
+        "quickRatio",
+        "x",
+    ],
+    [
+        "Debt / Equity",
+        "debtToEquity",
+        "percent",
+    ],
+    [
+        "Dividend yield",
+        "dividendYield",
+        "percent",
+    ],
+    [
+        "Dividend rate",
+        "dividendRate",
+        "number",
+    ],
+    [
+        "Payout ratio",
+        "payoutRatio",
+        "ratio",
+    ],
+    [
+        "5y avg yield",
+        "fiveYearAvgDividendYield",
+        "percent",
+    ],
+    [
+        "Market cap",
+        "marketCap",
+        "money",
+    ],
+    [
+        "Enterprise value",
+        "enterpriseValue",
+        "money",
+    ],
+    [
+        "Shares out",
+        "sharesOutstanding",
+        "count",
+    ],
+    [
+        "Float",
+        "floatShares",
+        "count",
+    ],
+    [
+        "Avg volume",
+        "averageVolume",
+        "count",
+    ],
+    [
+        "Beta",
+        "beta",
+        "number",
+    ],
+    [
+        "Short % of float",
+        "shortPercentOfFloat",
+        "ratio",
+    ],
+    [
+        "Short ratio",
+        "shortRatio",
+        "x",
+    ],
+    [
+        "Institutions held",
+        "heldPercentInstitutions",
+        "ratio",
+    ],
+    [
+        "Insiders held",
+        "heldPercentInsiders",
+        "ratio",
+    ],
+    [
+        "Consensus",
+        "recommendationKey",
+        "text",
+    ],
+    [
+        "Target mean",
+        "targetMeanPrice",
+        "price",
+    ],
+    [
+        "Target median",
+        "targetMedianPrice",
+        "price",
+    ],
+    [
+        "Target high",
+        "targetHighPrice",
+        "price",
+    ],
+    [
+        "Target low",
+        "targetLowPrice",
+        "price",
+    ],
+    [
+        "Analysts",
+        "numberOfAnalystOpinions",
+        "count",
+    ],
+    [
+        "52w high",
+        "fiftyTwoWeekHigh",
+        "price",
+    ],
+    [
+        "52w low",
+        "fiftyTwoWeekLow",
+        "price",
+    ],
+    [
+        "52w change",
+        "52WeekChange",
+        "ratio",
+    ],
+    [
+        "S&P 52w change",
+        "SandP52WeekChange",
+        "ratio",
+    ],
+    [
+        "50-day average",
+        "fiftyDayAverage",
+        "price",
+    ],
+    [
+        "200-day average",
+        "twoHundredDayAverage",
+        "price",
+    ],
+    [
+        "Next earnings",
+        "earningsTimestamp",
+        "date",
+    ],
+    [
+        "Ex-dividend",
+        "exDividendDate",
+        "date",
+    ],
+]
+groups = [
+    [
+        "Profitability",
+        [
+            "Revenue growth",
+            "EPS growth",
+            "Gross margin",
+            "Operating margin",
+            "Net margin",
+            "EBITDA margin",
+            "ROIC",
+            "ROE",
+        ],
+    ],
+    [
+        "Balance Sheet",
+        [
+            "Free cash flow",
+            "Operating cash flow",
+            "Total cash",
+            "Total debt",
+            "Debt / EBITDA",
+            "Interest coverage",
+            "Current ratio",
+            "Quick ratio",
+            "Debt / Equity",
+        ],
+    ],
+    [
+        "Valuation",
+        [
+            "P/E",
+            "Forward P/E",
+            "PEG ratio",
+            "Price / Book",
+            "Price / Sales",
+            "EV / EBITDA",
+            "EPS (trailing)",
+            "EPS (forward)",
+            "Revenue / share",
+        ],
+    ],
+    [
+        "Analyst View",
+        [
+            "Consensus",
+            "Target mean",
+            "Target median",
+            "Target high",
+            "Target low",
+            "Analysts",
+            "Next earnings",
+        ],
+    ],
+    [
+        "Price Context",
+        [
+            "52w high",
+            "52w low",
+            "52w change",
+            "S&P 52w change",
+            "50-day average",
+            "200-day average",
+        ],
+    ],
+    [
+        "Shareholder Returns",
+        [
+            "Dividend yield",
+            "Dividend rate",
+            "Payout ratio",
+            "5y avg yield",
+            "Ex-dividend",
+        ],
+    ],
+    [
+        "Size",
+        [
+            "Market cap",
+            "Enterprise value",
+            "Shares out",
+            "Float",
+            "Avg volume",
+        ],
+    ],
+    [
+        "Trading & Ownership",
+        [
+            "Beta",
+            "Short % of float",
+            "Short ratio",
+            "Institutions held",
+            "Insiders held",
+        ],
+    ],
+]
+
+[profiles.etf]
+keys = [
+    [
+        "Category",
+        "category",
+        "text",
+    ],
+    [
+        "Fund family",
+        "fundFamily",
+        "text",
+    ],
+    [
+        "NAV",
+        "navPrice",
+        "price",
+    ],
+    [
+        "Expense ratio",
+        "annualReportExpenseRatio",
+        "ratio",
+    ],
+    [
+        "Distribution yield",
+        "yield",
+        "ratio",
+    ],
+    [
+        "3y return",
+        "threeYearAverageReturn",
+        "ratio",
+    ],
+    [
+        "5y return",
+        "fiveYearAverageReturn",
+        "ratio",
+    ],
+    [
+        "Assets under management",
+        "totalAssets",
+        "money",
+    ],
+    [
+        "Holdings",
+        "holdingsCount",
+        "count",
+    ],
+    [
+        "Previous close",
+        "previousClose",
+        "price",
+    ],
+    [
+        "Open",
+        "open",
+        "price",
+    ],
+    [
+        "Day high",
+        "dayHigh",
+        "price",
+    ],
+    [
+        "Day low",
+        "dayLow",
+        "price",
+    ],
+    [
+        "52w high",
+        "fiftyTwoWeekHigh",
+        "price",
+    ],
+    [
+        "52w low",
+        "fiftyTwoWeekLow",
+        "price",
+    ],
+    [
+        "Volume",
+        "volume",
+        "count",
+    ],
+    [
+        "Avg volume",
+        "averageVolume",
+        "count",
+    ],
+    [
+        "50-day average",
+        "fiftyDayAverage",
+        "price",
+    ],
+    [
+        "200-day average",
+        "twoHundredDayAverage",
+        "price",
+    ],
+]
+groups = [
+    [
+        "Fund Info",
+        [
+            "Category",
+            "Fund family",
+            "NAV",
+        ],
+    ],
+    [
+        "Fund Costs",
+        [
+            "Expense ratio",
+        ],
+    ],
+    [
+        "Income",
+        [
+            "Distribution yield",
+        ],
+    ],
+    [
+        "Returns",
+        [
+            "3y return",
+            "5y return",
+        ],
+    ],
+    [
+        "Fund Scale",
+        [
+            "Assets under management",
+            "Holdings",
+        ],
+    ],
+    [
+        "Price Context",
+        [
+            "Previous close",
+            "Open",
+            "Day high",
+            "Day low",
+            "52w high",
+            "52w low",
+            "Volume",
+            "Avg volume",
+            "50-day average",
+            "200-day average",
+        ],
+    ],
+]
+
+[profiles.bond]
+keys = [
+    [
+        "Coupon",
+        "couponRate",
+        "ratio",
+    ],
+    [
+        "Maturity",
+        "maturityDate",
+        "date",
+    ],
+    [
+        "Duration",
+        "duration",
+        "number",
+    ],
+    [
+        "Credit rating",
+        "creditRating",
+        "text",
+    ],
+    [
+        "Distribution yield",
+        "yield",
+        "ratio",
+    ],
+    [
+        "Category",
+        "category",
+        "text",
+    ],
+    [
+        "NAV",
+        "navPrice",
+        "price",
+    ],
+    [
+        "Assets under management",
+        "totalAssets",
+        "money",
+    ],
+    [
+        "Previous close",
+        "previousClose",
+        "price",
+    ],
+    [
+        "Open",
+        "open",
+        "price",
+    ],
+    [
+        "Day high",
+        "dayHigh",
+        "price",
+    ],
+    [
+        "Day low",
+        "dayLow",
+        "price",
+    ],
+    [
+        "52w high",
+        "fiftyTwoWeekHigh",
+        "price",
+    ],
+    [
+        "52w low",
+        "fiftyTwoWeekLow",
+        "price",
+    ],
+    [
+        "Volume",
+        "volume",
+        "count",
+    ],
+    [
+        "Avg volume",
+        "averageVolume",
+        "count",
+    ],
+    [
+        "50-day average",
+        "fiftyDayAverage",
+        "price",
+    ],
+    [
+        "200-day average",
+        "twoHundredDayAverage",
+        "price",
+    ],
+]
+groups = [
+    [
+        "Income",
+        [
+            "Distribution yield",
+        ],
+    ],
+    [
+        "Fund Scale",
+        [
+            "Assets under management",
+            "NAV",
+            "Category",
+        ],
+    ],
+    [
+        "Bond Terms",
+        [
+            "Coupon",
+            "Maturity",
+            "Duration",
+            "Credit rating",
+        ],
+    ],
+    [
+        "Price Context",
+        [
+            "Previous close",
+            "Open",
+            "Day high",
+            "Day low",
+            "52w high",
+            "52w low",
+            "Volume",
+            "Avg volume",
+            "50-day average",
+            "200-day average",
+        ],
+    ],
+]
+
+[profiles.commodity]
+keys = [
+    [
+        "Volume",
+        "volume",
+        "count",
+    ],
+    [
+        "Avg volume",
+        "averageVolume",
+        "count",
+    ],
+    [
+        "Open interest",
+        "openInterest",
+        "count",
+    ],
+    [
+        "Underlying",
+        "underlyingSymbol",
+        "text",
+    ],
+    [
+        "Expires",
+        "expireDate",
+        "date",
+    ],
+    [
+        "Open",
+        "open",
+        "price",
+    ],
+    [
+        "Day high",
+        "dayHigh",
+        "price",
+    ],
+    [
+        "Day low",
+        "dayLow",
+        "price",
+    ],
+    [
+        "Previous close",
+        "previousClose",
+        "price",
+    ],
+    [
+        "52w high",
+        "fiftyTwoWeekHigh",
+        "price",
+    ],
+    [
+        "52w low",
+        "fiftyTwoWeekLow",
+        "price",
+    ],
+    [
+        "50-day average",
+        "fiftyDayAverage",
+        "price",
+    ],
+    [
+        "200-day average",
+        "twoHundredDayAverage",
+        "price",
+    ],
+]
+groups = [
+    [
+        "Market Activity",
+        [
+            "Volume",
+            "Avg volume",
+            "Open interest",
+        ],
+    ],
+    [
+        "Contract",
+        [
+            "Underlying",
+            "Expires",
+        ],
+    ],
+    [
+        "Price Context",
+        [
+            "Open",
+            "Day high",
+            "Day low",
+            "Previous close",
+            "52w high",
+            "52w low",
+            "50-day average",
+            "200-day average",
+        ],
+    ],
+]
+
+[profiles.fx]
+keys = [
+    [
+        "Bid",
+        "bid",
+        "fx",
+    ],
+    [
+        "Ask",
+        "ask",
+        "fx",
+    ],
+    [
+        "Open",
+        "open",
+        "fx",
+    ],
+    [
+        "Day high",
+        "dayHigh",
+        "fx",
+    ],
+    [
+        "Day low",
+        "dayLow",
+        "fx",
+    ],
+    [
+        "Previous close",
+        "previousClose",
+        "fx",
+    ],
+    [
+        "52w high",
+        "fiftyTwoWeekHigh",
+        "fx",
+    ],
+    [
+        "52w low",
+        "fiftyTwoWeekLow",
+        "fx",
+    ],
+    [
+        "50-day average",
+        "fiftyDayAverage",
+        "fx",
+    ],
+    [
+        "200-day average",
+        "twoHundredDayAverage",
+        "fx",
+    ],
+]
+groups = [
+    [
+        "Live Quote",
+        [
+            "Bid",
+            "Ask",
+        ],
+    ],
+    [
+        "Session Range",
+        [
+            "Open",
+            "Day high",
+            "Day low",
+            "Previous close",
+        ],
+    ],
+    [
+        "Price Context",
+        [
+            "52w high",
+            "52w low",
+            "50-day average",
+            "200-day average",
+        ],
+    ],
+]
+
+[profiles.crypto]
+keys = [
+    [
+        "Market cap",
+        "marketCap",
+        "money",
+    ],
+    [
+        "Circulating supply",
+        "circulatingSupply",
+        "count",
+    ],
+    [
+        "24h volume",
+        "volume24Hr",
+        "money",
+    ],
+    [
+        "Avg volume",
+        "averageVolume",
+        "money",
+    ],
+    [
+        "Open",
+        "open",
+        "price",
+    ],
+    [
+        "Day high",
+        "dayHigh",
+        "price",
+    ],
+    [
+        "Day low",
+        "dayLow",
+        "price",
+    ],
+    [
+        "Previous close",
+        "previousClose",
+        "price",
+    ],
+    [
+        "52w high",
+        "fiftyTwoWeekHigh",
+        "price",
+    ],
+    [
+        "52w low",
+        "fiftyTwoWeekLow",
+        "price",
+    ],
+]
+groups = [
+    [
+        "Market Size",
+        [
+            "Market cap",
+            "Circulating supply",
+        ],
+    ],
+    [
+        "Activity",
+        [
+            "24h volume",
+            "Avg volume",
+        ],
+    ],
+    [
+        "Price Context",
+        [
+            "Open",
+            "Day high",
+            "Day low",
+            "Previous close",
+            "52w high",
+            "52w low",
+        ],
+    ],
+]
+
+[profiles.cash]
+keys = [
+    [
+        "Yield",
+        "yield",
+        "ratio",
+    ],
+    [
+        "Dividend yield",
+        "dividendYield",
+        "percent",
+    ],
+    [
+        "Category",
+        "category",
+        "text",
+    ],
+    [
+        "NAV",
+        "navPrice",
+        "price",
+    ],
+    [
+        "Assets under management",
+        "totalAssets",
+        "money",
+    ],
+    [
+        "Previous close",
+        "previousClose",
+        "price",
+    ],
+    [
+        "52w high",
+        "fiftyTwoWeekHigh",
+        "price",
+    ],
+    [
+        "52w low",
+        "fiftyTwoWeekLow",
+        "price",
+    ],
+]
+groups = [
+    [
+        "Income",
+        [
+            "Yield",
+            "Dividend yield",
+        ],
+    ],
+    [
+        "Fund Scale",
+        [
+            "Assets under management",
+            "NAV",
+            "Category",
+        ],
+    ],
+    [
+        "Price Context",
+        [
+            "Previous close",
+            "52w high",
+            "52w low",
+        ],
+    ],
+]
+
+[profiles.other]
+keys = [
+    [
+        "Previous close",
+        "previousClose",
+        "price",
+    ],
+    [
+        "Open",
+        "open",
+        "price",
+    ],
+    [
+        "Day high",
+        "dayHigh",
+        "price",
+    ],
+    [
+        "Day low",
+        "dayLow",
+        "price",
+    ],
+    [
+        "52w high",
+        "fiftyTwoWeekHigh",
+        "price",
+    ],
+    [
+        "52w low",
+        "fiftyTwoWeekLow",
+        "price",
+    ],
+    [
+        "Volume",
+        "volume",
+        "count",
+    ],
+    [
+        "Avg volume",
+        "averageVolume",
+        "count",
+    ],
+]
+groups = [
+    [
+        "Price Context",
+        [
+            "Previous close",
+            "Open",
+            "Day high",
+            "Day low",
+            "52w high",
+            "52w low",
+            "Volume",
+            "Avg volume",
+        ],
+    ],
+]
+
+[help]
+"Revenue growth" = "How fast sales grew in the most recent year."
+"EPS growth" = "How fast profit per share grew in the most recent year."
+"Gross margin" = "Profit left after making the product, per dollar of sales."
+"Operating margin" = "Profit from core operations, per dollar of sales."
+"Net margin" = "Final profit after every expense, per dollar of sales."
+"EBITDA margin" = "Operating profit before accounting charges, per dollar of sales."
+ROIC = "Profit made per dollar invested into the business."
+ROE = "Profit made per dollar of shareholders' money."
+"EPS (trailing)" = "Profit per share over the past year."
+"EPS (forward)" = "Expected profit per share for the coming year."
+"Revenue / share" = "Sales divided by shares outstanding."
+"P/E" = "Price per dollar of past-year profit."
+"Forward P/E" = "Price per dollar of expected profit."
+"PEG ratio" = "P/E relative to growth; near 1 reads as fairly priced."
+"Price / Book" = "Price per dollar of accounting net worth."
+"Price / Sales" = "Price per dollar of sales."
+"EV / EBITDA" = "Whole-company price per dollar of operating profit."
+"Free cash flow" = "Cash left after running and growing the business."
+"Operating cash flow" = "Cash the business generated from operations."
+"Total cash" = "Cash and short-term investments held."
+"Total debt" = "All money owed."
+"Debt / EBITDA" = "Years of operating profit needed to repay all debt."
+"Interest coverage" = "How easily profit covers interest payments."
+"Current ratio" = "Ability to pay bills due within a year."
+"Quick ratio" = "Ability to pay bills due within a year, excluding inventory."
+"Debt / Equity" = "How much of the company is funded by borrowing."
+"Dividend yield" = "Yearly dividend as a percent of the price."
+"Dividend rate" = "Dividend paid per share per year."
+"Payout ratio" = "Share of profit paid out as dividends."
+"5y avg yield" = "Average dividend yield over five years."
+"Market cap" = "Total value of all shares or coins outstanding."
+"Enterprise value" = "Price to buy the whole company including its debt."
+"Shares out" = "All shares issued."
+Float = "Shares freely tradable by the public."
+"Avg volume" = "Typical number of shares traded daily."
+Beta = "Sensitivity to market swings; 1 moves with the market."
+"Short % of float" = "Share of tradable shares sold short."
+"Short ratio" = "Days of typical volume needed to cover short positions."
+"Institutions held" = "Share owned by professional funds."
+"Insiders held" = "Share owned by company insiders."
+Consensus = "Most common analyst rating: buy, hold, or sell."
+"Target mean" = "Average analyst price forecast."
+"Target median" = "Middle analyst price forecast."
+"Target high" = "Highest analyst price forecast."
+"Target low" = "Lowest analyst price forecast."
+Analysts = "Number of analysts offering forecasts."
+"EPS est (next q)" = "Analyst forecast for next quarter's profit per share."
+"EPS growth est" = "Forecast growth in profit per share for this year."
+"Revenue est (fy)" = "Analyst forecast for this year's sales."
+"52w high" = "Highest price over the past year."
+"52w low" = "Lowest price over the past year."
+"52w change" = "Price change over the past year."
+"S&P 52w change" = "The S&P 500's change over the same period."
+"50-day average" = "Average price over the last 50 trading days."
+"200-day average" = "Average price over the last 200 trading days."
+"From 52w high" = "How far the current price sits below its yearly high."
+"Previous close" = "Yesterday's official closing price."
+Open = "The first traded price of the session."
+"Day high" = "Highest price traded so far today."
+"Day low" = "Lowest price traded so far today."
+Volume = "Shares or contracts traded recently."
+"Current price" = "Most recent traded price."
+"Current yield" = "Yearly income as a percent of the current price."
+"Next earnings" = "When the next results report is due."
+Ex-dividend = "Buy before this date to receive the next dividend."
+Category = "What kind of product this is."
+"Fund family" = "Company that runs the fund."
+NAV = "Per-unit value of the fund's holdings."
+"Expense ratio" = "Yearly fee as a percent of assets."
+"Distribution yield" = "Yearly payouts as a percent of the price."
+"3y return" = "Average yearly return over three years."
+"5y return" = "Average yearly return over five years."
+"Assets under management" = "Total money invested in the fund."
+Holdings = "Number of securities the fund holds."
+Coupon = "Fixed interest the bond pays each year."
+Maturity = "When the bond repays its face value."
+Duration = "Price sensitivity to interest-rate moves, in years."
+"Credit rating" = "Grading of the issuer's default risk."
+"Open interest" = "Number of outstanding contracts."
+Underlying = "The exchange symbol of this contract."
+Expires = "When the contract settles."
+Bid = "Price buyers are offering."
+Ask = "Price sellers are asking."
+"Circulating supply" = "Coins in public circulation."
+"24h volume" = "Value traded in the last day."
+Yield = "Yearly interest as a percent of the price."
