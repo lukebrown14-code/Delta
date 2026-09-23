@@ -61,6 +61,7 @@ class Config(DeltaScreen):
     #cfg-diag { width: 1fr; height: 1fr; }
     #cfg-ai-pane, #cfg-plugins-pane, #cfg-sources-pane { height: auto; }
     #cfg-model, #cfg-plugins { height: auto; max-height: 12; }
+    #cfg-model { scrollbar-size-horizontal: 0; }
     #cfg-plugins-empty, #cfg-sources-hint { height: 1; padding: 0 1; color: $text-muted; }
     #cfg-targets-pane { height: 1fr; }
     #cfg-targets { height: auto; max-height: 12; }
@@ -172,7 +173,7 @@ class Config(DeltaScreen):
     async def on_mount(self) -> None:
         self.query_one("#health-table", DeltaTable).add_columns("Table", "Rows")
         self.query_one("#costs-table", DeltaTable).add_columns("Task", "Model", "Calls", "USD")
-        self.query_one("#cfg-model", DeltaTable).add_columns("", "Status")
+        self.query_one("#cfg-model", DeltaTable).add_columns("")
         self.query_one("#cfg-plugins", DeltaTable).add_columns("", "Plugin", "State")
         self.query_one("#cfg-sources", DeltaTable).add_columns("Source", "Quality", "Status")
         self.query_one("#cfg-markets", DeltaTable).add_columns("ID", "Market", "Currency", "Yahoo")
@@ -221,7 +222,11 @@ class Config(DeltaScreen):
         self._refresh_diagnostics()
 
     def _refresh_ai(self) -> None:
-        """Two rows: which provider you use, and the one model for all tasks."""
+        """Two rows: ``provider: ● name`` and ``model: id`` — the two things to get right.
+
+        The dot's colour carries the connection state so each line stays short
+        enough to never need sideways scrolling.
+        """
         cfg = self.delta.cfg
         table = self.query_one("#cfg-model", DeltaTable)
         table.clear()
@@ -234,26 +239,28 @@ class Config(DeltaScreen):
         )
         connected = bool(env and read_env_value(env))
         if not name:
-            provider = Text("no provider — press p", style=tokens["text-error"])
+            provider = Text("provider: ○ none — press p", style=tokens["text-error"])
         elif connected:
             provider = Text.assemble(
+                ("provider: ", "bold"),
                 ("● ", tokens["text-success"]),
                 (name, "bold"),
-                f" · connected · key from {env}",
             )
         else:
             provider = Text.assemble(
-                ("○ ", tokens["text-error"]),
+                ("provider: ", "bold"),
+                ("● ", tokens["text-warning"]),
                 (name, "bold"),
-                (f" · no key · {env} unset", tokens["text-warning"]),
+                ("  no key", tokens["text-warning"]),
             )
-        table.add_row("provider", provider, key="provider")
+        table.add_row(provider, key="provider")
 
         model = str(getattr(cfg, "llm_model", "") or "")
-        model_cell = (
-            Text(model) if model else Text("not chosen — press m", style=tokens["text-warning"])
+        model_cell = Text.assemble(
+            ("model: ", "bold"),
+            model if model else ("not chosen — press m", tokens["text-warning"]),
         )
-        table.add_row("model", model_cell, key="model")
+        table.add_row(model_cell, key="model")
 
         badge = f"{name or 'none'} · {model or 'choose'}"
         if name and not connected:
