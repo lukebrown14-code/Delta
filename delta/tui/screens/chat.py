@@ -21,12 +21,13 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.markup import escape
 from textual.widgets import Button, Input, Static
 
-from delta import services, theses
+from delta import services
 from delta.chat import ChatMessage, chat
 from delta.core.ids import make_instrument_id
 from delta.evidence import evidence, evidence_by_ids
 from delta.llm.router import model_for
 from delta.targets import WatchTarget
+from delta.tui.components import goto, thesis_from_citations
 from delta.tui.shell import DeltaScreen
 from delta.tui.widgets import (
     ActionChip,
@@ -65,7 +66,6 @@ class Chat(DeltaScreen):
     """Standalone chat surface: pick targets, ask, watch the cited answer arrive."""
 
     name = "chat"
-    NARROW_WIDTH = 100
     # No AUTO_FOCUS here: the input would swallow the global single-letter
     # navigation keys (1..5, c, h, m, p, g, q) before they reach the app.
 
@@ -406,8 +406,7 @@ class Chat(DeltaScreen):
 
     def layout_views(self) -> None:
         """Wide: transcript and stack. Narrow: the transcript, or the picker after ``t``."""
-        narrow = self.size.width < self.NARROW_WIDTH
-        self.set_class(narrow, "-narrow")
+        narrow = self.apply_breakpoint()
         if not narrow:
             self.picker_open = False
         self.query_one("#chat-main").display = not (narrow and self.picker_open)
@@ -474,10 +473,7 @@ class Chat(DeltaScreen):
         self.run_worker(self._answer(), exclusive=True)
 
     def spend(self) -> float:
-        try:
-            return sum(row.cost_usd for row in services.llm_costs(self.delta.engine))
-        except Exception:
-            return 0.0
+        return services.total_spend(self.delta.engine)
 
     async def _answer(self) -> None:
         started = time.monotonic()
@@ -586,46 +582,22 @@ class Chat(DeltaScreen):
             return
         research = getattr(self.app, "screens_by_name", {}).get("data")
         inspect = getattr(research, "inspect_evidence", None)
-        switch = getattr(self.app, "action_switch_screen", None)
-        if not callable(inspect) or not callable(switch):
+        if not callable(inspect) or not goto(self.app, "data"):
             self.notify("the research panel is not available here", severity="warning")
             return
-        switch("data")
         await inspect(citation)
 
     # ------------------------------------------------------------ save
 
     def action_save_answer(self) -> None:
         """Turn the selected answer into a thesis, carrying its stored citations across."""
-        from delta.tui.screens.theses import ThesisForm
-
         message = self.answer()
         if message is None:
             self.notify("no answer to save yet — press i to ask something", severity="warning")
             return
         stored = [c for c in message.citations if not c.startswith(_WEB)]
-        targets = self._selected_targets()
-
-        def created(fields: dict[str, Any] | None) -> None:
-            if fields is None:
-                return
-            text = fields.pop("claim")
-            fields["targets"] = fields["targets"] or tuple(targets)
-            try:
-                thesis = theses.create_thesis(self.delta.engine, text, **fields)
-            except ValueError as exc:
-                self.notify(str(exc), severity="error")
-                return
-            for evidence_id in stored:
-                # Accepted, not queued: the citation contract already verified
-                # these against the pool, and the reader just read them.
-                theses.add_evidence(
-                    self.delta.engine, thesis.id, evidence_id, "support", "from ask", accepted=True
-                )
-            self.notify(f"thesis created with {len(stored)} linked evidence items", timeout=6)
-
         claim = message.text.split("\n\n")[0]
-        self.app.push_screen(ThesisForm(claim=claim, targets=", ".join(targets)), created)
+        thesis_from_citations(self, claim, self._selected_targets(), stored, "from ask")
 
     # ------------------------------------------------------------ transcript
 

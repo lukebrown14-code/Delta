@@ -28,9 +28,10 @@ from delta.asset_metrics import (
 from delta.core.models import Instrument
 from delta.core.plugin import MarketPlugin, discover_plugins
 from delta.plugins.data.yfinance import DEFAULT_SUFFIXES
-from delta.quotes import SearchResult, YahooQuotes, canonical_symbol, yahoo_search
+from delta.quotes import SearchResult, canonical_symbol, yahoo_search
 from delta.targets import DEFAULT_KIND, KNOWN_KINDS
 from delta.tui.axes import format_price
+from delta.tui.components import EmptyState, QuoteFeedMixin, SuggestionList, require_selection
 from delta.tui.shell import DeltaScreen, age_text
 from delta.tui.widgets import (
     MODAL_WIDTH,
@@ -131,7 +132,6 @@ class TargetAddModal(Dialog):
         self._search_timer: Any = None
         self._search_generation = 0
         self._results_by_key: dict[str, SearchResult] = {}
-        self._highlight = 0
         self._suppress_name_search = False
         self._suffixes = DEFAULT_SUFFIXES | getattr(self.delta.cfg, "plugins", {}).get(
             "yfinance", {}
@@ -163,7 +163,7 @@ class TargetAddModal(Dialog):
                 Input(placeholder="company or ticker — type to search", id="tg-name"),
                 classes="tg-field",
             ),
-            OptionList(id="tg-suggestions"),
+            SuggestionList(id="tg-suggestions"),
             Static("", id="tg-summary", markup=False),
             Vertical(
                 Horizontal(
@@ -294,18 +294,15 @@ class TargetAddModal(Dialog):
         return merged[: self.RESULT_CAP]
 
     def _show_results(self, results: list[SearchResult]) -> None:
-        options = self.query_one("#tg-suggestions", OptionList)
-        options.clear_options()
         self._results_by_key = {self._result_key(result): result for result in results}
+        options = []
         for result in results:
             exchange = f" · {result.exchange}" if result.exchange else ""
             prompt = Text(f"{result.symbol} — {result.name} · {result.market.upper()}{exchange}")
             if self._is_watched(result):
                 prompt.append("  ✓ watched", style=token_color(self.app, "text-success"))
-            options.add_option(Option(prompt, id=self._result_key(result)))
-        self._highlight = 0
-        if results:
-            options.highlighted = 0
+            options.append(Option(prompt, id=self._result_key(result)))
+        self.query_one("#tg-suggestions", SuggestionList).show(options)
 
     def _set_network(self, text: str, state: str) -> None:
         indicator = self.query_one("#tg-network", Static)
@@ -328,9 +325,6 @@ class TargetAddModal(Dialog):
 
     def on_mount(self) -> None:
         self.query_one("#tg-name", Input).focus()
-        # Suggestions are browsed through the name field's arrows; the list
-        # itself must never steal focus or tab stops.
-        self.query_one("#tg-suggestions", OptionList).can_focus = False
         self._update_summary()
 
     # ----- reactions ------------------------------------------------------
@@ -371,17 +365,8 @@ class TargetAddModal(Dialog):
 
     def on_key(self, event: Any) -> None:
         """Arrows browse the suggestions while the name input keeps focus."""
-        if getattr(self.focused, "id", None) != "tg-name":
-            return
-        options = self.query_one("#tg-suggestions", OptionList)
-        count = len(options.options)
-        if not count or event.key not in {"down", "up"}:
-            return
-        event.stop()
-        event.prevent_default()
-        delta = 1 if event.key == "down" else -1
-        self._highlight = (self._highlight + delta) % count
-        options.highlighted = self._highlight
+        if getattr(self.focused, "id", None) == "tg-name":
+            self.query_one("#tg-suggestions", SuggestionList).browse(event)
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
         if getattr(event.option_list, "id", None) != "tg-suggestions":
@@ -435,9 +420,8 @@ class TargetAddModal(Dialog):
         # Pick, then confirm: enter with suggestions open adopts one; the
         # next enter (or enter on an empty dropdown) saves.
         if event.input.id == "tg-name" and self._results_by_key:
-            options = self.query_one("#tg-suggestions", OptionList)
-            index = min(self._highlight, len(options.options) - 1)
-            option = options.options[index]
+            options = self.query_one("#tg-suggestions", SuggestionList)
+            option = options.get_option_at_index(options.highlighted_index)
             if option.id:
                 self._pick(str(option.id))
                 return
@@ -547,7 +531,7 @@ class MetricHelpModal(Dialog):
                     yield Static(entry, classes="glossary-entry")
 
 
-class Targets(DeltaScreen):
+class Targets(QuoteFeedMixin, DeltaScreen):
     name = "targets"
     BINDINGS = [
         ("enter", "inspect", "refresh metrics"),
@@ -561,9 +545,6 @@ class Targets(DeltaScreen):
         ("right", "member(1)", "member"),
         ("escape", "cancel", "back"),
     ]
-    #: Below this terminal width the list takes the whole screen and the
-    #: metrics pane opens on enter — the two do not fit side by side.
-    NARROW_WIDTH = 100
     #: Column widths of a watchlist row: name, last, change, age.
     COLUMNS = (12, 10, 8, 4)
     CSS = """
@@ -597,10 +578,7 @@ class Targets(DeltaScreen):
     def __init__(self, delta: Any) -> None:
         super().__init__(delta)
         self.rows: dict[str, tuple[str, str | None]] = {}
-        self.feed: YahooQuotes | None = None
-        self.feed_task: asyncio.Task | None = None
         self.active = False
-        self.signature: tuple = ()
         self.specs = {}
         #: Cached metrics per (instrument id, range): range switches must not
         #: refetch what the provider already answered for that window.
@@ -627,7 +605,7 @@ class Targets(DeltaScreen):
                     placeholder="/ filter names, tickers, markets, kinds or tags", id="tg-filter"
                 )
                 yield WatchlistList(id="target-table")
-                yield Static("no targets yet — press a to add one", id="tg-empty")
+                yield EmptyState("no targets yet", key="a", action="add one", id="tg-empty")
             with Pane(title="metrics", hints=self._metric_hints(), id="target-inspector-pane"):
                 with Vertical(id="target-inspector-content"):
                     yield Static("", id="target-inspector-title", markup=False)
@@ -682,8 +660,7 @@ class Targets(DeltaScreen):
 
     def layout_views(self) -> None:
         """Wide: both panes. Narrow: the list, or the metrics after enter."""
-        narrow = self.size.width < self.NARROW_WIDTH
-        self.set_class(narrow, "-narrow")
+        narrow = self.apply_breakpoint()
         self.query_one("#target-list-pane").display = not (narrow and self.detail_open)
         self.query_one("#target-inspector-pane").display = not narrow or self.detail_open
         self.query_one("#target-inspector-pane", Pane).set_hints(self._metric_hints())
@@ -778,13 +755,12 @@ class Targets(DeltaScreen):
                 inst = members[0] if len(members) == 1 else None
                 self.rows[key] = (target.id, inst)
                 table.add_option(Option(self._row_prompt(target, members), id=key))
-        empty = self.query_one("#tg-empty", Static)
+        empty = self.query_one("#tg-empty", EmptyState)
         empty.display = not table.row_count
-        empty.update(
-            "no targets match the filter — press esc to clear it"
-            if specs
-            else "no targets yet — press a to add one"
-        )
+        if specs:
+            empty.set_message("no targets match the filter", key="esc", action="clear it")
+        else:
+            empty.set_message("no targets yet", key="a", action="add one")
         if selected:
             with suppress(Exception):
                 table.highlighted = table.get_option_index(selected)
@@ -932,7 +908,7 @@ class Targets(DeltaScreen):
             return
         current_label = "Current yield" if metric.profile == "bond" else "Current price"
         current = metric.values.get(current_label, "—")
-        quote = self._quote_for(instrument.id)
+        quote = self.quote_for(instrument.id)
         up, down, flat = tokens["text-success"], tokens["text-error"], tokens["text-muted"]
         hero_text = Text()
         hero_text.append(current, style=f"bold {tokens['foreground']}")
@@ -993,37 +969,7 @@ class Targets(DeltaScreen):
         source.update(f"{metric.source} · live {quote_stamp} · history {history}")
 
     def _sync_feed(self) -> None:
-        suffixes = DEFAULT_SUFFIXES | getattr(self.delta.cfg, "plugins", {}).get(
-            "yfinance", {}
-        ).get("suffixes", {})
-        signature = (
-            tuple(sorted(i.id for i in self._instruments)),
-            tuple(sorted(suffixes.items())),
-        )
-        if self.feed_task and not self.feed_task.done() and signature == self.signature:
-            return
-        old_task = self.feed_task
-        if old_task:
-            old_task.cancel()
-        old_quotes = self.feed.quotes if self.feed else {}
-        self.signature = signature
-        self.feed = YahooQuotes(self._instruments, suffixes, self._quote_state)
-        self.feed.quotes.update({k: v for k, v in old_quotes.items() if k in signature[0]})
-        feed = self.feed
-
-        async def start() -> None:
-            if old_task:
-                with suppress(asyncio.CancelledError):
-                    await old_task
-            await feed.run()
-
-        self.feed_task = asyncio.create_task(start())
-
-    def _quote_state(self, state: str) -> None:
-        self._feed_state = state
-
-    def _quote_for(self, ident: str | None) -> Any:
-        return self.feed.quotes.get(ident) if self.feed and ident else None
+        self.sync_quotes(self._instruments)
 
     def _row_prompt(self, target: Any, members: list[str]) -> Text:
         """One watchlist row: name, last, change, quote age — columns, not prose.
@@ -1040,7 +986,7 @@ class Targets(DeltaScreen):
             name = f"{target.id} ▸{len(members)}"
         else:
             name = target.id
-        quote = self._quote_for(ident)
+        quote = self.quote_for(ident)
         row = Text(f"  {name[:name_w]:<{name_w}}")
         if quote is None:
             row.append(
@@ -1076,7 +1022,7 @@ class Targets(DeltaScreen):
         moves = [
             quote.change_pct
             for _target, members in entries
-            for quote in (self._quote_for(members[0] if len(members) == 1 else None),)
+            for quote in (self.quote_for(members[0] if len(members) == 1 else None),)
             if quote is not None and quote.change_pct is not None
         ]
         if moves:
@@ -1122,7 +1068,7 @@ class Targets(DeltaScreen):
                     ),
                 )
         live = self.feed is not None and any(
-            self._quote_for(ident) for _t, ident in self.rows.values() if ident
+            self.quote_for(ident) for _t, ident in self.rows.values() if ident
         )
         self.query_one("#target-list-pane", Pane).set_badge(
             f"{'● live' if live else '○ idle'} · {len(self.rows)}"
@@ -1189,8 +1135,7 @@ class Targets(DeltaScreen):
     def action_metric_help(self) -> None:
         """Open the plain-English glossary for the selected instrument's profile."""
         instrument = self._selected_instrument
-        if instrument is None:
-            self.notify("select a target first", severity="warning")
+        if not require_selection(self, instrument, "a target"):
             return
         self.app.push_screen(MetricHelpModal(profile_for(instrument)))
 
@@ -1297,8 +1242,7 @@ class Targets(DeltaScreen):
 
     def action_remove(self) -> None:
         key = self._selected()
-        if key is None or key.startswith("child:"):
-            self.notify("select a target first", severity="error")
+        if key is None or not require_selection(self, not key.startswith("child:"), "a target"):
             return
         name = self.rows[key][0]
         try:
@@ -1315,11 +1259,7 @@ class Targets(DeltaScreen):
 
     async def _stop_feed(self) -> None:
         self.active = False
-        if self.feed_task:
-            self.feed_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await self.feed_task
-            self.feed_task = None
+        await self.stop_quotes()
 
     async def on_screen_suspend(self) -> None:
         await self._stop_feed()

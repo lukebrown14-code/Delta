@@ -9,7 +9,6 @@ shown first, ``r`` opens Report, ``e`` opens Evidence, and Escape steps back.
 
 from __future__ import annotations
 
-import asyncio
 from asyncio import CancelledError
 from contextlib import suppress
 from dataclasses import dataclass, field
@@ -25,11 +24,9 @@ from textual.widgets import Button, Input, Markdown, MarkdownViewer, Static
 from textual.widgets._markdown import MarkdownBlock
 from textual.worker import Worker, get_current_worker
 
-from delta import review, services, theses
+from delta import review, services
 from delta.evidence import EvidenceItem, evidence, evidence_by_ids
 from delta.llm.router import model_for
-from delta.plugins.data.yfinance import DEFAULT_SUFFIXES
-from delta.quotes import YahooQuotes
 from delta.reports import (
     _SECTIONS,
     Report,
@@ -40,6 +37,7 @@ from delta.reports import (
     write_report,
 )
 from delta.sentiment import stock_sentiment
+from delta.tui.components import QuoteFeedMixin, thesis_from_citations
 from delta.tui.shell import DeltaScreen, age_text
 from delta.tui.widgets import (
     ActionChip,
@@ -87,9 +85,6 @@ KINDS: tuple[tuple[str, str], ...] = (
 COMPANY_WIDTH = 36
 EVIDENCE_WIDTH = 40
 
-#: Below this terminal width the three columns no longer fit side by side:
-#: Company fills the screen and Report/Evidence open on demand (``r``/``e``).
-NARROW_WIDTH = 100
 
 
 @dataclass
@@ -141,7 +136,7 @@ class ResearchViewer(MarkdownViewer):
             message.stop()
 
 
-class Research(DeltaScreen):
+class Research(QuoteFeedMixin, DeltaScreen):
     #: Every button here has a key. The keys dodge the app-level bindings in
     #: ``DeltaApp`` (1-6, c, h, m, p, g, q) so the global navigation still
     #: works from this screen — notably ``g``, which is the Go picker.
@@ -240,10 +235,6 @@ class Research(DeltaScreen):
         self._company_hints = hint_markup(("↑↓", "select"))
         self._claim_to_reveal = ""
         self._job: Worker | None = None
-        self.feed: YahooQuotes | None = None
-        self.feed_task: asyncio.Task[None] | None = None
-        self.feed_company: tuple[str, ...] = ()
-        self.quote_state = ""
 
     @property
     def view(self) -> CompanyView:
@@ -335,11 +326,13 @@ class Research(DeltaScreen):
             if self.query_one("#evidence-preview").display:
                 old.preview_y = self.query_one("#evidence-preview", VerticalScroll).scroll_y
 
-    def on_screen_suspend(self) -> None:
+    async def on_screen_suspend(self) -> None:
         self.save_position()
         # Drop the socket when the panel is not visible; resuming re-subscribes
         # through refresh_view -> load_company.
-        self.stop_quotes()
+        await self.stop_quotes()
+        self.feed = None
+        self.quote_state = ""
 
     def companies(self) -> list[Any]:
         """Every instrument under a configured target, grouped by target.
@@ -427,7 +420,7 @@ class Research(DeltaScreen):
         if self.view.inspected:
             await self.inspect_evidence(self.view.inspected, save=False)
         self.layout_views()
-        self.start_quotes(self.state.company)
+        self.start_quotes()
         self.call_after_refresh(self.restore_position)
 
     def restore_position(self) -> None:
@@ -768,47 +761,19 @@ class Research(DeltaScreen):
         text.append("\n")
         return text
 
-    def start_quotes(self, company: str) -> None:
+    def start_quotes(self) -> None:
         """Stream live quotes for every company in the list.
 
         Purely additive: the stored last close is what the report reads, so
         a feed that never connects costs the reader nothing. Never awaited
         from ``load_company`` — the panel must not block on the network.
         """
-        instruments = [instrument for _target, instrument in self.companies()]
-        signature = tuple(instrument.id for instrument in instruments)
-        if self.feed_company == signature and self.feed_task and not self.feed_task.done():
-            return
-        self.stop_quotes()
-        self.feed_company = signature
-        if not instruments:
-            return
-        suffixes = DEFAULT_SUFFIXES | getattr(self.delta.cfg, "plugins", {}).get("yfinance", {}).get(
-            "suffixes", {}
-        )
-        self.feed = YahooQuotes(instruments, suffixes, self.on_quote_state)
-        feed = self.feed
-        try:
-            self.feed_task = asyncio.create_task(feed.run())
-        except RuntimeError:
-            # No running loop (standalone mount in a test): stay on stored bars.
-            self.feed = None
-
-    def stop_quotes(self) -> None:
-        if self.feed_task:
-            self.feed_task.cancel()
-        self.feed_task = None
-        self.feed = None
-        self.feed_company = ()
-        self.quote_state = ""
-
-    def on_quote_state(self, state: str) -> None:
-        self.quote_state = state
+        self.sync_quotes([instrument for _target, instrument in self.companies()])
 
     def live_quote(self, company: str | None = None) -> str:
         """The streamed price, when one has arrived; silent otherwise."""
         company = company or self.state.company
-        quote = self.feed.quotes.get(company) if self.feed else None
+        quote = self.quote_for(company)
         if quote is None:
             return ""
         move = f" {quote.change_pct:+.2f}%" if quote.change_pct is not None else ""
@@ -1056,7 +1021,9 @@ class Research(DeltaScreen):
 
     def layout_views(self) -> None:
         """Wide: three columns. Narrow: one column at a time, ``self._view``."""
-        self._narrow = self.size.width < NARROW_WIDTH
+        # Narrow (below NARROW_WIDTH): Company fills the screen and Report /
+        # Evidence open on demand (``r``/``e``).
+        self._narrow = self.apply_breakpoint()
         row = self.query_one("#research-columns")
         row.set_class(self._narrow, "-compact")
         row.set_class(self._narrow and self.detail_open, "-detail")
@@ -1231,42 +1198,19 @@ class Research(DeltaScreen):
         to hold. This is the step between the two, so the claim's sources stay
         attached rather than being re-found by hand.
         """
-        from delta.tui.screens.theses import ThesisForm
-
         field, _, index = ref.partition(":")
         claims = getattr(self.report, field, []) if self.report else []
         if not index.isdigit() or int(index) >= len(claims):
             self.notify("that claim is no longer in the report", severity="error")
             return
         claim = claims[int(index)]
-
-        def created(fields: dict[str, Any] | None) -> None:
-            if fields is None:
-                return
-            text = fields.pop("claim")
-            fields["targets"] = fields["targets"] or (self.state.company,)
-            try:
-                thesis = theses.create_thesis(self.delta.engine, text, **fields)
-            except ValueError as exc:
-                self.notify(str(exc), severity="error")
-                return
-            for evidence_id in claim.evidence_ids:
-                # Accepted, not queued as a candidate: the citation contract
-                # already proved these support the claim, and the reader just
-                # read them in context. Re-reviewing them would be busywork.
-                theses.add_evidence(
-                    self.delta.engine,
-                    thesis.id,
-                    evidence_id,
-                    "support",
-                    f"from report {self.state.company}",
-                    accepted=True,
-                )
-            self.notify(
-                f"thesis created with {len(claim.evidence_ids)} linked evidence items", timeout=6
-            )
-
-        self.app.push_screen(ThesisForm(claim=claim.text, targets=self.state.company), created)
+        thesis_from_citations(
+            self,
+            claim.text,
+            (self.state.company,),
+            claim.evidence_ids,
+            f"from report {self.state.company}",
+        )
 
     def research_screens(self) -> list[Research]:
         """Every mounted Research panel, so compatibility views stay in sync.
@@ -1292,10 +1236,7 @@ class Research(DeltaScreen):
 
     def spend(self) -> float:
         """Total LLM spend so far; the delta across a run is what it cost."""
-        try:
-            return sum(row.cost_usd for row in services.llm_costs(self.delta.engine))
-        except Exception:
-            return 0.0
+        return services.total_spend(self.delta.engine)
 
     def report_failure(self, prefix: str, exc: BaseException) -> None:
         """Surface a failure without dumping a provider's raw payload in a toast.

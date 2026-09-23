@@ -33,11 +33,25 @@ The output is a menu of ideas, each with an ID. Pick the IDs you want implemente
 | 2 Key grammar and navigation | 1 agent, serial | Touches `BINDINGS` on every screen, so it must run alone |
 | 3 Features | **WS8–WS10 in parallel** | New modules, with small hooks into screens |
 
+**Phase 0 status: done** (branch `audit/ws0-foundations`). What other streams can now use:
+- `delta/tui/components.py`:
+  - `QuoteFeedMixin` (`sync_quotes` / `quote_for` / `stop_quotes`)
+  - `SuggestionList`
+  - `EmptyState`
+  - `SectionHeading`
+  - `require_selection`
+  - `goto`
+  - `thesis_from_citations`
+  - `quote_suffixes`
+- `DeltaScreen.narrow` and `apply_breakpoint()` with `shell.NARROW_WIDTH`, replacing the per-screen constants.
+- `services.total_spend()`; `llm_costs` now aggregates in SQL.
+- 21 layout snapshots (7 panels at 80×24, 120×40 and 200×50), with frozen time and no network. Accept intended layout changes with `uv run pytest tests/test_snapshots.py --snapshot-update`, then review the SVG diffs.
+
 **Workstreams, their files and their IDs**
 
 | WS | Phase | Owns (exclusive) | IDs |
 |---|---|---|---|
-| **WS0 Foundations** | 0 | `tests/snapshots/` (new), `delta/tui/components.py` (new: `Autocomplete`, `EmptyState`, `SectionHeading`, `QuoteFeedMixin`, `require_selection`, `goto`), `services.total_spend`, the breakpoint class in `shell.py` | J16, C1, C2, C3, D7, J6, J9, B8 |
+| **WS0 Foundations** ✅ | 0 | `tests/test_snapshots.py` + `tests/__snapshots__/` (new), `delta/tui/components.py` (new: `Autocomplete`, `EmptyState`, `SectionHeading`, `QuoteFeedMixin`, `require_selection`, `goto`), `services.total_spend`, the breakpoint class in `shell.py` | J16, C1, C2, C3, D7, J6, J9, B8 |
 | **WS1 Chart and inspector** | 1 | `widgets.py` (`BrailleGraph`, `PriceChart` only), `axes.py`, `screens/targets.py`, `asset_metrics.py`, `tests/test_chart*.py`, `tests/test_asset_metrics.py` | K1–K13, J7, J8, B12, C10, J10 (targets part) |
 | **WS2 Data and performance** | 1 | `core/db.py`, `plugins/**`, `evidence.py`, `review.py`, `brief.py`, `sentiment.py`, `extract.py`, and in `services.py` the ingest and `data_health` functions | A3, A4, A5, B1, B2, B3, B5, B6, B9, B10, B11, B13, B14, B15 |
 | **WS3 LLM layer** | 1 | `delta/llm/**`, `chat.py` (non-TUI), `reports.py` | A7, C5, H3, H4 |

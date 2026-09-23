@@ -9,7 +9,7 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from sqlmodel import Session, select
+from sqlmodel import Session, func, select
 
 from delta.core.db import (
     BarTable,
@@ -502,18 +502,34 @@ class CostRow:
 
 
 def llm_costs(engine: Any, since: str | None = None) -> list[CostRow]:
+    """Calls and spend per (task, model), aggregated in SQL.
+
+    Only the grouped columns are read: loading whole rows would pull every
+    cached response payload into memory just to sum a float.
+    """
+    query = select(
+        LLMCallTable.task,
+        LLMCallTable.model,
+        func.count(),
+        func.coalesce(func.sum(LLMCallTable.cost_usd), 0.0),
+    ).group_by(LLMCallTable.task, LLMCallTable.model)
+    if since:
+        query = query.where(LLMCallTable.ts >= parse_date(since))
     with Session(engine) as session:
-        query = select(LLMCallTable)
-        if since:
-            query = query.where(LLMCallTable.ts >= parse_date(since))
-        rows = session.exec(query).all()
-    grouped: dict[tuple[str, str], list[float]] = {}
-    for row in rows:
-        grouped.setdefault((row.task, row.model), []).append(row.cost_usd)
-    return [
-        CostRow(task, model, len(costs), sum(costs))
-        for (task, model), costs in sorted(grouped.items())
-    ]
+        rows = session.exec(query.order_by(LLMCallTable.task, LLMCallTable.model)).all()
+    return [CostRow(task, model, int(calls), float(cost)) for task, model, calls, cost in rows]
+
+
+def total_spend(engine: Any, since: str | None = None) -> float:
+    """Total LLM spend, optionally since a date; 0.0 when the log is unreadable."""
+    query = select(func.coalesce(func.sum(LLMCallTable.cost_usd), 0.0))
+    if since:
+        query = query.where(LLMCallTable.ts >= parse_date(since))
+    try:
+        with Session(engine) as session:
+            return float(session.exec(query).one())
+    except Exception:
+        return 0.0
 
 
 @dataclass

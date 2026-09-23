@@ -20,7 +20,6 @@ arrows, enter and tab, so nothing here can shadow navigation.
 
 from __future__ import annotations
 
-import asyncio
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -38,9 +37,9 @@ from delta import decisions, review, services
 from delta.core.models import Instrument
 from delta.core.state import read_last_seen
 from delta.core.time import to_utc
-from delta.plugins.data.yfinance import DEFAULT_SUFFIXES
-from delta.quotes import Quote, YahooQuotes
-from delta.tui.shell import DeltaScreen, age_text
+from delta.quotes import Quote
+from delta.tui.components import QuoteFeedMixin, goto
+from delta.tui.shell import NARROW_WIDTH, DeltaScreen, age_text
 from delta.tui.widgets import (
     BrailleGraph,
     DeltaTable,
@@ -62,8 +61,6 @@ REPORT_STALE = timedelta(days=7)
 #: How often the watchlist repaints from the quote feed.
 QUOTE_PAINT_SECONDS = 0.5
 
-#: Below this width only the watchlist and go boxes are shown.
-NARROW_WIDTH = 100
 #: Below this height the middle row folds into the watchlist summary lines.
 TALL_HEIGHT = 40
 
@@ -321,7 +318,7 @@ class GoCell(Horizontal):
 SYSTEM_ROWS = ("plugins", "data", "llm", "spend", "setup", "db")
 
 
-class Home(DeltaScreen):
+class Home(QuoteFeedMixin, DeltaScreen):
     name = "home"
 
     DEFAULT_CSS = """
@@ -441,14 +438,9 @@ class Home(DeltaScreen):
         self._watched_rows: list[tuple[str, Instrument]] = []
         self._events: list[services.Upcoming] | None = None
         self._fleet: list[services.ThesisHealth] = []
-        # Ephemeral quotes, exactly as the Watchlist runs them: one task owned
-        # by the screen, started on resume and cancelled on suspend/unmount.
-        self.feed: YahooQuotes | None = None
-        self.feed_task: asyncio.Task | None = None
+        # Ephemeral quotes (QuoteFeedMixin), started on resume and cancelled
+        # on suspend/unmount.
         self.active = False
-        self.signature: tuple = ()
-        #: Test seam: an alternative websocket client for ``YahooQuotes``.
-        self.quote_client_factory: Any = None
 
     # ----- layout ---------------------------------------------------------
 
@@ -538,10 +530,9 @@ class Home(DeltaScreen):
 
     def layout_views(self) -> None:
         """Wide+tall: six boxes. Short: no middle row. Narrow: watchlist and go only."""
-        narrow = self.size.width < NARROW_WIDTH
+        narrow = self.apply_breakpoint()
         short = self.size.height < TALL_HEIGHT
         folded = narrow or short
-        self.set_class(narrow, "-narrow")
         self.set_class(short, "-short")
         self.set_class(folded, "-folded")
         self.query_one("#home-mid").display = not folded
@@ -580,38 +571,7 @@ class Home(DeltaScreen):
 
     def _sync_feed(self) -> None:
         """Point the quote feed at the watched instruments, restarting if they changed."""
-        suffixes = DEFAULT_SUFFIXES | getattr(self.delta.cfg, "plugins", {}).get("yfinance", {}).get(
-            "suffixes", {}
-        )
-        instruments = [instrument for _target, instrument in self._watched_rows[:WATCH_ROWS]]
-        signature = (
-            tuple(sorted(i.id for i in instruments)),
-            tuple(sorted(suffixes.items())),
-        )
-        if self.feed_task and not self.feed_task.done() and signature == self.signature:
-            return
-        old_task = self.feed_task
-        if old_task:
-            old_task.cancel()
-        old_quotes = self.feed.quotes if self.feed else {}
-        self.signature = signature
-        self.feed = YahooQuotes(instruments, suffixes, self._quote_state, self.quote_client_factory)
-        self.feed.quotes.update({k: v for k, v in old_quotes.items() if k in signature[0]})
-        feed = self.feed
-
-        async def start() -> None:
-            if old_task:
-                with suppress(asyncio.CancelledError):
-                    await old_task
-            await feed.run()
-
-        self.feed_task = asyncio.create_task(start())
-
-    def _quote_state(self, state: str) -> None:
-        self._feed_state = state
-
-    def _quote_for(self, ident: str) -> Quote | None:
-        return self.feed.quotes.get(ident) if self.feed else None
+        self.sync_quotes([instrument for _target, instrument in self._watched_rows[:WATCH_ROWS]])
 
     def _paint_quotes(self) -> None:
         """Repaint the watchlist from the feed. Reads cached quotes only — never the network."""
@@ -624,18 +584,14 @@ class Home(DeltaScreen):
             return
         live = False
         for row in rows:
-            quote = self._quote_for(row.instrument.id)
+            quote = self.quote_for(row.instrument.id)
             row.set_quote(quote)
             live = live or quote is not None
         head.update(_watch_head(live=live))
 
     async def _stop_feed(self) -> None:
         self.active = False
-        if self.feed_task:
-            self.feed_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await self.feed_task
-            self.feed_task = None
+        await self.stop_quotes()
 
     async def on_screen_resume(self) -> None:
         self.active = True
@@ -963,10 +919,7 @@ class Home(DeltaScreen):
         rows = services.llm_costs(self.delta.engine)
         total = sum(row.cost_usd for row in rows)
         calls = sum(row.calls for row in rows)
-        today = sum(
-            row.cost_usd
-            for row in services.llm_costs(self.delta.engine, since=now.strftime("%Y-%m-%d"))
-        )
+        today = services.total_spend(self.delta.engine, since=now.strftime("%Y-%m-%d"))
         failing = [check.name for check in checks if not check.ok]
 
         def dot(state: str) -> str:
@@ -1082,10 +1035,8 @@ class Home(DeltaScreen):
 
     def on_watch_rows_open(self, event: WatchRows.Open) -> None:
         """Enter on the watchlist: open that target on the Watchlist screen."""
-        switch = getattr(self.app, "action_switch_screen", None)
-        if not callable(switch):
+        if not goto(self.app, "targets"):
             return
-        switch("targets")
         self.app.call_later(self._highlight_target, f"target:{event.target_id}")
 
     def _highlight_target(self, option_id: str, attempts: int = 5) -> None:
@@ -1103,6 +1054,5 @@ class Home(DeltaScreen):
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         """Enter on the upcoming or theses table: open the matching desk."""
         screen = {"upcoming-table": "data", "theses-table": "theses"}.get(event.data_table.id or "")
-        switch = getattr(self.app, "action_switch_screen", None)
-        if screen and callable(switch):
-            switch(screen)
+        if screen:
+            goto(self.app, screen)

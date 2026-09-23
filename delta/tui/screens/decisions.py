@@ -16,6 +16,7 @@ from textual.containers import VerticalScroll
 from textual.widgets import Button, Input, Static
 
 from delta import decisions
+from delta.tui.components import EmptyState, SectionHeading, goto, require_selection
 from delta.tui.screens.research import ResearchState
 from delta.tui.shell import DeltaScreen
 from delta.tui.widgets import DeltaTable, Dialog, KeyStrip, Pane, PaneRow
@@ -129,9 +130,7 @@ class Decisions(DeltaScreen):
     #decision-detail-pane { width: 3fr; min-width: 36; }
     #decision-detail { height: 1fr; }
     #decision-keys { height: auto; }
-    .decision-heading { color: $text-primary; text-style: bold; margin-top: 1; height: 1; }
-    .decision-field { height: auto; margin-bottom: 1; }
-    .decision-muted { color: $text-muted; }
+    .decision-field { height: auto; padding: 0 1; }
     #decisions-split.-narrow > Pane { width: 1fr; min-width: 0; }
     """
 
@@ -183,17 +182,48 @@ class Decisions(DeltaScreen):
         await pane.remove_children()
         row = self.rows.get(self.selected or "")
         if row is None:
-            await pane.mount(Static("No decisions yet.\n\nPress n to record the context you want to revisit.", markup=False))
+            await pane.mount(
+                EmptyState(
+                    "no decisions yet", key="n", action="record the context you want to revisit"
+                )
+            )
             return
-        fields = (("instrument", _value(row, "instrument_id")), ("status", _value(row, "status", "open")), ("created", _date(_value(row, "created_at"))), ("next review", _date(_value(row, "review_date"))), ("horizon", _value(row, "time_horizon")), ("thesis", _value(row, "thesis_id") or "—"))
-        widgets: list[Any] = [Static("DECISION", classes="decision-heading")]
-        widgets.extend(Static(f"{label:12}{value}", classes="decision-field", markup=False) for label, value in fields)
-        widgets += [Static("RATIONALE", classes="decision-heading"), Static(str(_value(row, "rationale")), classes="decision-field", markup=False), Static("VALUATION / PRICE CONTEXT", classes="decision-heading"), Static(str(_value(row, "valuation_context")), classes="decision-field", markup=False), Static("INVALIDATION CRITERIA", classes="decision-heading"), Static(str(_value(row, "invalidation_criteria")), classes="decision-field", markup=False), Static("REVIEWS", classes="decision-heading")]
+        fields = (
+            ("instrument", _value(row, "instrument_id")),
+            ("status", _value(row, "status", "open")),
+            ("created", _date(_value(row, "created_at"))),
+            ("next review", _date(_value(row, "review_date"))),
+            ("horizon", _value(row, "time_horizon")),
+            ("thesis", _value(row, "thesis_id") or "—"),
+        )
+        widgets: list[Any] = [SectionHeading("decision", classes="-first")]
+        widgets.extend(
+            Static(f"{label:12}{value}", classes="decision-field", markup=False)
+            for label, value in fields
+        )
+        for heading, key in (
+            ("rationale", "rationale"),
+            ("valuation / price context", "valuation_context"),
+            ("invalidation criteria", "invalidation_criteria"),
+        ):
+            widgets += [
+                SectionHeading(heading),
+                Static(str(_value(row, key)), classes="decision-field", markup=False),
+            ]
+        widgets.append(SectionHeading("reviews"))
         history = decisions.review_history(self.delta.engine, str(_value(row, "id")))
         if history:
-            widgets.extend(Static(f"{_date(_value(review, 'created_at'))} · {_value(review, 'status', '')}\n{_value(review, 'note')}", classes="decision-field", markup=False) for review in history)
+            widgets.extend(
+                Static(
+                    f"{_date(_value(review, 'created_at'))} · {_value(review, 'status', '')}\n"
+                    f"{_value(review, 'note')}",
+                    classes="decision-field",
+                    markup=False,
+                )
+                for review in history
+            )
         else:
-            widgets.append(Static("No reviews yet. Press r to append one.", classes="decision-muted", markup=False))
+            widgets.append(EmptyState("no reviews yet", key="r", action="append one"))
         await pane.mount(*widgets)
 
     def action_new_decision(self) -> None:
@@ -211,8 +241,7 @@ class Decisions(DeltaScreen):
         await self.refresh_view()
 
     def action_review(self) -> None:
-        if self.selected is None:
-            self.notify("select a decision first", severity="error")
+        if not require_selection(self, self.selected, "a decision"):
             return
         self.app.push_screen(ReviewForm(), self._save_review)
 
@@ -228,11 +257,10 @@ class Decisions(DeltaScreen):
 
     def action_open_research(self) -> None:
         row = self.rows.get(self.selected or "")
-        if row is None:
-            self.notify("select a decision first", severity="error")
+        if not require_selection(self, row, "a decision"):
             return
         self.state.company = str(_value(row, "instrument_id"))
-        self.app.action_switch_screen("data")
+        goto(self.app, "data")
 
     def action_back(self) -> None:
         self.query_one("#decisions-table", DeltaTable).focus()

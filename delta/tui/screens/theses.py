@@ -21,6 +21,7 @@ from delta import theses, thesis_summary
 from delta.core.time import to_utc
 from delta.evidence import EvidenceItem, cite, evidence_by_ids
 from delta.thesis_health import HealthResult, compute_health
+from delta.tui.components import require_selection
 from delta.tui.shell import DeltaScreen, age_text
 from delta.tui.widgets import DeltaTable, Dialog, Pane, PaneRow, hint_markup
 
@@ -250,11 +251,6 @@ class Theses(DeltaScreen):
         Binding("shift+up", "scroll_note_up", "scroll note", show=False),
     ]
 
-    #: Below this terminal width the three panes no longer fit side by side:
-    #: the claims list takes the whole width and the thesis and the ledger
-    #: open full-width on demand (enter / e), esc stepping back.
-    NARROW_WIDTH = 100
-
     CSS = """
     #thesis-split { height: 1fr; }
     #thesis-claims { width: 36; }
@@ -336,8 +332,9 @@ class Theses(DeltaScreen):
 
     def layout_views(self) -> None:
         """Wide: three panes. Narrow: one pane at a time, ``self._view``."""
-        self._narrow = self.size.width < self.NARROW_WIDTH
-        self.set_class(self._narrow, "-narrow")
+        # Narrow: the claims list takes the whole width and the thesis and the
+        # ledger open full-width on demand (enter / e), esc stepping back.
+        self._narrow = self.apply_breakpoint()
         for pane, view in (
             ("#thesis-claims", "claims"),
             ("#thesis-detail-pane", "detail"),
@@ -610,8 +607,7 @@ class Theses(DeltaScreen):
         self.app.push_screen(ThesisForm(), self._save_thesis)
 
     def action_edit_thesis(self) -> None:
-        if self.selected is None:
-            self.notify("select a thesis first", severity="error")
+        if not require_selection(self, self.selected, "a thesis"):
             return
         self.app.push_screen(
             ThesisForm(theses.get_thesis(self.delta.engine, self.selected)), self._save_thesis
@@ -648,8 +644,7 @@ class Theses(DeltaScreen):
         await self._summarise()
 
     async def _summarise(self) -> None:
-        if self.selected is None:
-            self.notify("select a thesis first", severity="error")
+        if not require_selection(self, self.selected, "a thesis"):
             return
         if self._summarising:
             return
@@ -673,8 +668,7 @@ class Theses(DeltaScreen):
 
     async def _find_evidence(self) -> None:
         """Ask the model for candidate evidence; it is stored unaccepted."""
-        if self.selected is None:
-            self.notify("select a thesis first", severity="error")
+        if not require_selection(self, self.selected, "a thesis"):
             return
         if self._finding:
             return
