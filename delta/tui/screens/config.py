@@ -95,14 +95,12 @@ class Config(DeltaScreen):
             with Vertical(id="cfg-left"):
                 with Pane(
                     title="provider & model",
-                    key="p",
                     hints=hint_markup(("↑↓", "choose"), ("enter", "change")),
                     id="cfg-ai-pane",
                 ):
                     yield DeltaTable(id="cfg-model", show_header=False)
                 with Pane(
                     title="plugins",
-                    key="l",
                     hints=hint_markup(("↑↓", "plugin"), ("enter", "details")),
                     id="cfg-plugins-pane",
                 ):
@@ -110,7 +108,6 @@ class Config(DeltaScreen):
                     yield Static("no plugins discovered", id="cfg-plugins-empty", markup=False)
                 with Pane(
                     title="data sources & markets",
-                    key="s",
                     hints=hint_markup(("s", "configure source"), ("a/e/x", "market")),
                     id="cfg-sources-pane",
                 ):
@@ -119,7 +116,6 @@ class Config(DeltaScreen):
                     yield Static("s configure source · a add · e edit · x remove market", id="cfg-sources-hint", markup=False)
             with Pane(
                 title="diagnostics",
-                key="d",
                 hints=hint_markup(("r", "refresh"), ("d", "fold"), ("↑↓", "scroll")),
                 id="cfg-diag",
             ):
