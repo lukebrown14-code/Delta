@@ -214,6 +214,63 @@ def list_decisions(
         return [_decision_from_row(row) for row in session.exec(stmt).all()]
 
 
+def update_decision(
+    engine: Engine,
+    decision_id: str,
+    *,
+    instrument_id: str,
+    rationale: str,
+    valuation_context: str,
+    time_horizon: str,
+    review_date: date,
+    invalidation_criteria: str,
+    thesis_id: str | None = None,
+) -> Decision:
+    """Edit a decision's framing, preserving its identity and open timestamp.
+
+    The journal is append-only in the sense that reviews are stacked, not that
+    a typo in the original framing can never be fixed; the created timestamp and
+    id are kept so the review history stays anchored to the same record.
+    """
+    instrument_id = _required("instrument_id", instrument_id)
+    rationale = _required("rationale", rationale)
+    valuation_context = _required("valuation_context", valuation_context)
+    time_horizon = _required("time_horizon", time_horizon)
+    invalidation_criteria = _required("invalidation_criteria", invalidation_criteria)
+    _ensure_tables(engine)
+    snapshot = _linked_thesis(engine, thesis_id, instrument_id) if thesis_id else None
+    with Session(engine) as session:
+        row = session.get(DecisionTable, decision_id)
+        if row is None:
+            raise KeyError(f"unknown decision: {decision_id}")
+        row.instrument_id = instrument_id
+        row.rationale = rationale
+        row.valuation_context = valuation_context
+        row.time_horizon = time_horizon
+        row.review_date = review_date
+        row.invalidation_criteria = invalidation_criteria
+        row.thesis_id = thesis_id
+        row.thesis_claim_snapshot = snapshot
+        session.commit()
+        session.refresh(row)
+        return _decision_from_row(row)
+
+
+def delete_decision(engine: Engine, decision_id: str) -> None:
+    """Remove a decision and its review history; unknown ids raise ``KeyError``."""
+    _ensure_tables(engine)
+    with Session(engine) as session:
+        row = session.get(DecisionTable, decision_id)
+        if row is None:
+            raise KeyError(f"unknown decision: {decision_id}")
+        for review in session.exec(
+            select(DecisionReviewTable).where(DecisionReviewTable.decision_id == decision_id)
+        ).all():
+            session.delete(review)
+        session.delete(row)
+        session.commit()
+
+
 def append_review(
     engine: Engine,
     decision_id: str,

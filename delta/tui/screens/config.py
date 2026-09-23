@@ -8,6 +8,7 @@ between panes, ↑↓ move inside the focused table, enter acts on the row.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -192,7 +193,8 @@ class Config(DeltaScreen):
         self._refresh_plugins()
         self._refresh_sources()
         self._refresh_markets()
-        self._refresh_diagnostics()
+        data = await asyncio.to_thread(self._diagnostics_data)
+        self._render_diagnostics(*data)
 
     def _refresh_ai(self) -> None:
         """Two rows: ``provider: ● name`` and ``model: id`` — the two things to get right.
@@ -371,8 +373,27 @@ class Config(DeltaScreen):
             reload_markets()
         await self.refresh_view()
 
-    def _refresh_diagnostics(self) -> None:
+    def _diagnostics_data(self) -> tuple[Any, list[Any], float, float, str]:
+        """Run the diagnostics queries off the event loop.
+
+        Returns ``(health, cost_rows, total, today, db_size)`` for the renderer.
+        """
         health = services.data_health(self.delta)
+        cost_rows = services.llm_costs(self.delta.engine)
+        total = sum(row.cost_usd for row in cost_rows)
+        today = services.total_spend(self.delta.engine, since=datetime.now(UTC).date().isoformat())
+        db_path = Path(str(getattr(self.delta.cfg, "db_path", "") or ""))
+        size = ""
+        try:
+            if db_path.is_file():
+                size = f"{db_path.name} · {_human_size(db_path.stat().st_size)}"
+        except OSError:
+            size = ""
+        return health, cost_rows, total, today, size
+
+    def _render_diagnostics(
+        self, health: Any, cost_rows: list[Any], total: float, today: float, db_size: str
+    ) -> None:
         table = self.query_one("#health-table", DeltaTable)
         table.clear()
         for name, count in sorted(health.counts.items()):
@@ -389,24 +410,14 @@ class Config(DeltaScreen):
         if health.last_llm:
             lines.append(f"last model call {_stamp(health.last_llm)}")
         self.query_one("#health-latest", Static).update("\n".join(lines))
-        db_path = Path(str(getattr(self.delta.cfg, "db_path", "") or ""))
-        size = ""
-        try:
-            if db_path.is_file():
-                size = f"{db_path.name} · {_human_size(db_path.stat().st_size)}"
-        except OSError:
-            size = ""
-        self.query_one("#cfg-db-size", Static).update(size)
+        self.query_one("#cfg-db-size", Static).update(db_size)
 
         costs = self.query_one("#costs-table", DeltaTable)
         costs.clear()
-        cost_rows = services.llm_costs(self.delta.engine)
         for row in cost_rows:
             costs.add_row(row.task, row.model, str(row.calls), f"${row.cost_usd:.3f}")
-        total = sum(row.cost_usd for row in cost_rows)
         calls = sum(row.calls for row in cost_rows)
         self.query_one("#costs-total", Static).update(f"total  {calls} calls  ${total:.2f}")
-        today = services.total_spend(self.delta.engine, since=datetime.now(UTC).date().isoformat())
         self.query_one("#costs-today", Static).update(f"today ${today:.2f}")
         now = datetime.now().strftime("%H:%M:%S")
         self.query_one("#cfg-refreshed", Static).update(
