@@ -838,7 +838,11 @@ def test_home_quote_age_falls_back_to_the_stored_close(delta, monkeypatch, tmp_p
             assert "100.00" in str(row.query_one(".w-close").render())
             assert str(row.query_one(".w-age").render()) == ""
 
-            row.set_quote(_quote(age_seconds=60_000))
+            # The quote goes through the feed, not the row: the half-second
+            # repaint re-applies feed quotes, so a row-injected quote would be
+            # wiped on the next tick — a race this test used to lose on CI.
+            home.feed.quotes["US:AAPL"] = _quote(age_seconds=60_000)
+            home._paint_quotes()
             await pilot.pause()
             assert str(row.query_one(".w-age").render()) == "16h"
             assert row.query_one(".w-age").has_class("-stale")
