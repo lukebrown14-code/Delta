@@ -72,6 +72,14 @@ def snapshot_app(tmp_path, monkeypatch):
     monkeypatch.setattr(
         tui.screens.targets, "fetch_asset_metrics", lambda *args, **kwargs: _metric()
     )
+    # Pin the settings panel's two environment-dependent values: the provider
+    # connection status (depends on OPENROUTER_API_KEY being present) and the
+    # on-disk SQLite size (differs by OS/SQLite version). Without these the
+    # Config snapshot drifts between a dev machine and CI.
+    monkeypatch.setattr(
+        "delta.tui.screens.config.read_env_value", lambda name: "test-key" if name else ""
+    )
+    monkeypatch.setattr("delta.tui.screens.config._human_size", lambda size: "4 KB")
     # Relative paths only: the Config and Home panels print the DB name.
     monkeypatch.chdir(tmp_path)
     (tmp_path / "config.toml").write_text(

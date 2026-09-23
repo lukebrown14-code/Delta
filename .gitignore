@@ -1,5 +1,7 @@
 .env
 /data/*.db
+/data/*.db-wal
+/data/*.db-shm
 /data/model_catalog.json
 /reports/
 __pycache__/
