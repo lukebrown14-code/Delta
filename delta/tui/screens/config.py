@@ -291,7 +291,7 @@ class Config(DeltaScreen):
         row_key = table.coordinate_to_cell_key((table.cursor_row, 0)).row_key
         return str(row_key.value) if row_key is not None else None
 
-    async def action_configure_source(self) -> None:
+    async def _configure_source_flow(self) -> None:
         from delta.tui.screens.source_setup import configure_source
 
         table = self.query_one("#cfg-sources", DeltaTable)
@@ -302,14 +302,20 @@ class Config(DeltaScreen):
         if row_key is not None:
             await configure_source(self.app, self.delta, str(row_key.value), self.refresh_view)
 
-    async def action_add_market(self) -> None:
+    def action_configure_source(self) -> None:
+        self.run_worker(self._configure_source_flow(), exclusive=True)
+
+    async def _add_market_flow(self) -> None:
         from delta.tui.screens.market_setup import MarketSetupModal
 
         values = await self.app.push_screen_wait(MarketSetupModal())
         if values is not None:
             await self._save_market(values)
 
-    async def action_edit_market(self) -> None:
+    def action_add_market(self) -> None:
+        self.run_worker(self._add_market_flow(), exclusive=True)
+
+    async def _edit_market_flow(self) -> None:
         from delta.tui.screens.market_setup import MarketSetupModal
 
         name = self._selected_market()
@@ -325,6 +331,9 @@ class Config(DeltaScreen):
         )
         if values is not None:
             await self._save_market(values)
+
+    def action_edit_market(self) -> None:
+        self.run_worker(self._edit_market_flow(), exclusive=True)
 
     async def _save_market(self, values: dict[str, str]) -> None:
         try:
@@ -412,7 +421,7 @@ class Config(DeltaScreen):
 
     # ------------------------------------------------------------ events
 
-    async def on_data_table_row_selected(self, event: DeltaTable.RowSelected) -> None:
+    def on_data_table_row_selected(self, event: DeltaTable.RowSelected) -> None:
         key = event.row_key.value if event.row_key else None
         if event.data_table.id == "cfg-model" and key == "model":
             self.pick_model()
@@ -421,9 +430,9 @@ class Config(DeltaScreen):
         elif event.data_table.id == "cfg-plugins" and key:
             self.show_plugin(str(key))
         elif event.data_table.id == "cfg-sources":
-            await self.action_configure_source()
+            self.action_configure_source()
         elif event.data_table.id == "cfg-markets":
-            await self.action_edit_market()
+            self.action_edit_market()
 
     def pick_model(self) -> None:
         """Open the model picker and save the choice as the one model for all tasks."""
