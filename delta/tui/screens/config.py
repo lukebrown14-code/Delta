@@ -262,11 +262,6 @@ class Config(DeltaScreen):
         )
         table.add_row(model_cell, key="model")
 
-        badge = f"{name or 'none'} · {model or 'choose'}"
-        if name and not connected:
-            badge += " · no key"
-        self.query_one("#cfg-ai-pane", Pane).set_badge(badge)
-
     def _refresh_plugins(self) -> None:
         table = self.query_one("#cfg-plugins", DeltaTable)
         table.clear()
