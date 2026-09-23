@@ -619,3 +619,47 @@ def test_fold_key_on_an_empty_evidence_list_is_a_no_op(tmp_engine, tmp_path, mon
             assert pilot.app._exception is None
 
     asyncio.run(run())
+
+
+def test_news_stance_pill_reflects_jev_classifications(tmp_engine, tmp_path, monkeypatch):
+    """The JEV tally is a report-pane pill, present before any report exists."""
+    from delta.core.db import SentimentTable
+    from delta.tui.screens.research import Research
+    from delta.tui.widgets import Pill
+
+    delta = setup_rig(tmp_engine, tmp_path, monkeypatch)
+    with Session(tmp_engine) as session:
+        for i, stance in enumerate(("bull", "bear", "bull")):
+            session.add(
+                SentimentTable(
+                    id=f"s{i}",
+                    instrument_id=INST,
+                    evidence_id=f"s{i}",
+                    ts=datetime.now(UTC),
+                    stance=stance,
+                    confidence=0.9,
+                    probabilities="{}",
+                    model="typesafe/jev-1.13",
+                    prompt_version="jev_v1",
+                )
+            )
+        session.commit()
+
+    class TestApp(App):
+        def on_mount(self):
+            self.push_screen(Research(delta))
+
+    async def run():
+        async with TestApp().run_test(size=(120, 30)) as pilot:
+            screen = pilot.app.screen
+            pick_company(screen, INST)
+            await pilot.pause()
+            pill = screen.query_one("#report-news-stance", Pill)
+            assert pill.display
+            text = str(pill.render())
+            assert "jev news" in text
+            assert "▲2" in text
+            assert "▼1" in text
+            assert "─0" in text
+
+    asyncio.run(run())

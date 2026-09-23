@@ -39,6 +39,7 @@ from delta.reports import (
     report_history,
     write_report,
 )
+from delta.sentiment import stock_sentiment
 from delta.tui.shell import DeltaScreen, age_text
 from delta.tui.widgets import (
     ActionChip,
@@ -185,6 +186,7 @@ class Research(DeltaScreen):
     #report-age, #report-sentiment-delta {{ color: $text-muted; }}
     #report-generate {{ width: auto; }}
     #report-history {{ height: auto; margin-top: 1; color: $text-muted; }}
+    #report-news-stance {{ width: auto; margin-top: 1; }}
     #report-legacy {{ height: auto; color: $text-muted; }}
     #research-audit {{
         height: 1;
@@ -277,6 +279,7 @@ class Research(DeltaScreen):
                             "n", "generate report", id="report-generate", classes="-primary"
                         )
                     yield Static("", id="report-history", markup=False)
+                    yield Pill("", id="report-news-stance")
                 yield Static("", id="report-legacy", markup=False)
                 yield Static("", id="research-audit", markup=False)
                 yield ResearchViewer(
@@ -419,6 +422,7 @@ class Research(DeltaScreen):
         self.detail_open = False
         await self.show_latest(self.state.company)
         self.show_audit(self.state.company)
+        self.show_news_stance(self.state.company)
         self.load_evidence()
         if self.view.inspected:
             await self.inspect_evidence(self.view.inspected, save=False)
@@ -848,16 +852,25 @@ class Research(DeltaScreen):
         except Exception:
             line.update("")
             return
-        parts = list(audit.warnings)
-        from delta.sentiment import stock_sentiment
+        line.update(" · ".join(audit.warnings))
 
-        summary = stock_sentiment(self.delta.engine, company)
-        if summary is not None:
-            parts.append(
-                f"news stance {summary.score:+.2f} · {summary.bull} bull / "
-                f"{summary.bear} bear / {summary.neutral} neutral · {summary.days}d"
-            )
-        line.update(" · ".join(parts))
+    def show_news_stance(self, company: str) -> None:
+        """The JEV bull/bear/neutral tally for recent news, as a header pill.
+
+        Independent of the generated report: it reads the sentiment rows
+        directly, so it appears as soon as evidence has been classified.
+        """
+        pill = self.query_one("#report-news-stance", Pill)
+        summary = stock_sentiment(self.delta.engine, company) if company else None
+        if summary is None:
+            pill.display = False
+            return
+        pill.display = True
+        pill.update(
+            f"jev news {summary.score:+.2f} · "
+            f"▲{summary.bull} ▼{summary.bear} ─{summary.neutral} · {summary.days}d"
+        )
+        pill.set_variant(sentiment_variant(summary.score))
 
     def reports_dir(self) -> Path:
         return Path(getattr(self.delta.cfg, "reports_dir", "reports"))
