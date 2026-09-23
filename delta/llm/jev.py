@@ -12,17 +12,14 @@ from __future__ import annotations
 
 import json
 import time
-import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from typing import Any
 
 import httpx
 from sqlalchemy.engine import Engine
-from sqlmodel import Session, select
 
-from delta.core.db import LLMCallTable
 from delta.core.ids import stable_id
+from delta.llm.cache import lookup_cache, store_call
 
 DECISIONS_URL = "https://openrouter.ai/api/alpha/decisions"
 JEV_MODEL = "typesafe/jev-1.13"
@@ -103,7 +100,7 @@ class JevClient:
         """Ask Jev one batch of independent questions about one state."""
         payload_questions = {q.key: q.payload() for q in questions}
         phash = _payload_hash(model, state, payload_questions)
-        cached = self._lookup(phash)
+        cached = self._lookup(task, phash)
         if cached is not None:
             return cached
         started = time.perf_counter()
@@ -123,51 +120,50 @@ class JevClient:
             usage=_usage_of(data),
             cached=False,
         )
-        self._store(task, phash, latency_ms, decision, data)
+        store_call(
+            self.engine,
+            task=task,
+            model=decision.model,
+            prompt_version=PROMPT_VERSION,
+            prompt_hash=phash,
+            input_tokens=decision.usage.input_tokens,
+            output_tokens=decision.usage.output_tokens,
+            cost_usd=decision.usage.cost_usd,
+            latency_ms=latency_ms,
+            cached=False,
+            response=json.dumps(data),
+        )
         return decision
 
-    def _lookup(self, phash: str) -> Decision | None:
-        """Cached decision for a payload hash, or None; a bad body is a miss."""
-        with Session(self.engine) as session:
-            row = session.exec(
-                select(LLMCallTable).where(LLMCallTable.prompt_hash == phash)
-            ).first()
-            if row is None or row.response is None:
-                return None
-            try:
-                data: dict[str, Any] = json.loads(row.response)
-            except json.JSONDecodeError:
-                return None
+    def _lookup(self, task: str, phash: str) -> Decision | None:
+        """Cached decision for a payload hash, or None; a bad body is a miss.
+
+        A valid hit is re-logged as a ``cached=True`` row so replay is also
+        accounted for in the ``llmcall`` table.
+        """
+        row = lookup_cache(self.engine, phash)
+        if row is None:
+            return None
+        try:
+            data: dict[str, Any] = json.loads(row.response or "{}")
+        except json.JSONDecodeError:
+            return None
+        store_call(
+            self.engine,
+            task=task,
+            model=row.model,
+            prompt_version=PROMPT_VERSION,
+            prompt_hash=phash,
+            input_tokens=0,
+            output_tokens=0,
+            cost_usd=0.0,
+            latency_ms=0,
+            cached=True,
+            response=row.response,
+        )
         return Decision(
             model=str(data.get("model", row.model)),
             answers=dict(data.get("answers") or {}),
             usage=Usage(0, 0, 0.0),
             cached=True,
         )
-
-    def _store(
-        self,
-        task: str,
-        phash: str,
-        latency_ms: int,
-        decision: Decision,
-        raw: dict[str, Any],
-    ) -> None:
-        with Session(self.engine) as session:
-            session.add(
-                LLMCallTable(
-                    id=uuid.uuid4().hex,
-                    ts=datetime.now(UTC),
-                    task=task,
-                    model=decision.model,
-                    prompt_version=PROMPT_VERSION,
-                    prompt_hash=phash,
-                    input_tokens=decision.usage.input_tokens,
-                    output_tokens=decision.usage.output_tokens,
-                    cost_usd=decision.usage.cost_usd,
-                    latency_ms=latency_ms,
-                    cached=False,
-                    response=json.dumps(raw),
-                )
-            )
-            session.commit()
