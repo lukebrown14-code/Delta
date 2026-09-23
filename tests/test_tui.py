@@ -1220,7 +1220,7 @@ def test_targets_inspector_paints_price_chart_with_axes(delta, monkeypatch, tmp_
 
 
 def test_targets_inspector_header_names_currency_and_range(delta, monkeypatch, tmp_path):
-    """The header is ``price · range · CURRENCY``, and ``r`` rewrites both parts."""
+    """The header names the company and market, and ``r`` cycles the range strip."""
     from delta.asset_metrics import AssetMetrics
 
     _home_config(tmp_path, monkeypatch, delta)
@@ -1242,11 +1242,13 @@ def test_targets_inspector_header_names_currency_and_range(delta, monkeypatch, t
             await pilot.press("2", "enter")
             screen = app.screen
             await _await_metric(pilot, screen)
-            label = screen.query_one("#target-chart-label")
-            assert str(label.render()) == "price · month · USD"
+            title = str(screen.query_one("#target-inspector-title").render())
+            assert "AAPL" in title
+            assert "US · equity · USD" in title
+            assert screen._range == "1m"
+            assert "1M" in str(screen.query_one("#target-range-tabs").render())
             await pilot.press("r")
-            assert str(label.render()) == "price · all time · USD"
-            await _await_metric(pilot, screen)
+            assert screen._range == "6m"
             chart = screen.query_one("#target-chart")
             assert chart.data == series
             assert chart.times == times
@@ -1255,7 +1257,7 @@ def test_targets_inspector_header_names_currency_and_range(delta, monkeypatch, t
 
 
 def test_targets_inspector_bond_chart_labels_yield(delta, monkeypatch, tmp_path):
-    """A bond plots yield: the header says so and Y labels skip the separator."""
+    """A bond plots yield: the hero says so and Y labels skip the separator."""
     import tomli_w
 
     from delta.asset_metrics import AssetMetrics
@@ -1287,7 +1289,8 @@ def test_targets_inspector_bond_chart_labels_yield(delta, monkeypatch, tmp_path)
             await pilot.press("2", "enter")
             screen = app.screen
             await _await_metric(pilot, screen)
-            assert str(screen.query_one("#target-chart-label").render()) == "yield · month"
+            hero = str(screen.query_one("#target-inspector-hero").render())
+            assert "4.35" in hero
             chart = screen.query_one("#target-chart")
             assert chart.y_format(1234.5) == "1234.50"
 
@@ -1317,7 +1320,7 @@ def test_targets_inspector_empty_metrics_leave_a_blank_chart(delta, monkeypatch,
 
 
 def test_targets_inspector_without_selection_resets_the_header(delta, monkeypatch, tmp_path):
-    """No targets: the bare chart stays and the header keeps its default label."""
+    """No targets: the bare chart stays and the empty state names the next step."""
     from delta.tui.widgets import PriceChart
 
     monkeypatch.chdir(tmp_path)
@@ -1332,23 +1335,38 @@ def test_targets_inspector_without_selection_resets_the_header(delta, monkeypatc
             assert isinstance(chart, PriceChart)
             assert chart.data == []
             assert chart.times == []
-            assert str(screen.query_one("#target-chart-label").render()) == "price · month"
             assert "no targets yet" in str(screen.query_one("#target-inspector-empty").render())
 
     asyncio.run(run())
 
 
-def test_targets_inspector_builds_eight_metric_cards(delta, monkeypatch, tmp_path):
-    """The pane carries eight group cards, one per equity group."""
+def test_targets_inspector_builds_metric_grid(delta, monkeypatch, tmp_path):
+    """The pane renders a borderless metric grid, not eight boxed cards (J8)."""
+    from delta.asset_metrics import AssetMetrics
+
     _home_config(tmp_path, monkeypatch, delta)
+    series, times = _series_with_times()
+    _stub_fetch(
+        monkeypatch,
+        AssetMetrics(
+            "US:AAPL",
+            "equity",
+            values={"Current price": "139.00"},
+            groups={"Profitability": {"Gross margin": "46.2%"}},
+            series=series,
+            series_times=times,
+        ),
+    )
 
     async def run():
         app = DeltaApp(delta)
         async with app.run_test(size=(120, 40)) as pilot:
             await pilot.press("2")
             screen = app.screen
-            assert screen.query_one("#metric-card-7")
-            assert not screen.query("#metric-card-8")
+            await _await_metric(pilot, screen)
+            frame = _frame(app)
+            assert "Profitability" in frame
+            assert "Gross margin" in frame
 
     asyncio.run(run())
 
@@ -1376,15 +1394,15 @@ def test_targets_inspector_caches_metrics_per_range(delta, monkeypatch, tmp_path
             await pilot.press("2", "enter")
             screen = app.screen
             await _await_metric(pilot, screen)
-            assert set(screen._metrics) == {("US:AAPL", "month")}
+            assert set(screen._metrics) == {("US:AAPL", "1m")}
             await pilot.press("r")
             await _await_metric(pilot, screen)
             await pilot.press("r")
             await _await_metric(pilot, screen)
             assert set(screen._metrics) == {
-                ("US:AAPL", "month"),
-                ("US:AAPL", "all"),
-                ("US:AAPL", "day"),
+                ("US:AAPL", "1m"),
+                ("US:AAPL", "6m"),
+                ("US:AAPL", "ytd"),
             }
 
     asyncio.run(run())
