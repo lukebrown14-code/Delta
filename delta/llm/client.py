@@ -4,21 +4,25 @@ The actual model call is delegated to a :class:`delta.llm.providers.Provider`
 (OpenRouter, or any OpenAI-compatible endpoint). This client owns the cache
 keyed on ``sha256(model + prompt_version + prompt)`` and persists every call to
 the ``llmcall`` table for cost tracking and backtest replay.
+
+``complete`` is the single entry point. It accepts either a single ``prompt``
+(building a ``[system, user]`` pair) or a full ``messages`` transcript, so both
+structured calls and chat calls share one cache/log path. ``chat`` remains as a
+backward-compatible alias that forwards a transcript.
 """
 
 from __future__ import annotations
 
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy.engine import Engine
-from sqlmodel import Session, select
 
-from delta.core.db import LLMCallTable
 from delta.core.ids import stable_id
+from delta.llm.cache import lookup_cache, store_call
 from delta.llm.providers import (
     PROVIDERS,
     OpenAICompatProvider,
@@ -28,6 +32,12 @@ from delta.llm.providers import (
 )
 
 SYSTEM_PROMPT = "You are an investment analyst."
+
+#: A predicate deciding whether a cached response is still a valid hit. When
+#: given, a cached response failing the check is treated as a miss (and never
+#: re-served), so a previously-poisoned key is re-attempted live rather than
+#: replaying the same failure on every call.
+CacheValidator = Callable[[str], bool]
 
 
 @dataclass
@@ -53,19 +63,55 @@ class LLMClient:
         task: str,
         model: str,
         prompt_version: str,
-        prompt: str,
+        prompt: str | None = None,
+        messages: list[dict[str, str]] | None = None,
         response_format: dict[str, Any] | None = None,
+        cache_validator: CacheValidator | None = None,
     ) -> LLMResult:
-        phash = self.prompt_hash(model, prompt_version, prompt)
+        """Run one completion, caching the result by prompt hash.
 
-        cached = self._lookup_cache(phash)
-        if cached is not None:
-            return LLMResult(text=cached, call_id="", cost_usd=0.0, cached=True)
+        Either ``prompt`` (a single user turn, wrapped with the system prompt)
+        or ``messages`` (the full transcript) is required. Cache hits are
+        logged as ``cached=True`` rows so every call — live or replayed — is
+        accounted for. When ``cache_validator`` is supplied, a cached response
+        that fails it is a miss, so invalid output is never re-served.
+        """
+        if messages is None:
+            messages = [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": prompt or ""},
+            ]
+            prompt_text = prompt or ""
+        else:
+            prompt_text = "\n\n".join(
+                f"{message['role']}: {message['content']}" for message in messages
+            )
 
-        messages: list[dict[str, str]] = [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": prompt},
-        ]
+        phash = self.prompt_hash(model, prompt_version, prompt_text)
+
+        cached = lookup_cache(self.engine, phash)
+        if cached is not None and (
+            cache_validator is None or cache_validator(cached.response or "")
+        ):
+            store_call(
+                self.engine,
+                task=task,
+                model=model,
+                prompt_version=prompt_version,
+                prompt_hash=phash,
+                input_tokens=0,
+                output_tokens=0,
+                cost_usd=0.0,
+                latency_ms=0,
+                cached=True,
+                response=cached.response,
+            )
+            return LLMResult(
+                text=cached.response or "",
+                call_id="",
+                cost_usd=0.0,
+                cached=True,
+            )
 
         started = time.perf_counter()
         result = await self.provider.complete(
@@ -76,21 +122,18 @@ class LLMClient:
         latency_ms = int((time.perf_counter() - started) * 1000)
 
         call_id = uuid.uuid4().hex
-        self._store(
-            LLMCallTable(
-                id=call_id,
-                ts=datetime.now(UTC),
-                task=task,
-                model=model,
-                prompt_version=prompt_version,
-                prompt_hash=phash,
-                input_tokens=result.input_tokens,
-                output_tokens=result.output_tokens,
-                cost_usd=result.cost_usd,
-                latency_ms=latency_ms,
-                cached=False,
-                response=result.text,
-            )
+        store_call(
+            self.engine,
+            task=task,
+            model=model,
+            prompt_version=prompt_version,
+            prompt_hash=phash,
+            input_tokens=result.input_tokens,
+            output_tokens=result.output_tokens,
+            cost_usd=result.cost_usd,
+            latency_ms=latency_ms,
+            cached=False,
+            response=result.text,
         )
         return LLMResult(
             text=result.text,
@@ -107,65 +150,21 @@ class LLMClient:
         prompt_version: str,
         messages: list[dict[str, str]],
         response_format: dict[str, Any] | None = None,
+        cache_validator: CacheValidator | None = None,
     ) -> LLMResult:
-        """Full-history chat completion: the caller owns the whole message list.
+        """Full-history chat completion; a thin alias for :meth:`complete`.
 
-        Mirrors :meth:`complete` (cache keyed on the serialized transcript, one
-        ``llmcall`` row per live call) but passes ``messages`` straight through
-        to the provider instead of building a ``[system, user]`` pair.
+        The caller owns the whole message list. Kept for backward compatibility
+        with callers that still think in terms of a distinct chat method.
         """
-        prompt = "\n\n".join(f"{m['role']}: {m['content']}" for m in messages)
-        phash = self.prompt_hash(model, prompt_version, prompt)
-
-        cached = self._lookup_cache(phash)
-        if cached is not None:
-            return LLMResult(text=cached, call_id="", cost_usd=0.0, cached=True)
-
-        started = time.perf_counter()
-        result = await self.provider.complete(
+        return await self.complete(
+            task=task,
             model=model,
+            prompt_version=prompt_version,
             messages=messages,
             response_format=response_format,
+            cache_validator=cache_validator,
         )
-        latency_ms = int((time.perf_counter() - started) * 1000)
-
-        call_id = uuid.uuid4().hex
-        self._store(
-            LLMCallTable(
-                id=call_id,
-                ts=datetime.now(UTC),
-                task=task,
-                model=model,
-                prompt_version=prompt_version,
-                prompt_hash=phash,
-                input_tokens=result.input_tokens,
-                output_tokens=result.output_tokens,
-                cost_usd=result.cost_usd,
-                latency_ms=latency_ms,
-                cached=False,
-                response=result.text,
-            )
-        )
-        return LLMResult(
-            text=result.text,
-            call_id=call_id,
-            cost_usd=result.cost_usd,
-            cached=False,
-        )
-
-    def _lookup_cache(self, phash: str) -> str | None:
-        with Session(self.engine) as session:
-            row = session.exec(
-                select(LLMCallTable).where(LLMCallTable.prompt_hash == phash)
-            ).first()
-            if row is not None and row.response is not None:
-                return row.response
-        return None
-
-    def _store(self, row: LLMCallTable) -> None:
-        with Session(self.engine) as session:
-            session.add(row)
-            session.commit()
 
 
 def build_client(
