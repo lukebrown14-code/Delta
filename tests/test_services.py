@@ -79,6 +79,29 @@ def test_data_health_counts_bars(delta):
     assert set(health.latest_bar) >= {AAPL.id, MSFT.id}
 
 
+def test_data_health_latest_bar_is_one_group_by_max(tmp_engine):
+    """B6: latest_bar comes from a single GROUP BY MAX(ts), not per-instrument scans."""
+    seed_bars(tmp_engine, AAPL.id, n=3, start=datetime(2026, 1, 1, tzinfo=UTC))
+    delta = SimpleNamespace(engine=tmp_engine, universe=lambda: [AAPL])
+    health = services.data_health(delta)
+    assert health.latest_bar[AAPL.id] == datetime(2026, 1, 3, tzinfo=UTC)
+
+
+def test_latest_bar_floor_is_incremental(tmp_engine, tmp_path):
+    """B2: the bar fetch floor is the newest stored bar (minus an overlap), not 365d."""
+    from delta.core.db import init_engine
+
+    seed_bars(tmp_engine, AAPL.id, n=5, start=datetime(2026, 1, 1, tzinfo=UTC))
+    default = "2025-01-01"
+    floor = services._latest_bar_floor(tmp_engine, default)
+    # Newest bar is 2026-01-05 (midnight ts), the overlap is 1 day, so the
+    # floor sits at 2026-01-04 and is strictly more recent than the bare default.
+    assert floor == "2026-01-04"
+
+    empty_engine = init_engine(tmp_path / "empty.db")
+    assert services._latest_bar_floor(empty_engine, default) == default
+
+
 def test_llm_costs_groups_by_task_and_model(tmp_engine):
     with Session(tmp_engine) as session:
         for i in range(3):
@@ -100,6 +123,33 @@ def test_llm_costs_groups_by_task_and_model(tmp_engine):
         session.commit()
     rows = services.llm_costs(tmp_engine)
     assert rows == [services.CostRow("analyse", "m", 3, 1.5)]
+
+
+def test_total_spend_sums_all_calls_and_respects_since(tmp_engine):
+    assert services.total_spend(tmp_engine) == 0.0
+    with Session(tmp_engine) as session:
+        for i, (task, ts) in enumerate(
+            [("analyse", datetime(2026, 1, 1, tzinfo=UTC)), ("chat", datetime.now(UTC))]
+        ):
+            session.add(
+                LLMCallTable(
+                    id=f"t{i}",
+                    ts=ts,
+                    task=task,
+                    model="m",
+                    prompt_version="v",
+                    prompt_hash=f"t{i}",
+                    input_tokens=1,
+                    output_tokens=1,
+                    cost_usd=0.25,
+                    latency_ms=1,
+                    cached=False,
+                )
+            )
+        session.commit()
+    assert services.total_spend(tmp_engine) == 0.5
+    assert services.total_spend(tmp_engine, since="2026-06-01") == 0.25
+    assert [row.task for row in services.llm_costs(tmp_engine)] == ["analyse", "chat"]
 
 
 def test_target_add_and_remove(tmp_path, monkeypatch):

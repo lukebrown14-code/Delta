@@ -17,6 +17,7 @@ from textual.containers import Horizontal, Vertical
 from textual.widgets import Button, Input, Label, OptionList, Static
 from textual.widgets.option_list import Option
 
+from delta.tui.components import SuggestionList
 from delta.tui.widgets import MODAL_WIDTH, Dialog, hint_markup, token_color
 
 
@@ -97,7 +98,6 @@ class MarketSetupModal(Dialog):
         )
         self._suppress = False
         self._suggestions: list[Exchange] = []
-        self._highlight = 0
 
     def compose_dialog(self) -> ComposeResult:
         if self.editable_id:
@@ -105,23 +105,38 @@ class MarketSetupModal(Dialog):
         yield Vertical(
             Horizontal(
                 Label("ID"),
-                Input(value=self.current.get("id", ""), placeholder="e.g. lse", id="market-id", disabled=not self.editable_id),
+                Input(
+                    value=self.current.get("id", ""),
+                    placeholder="e.g. lse",
+                    id="market-id",
+                    disabled=not self.editable_id,
+                ),
                 classes="market-field",
             ),
-            *(OptionList(id="market-suggestions"),) if self.editable_id else (),
+            *(SuggestionList(id="market-suggestions"),) if self.editable_id else (),
             Horizontal(
                 Label("Name"),
-                Input(value=self.current.get("label", ""), placeholder="Exchange name", id="market-label"),
+                Input(
+                    value=self.current.get("label", ""),
+                    placeholder="Exchange name",
+                    id="market-label",
+                ),
                 classes="market-field",
             ),
             Horizontal(
                 Label("Currency"),
-                Input(value=self.current.get("currency", ""), placeholder="GBP", id="market-currency"),
+                Input(
+                    value=self.current.get("currency", ""), placeholder="GBP", id="market-currency"
+                ),
                 classes="market-field",
             ),
             Horizontal(
                 Label("Yahoo"),
-                Input(value=self.current.get("yahoo_suffix", ""), placeholder=".L (optional)", id="market-suffix"),
+                Input(
+                    value=self.current.get("yahoo_suffix", ""),
+                    placeholder=".L (optional)",
+                    id="market-suffix",
+                ),
                 classes="market-field",
             ),
             id="market-form",
@@ -131,12 +146,6 @@ class MarketSetupModal(Dialog):
             Button("Cancel", id="market-cancel"),
             id="market-modal-actions",
         )
-
-    def on_mount(self) -> None:
-        if self.editable_id:
-            # Suggestions are browsed through the id field's arrows; the list
-            # must never steal focus or tab stops.
-            self.query_one("#market-suggestions", OptionList).can_focus = False
 
     # ----- autocomplete ----------------------------------------------------
 
@@ -159,20 +168,19 @@ class MarketSetupModal(Dialog):
     def _update_suggestions(self, value: str) -> None:
         if not self.editable_id:
             return
-        options = self.query_one("#market-suggestions", OptionList)
-        options.clear_options()
         self._suggestions = self._matching(value)
         muted = token_color(self.app, "text-muted", "dim")
-        for exchange in self._suggestions:
-            prompt = Text.assemble(
-                (exchange.id, "bold"),
-                (f" — {exchange.label}", muted),
-                (f" · {exchange.currency}", muted),
+        self.query_one("#market-suggestions", SuggestionList).show(
+            Option(
+                Text.assemble(
+                    (exchange.id, "bold"),
+                    (f" — {exchange.label}", muted),
+                    (f" · {exchange.currency}", muted),
+                ),
+                id=exchange.id,
             )
-            options.add_option(Option(prompt, id=exchange.id))
-        self._highlight = 0
-        if self._suggestions:
-            options.highlighted = 0
+            for exchange in self._suggestions
+        )
 
     def _adopt(self, exchange: Exchange) -> None:
         self._suppress = True
@@ -195,13 +203,7 @@ class MarketSetupModal(Dialog):
         """Arrows browse the dropdown while the id field keeps focus."""
         if not self.editable_id or getattr(self.focused, "id", None) != "market-id":
             return
-        if not self._suggestions or event.key not in {"down", "up"}:
-            return
-        event.stop()
-        event.prevent_default()
-        delta = 1 if event.key == "down" else -1
-        self._highlight = (self._highlight + delta) % len(self._suggestions)
-        self.query_one("#market-suggestions", OptionList).highlighted = self._highlight
+        self.query_one("#market-suggestions", SuggestionList).browse(event)
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
         if getattr(event.option_list, "id", None) != "market-suggestions" or not event.option.id:
@@ -216,7 +218,8 @@ class MarketSetupModal(Dialog):
         # Enter with the dropdown open adopts the highlighted exchange; the
         # next enter (or enter on an empty dropdown) saves.
         if event.input.id == "market-id" and self._suggestions:
-            self._adopt(self._suggestions[min(self._highlight, len(self._suggestions) - 1)])
+            index = self.query_one("#market-suggestions", SuggestionList).highlighted_index
+            self._adopt(self._suggestions[index])
             return
         self._save()
 

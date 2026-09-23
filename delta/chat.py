@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field, TypeAdapter, ValidationError
 from sqlalchemy.engine import Engine
 
 from delta.evidence import EvidenceItem, cite, evidence
+from delta.llm.json import extract_json
 from delta.llm.router import model_for
 
 ChatSource = Literal["stored", "web", "inference", "user"]
@@ -137,6 +138,7 @@ async def _draft(llm: Any, model: str, messages: list[dict[str, str]]) -> ChatDr
         prompt_version=CHAT_PROMPT_VERSION,
         messages=messages,
         response_format=_RESPONSE_FORMAT,
+        cache_validator=_valid_draft,
     )
     try:
         return _parse_draft(result.text)
@@ -156,6 +158,7 @@ async def _draft(llm: Any, model: str, messages: list[dict[str, str]]) -> ChatDr
             prompt_version=CHAT_PROMPT_VERSION,
             messages=retry,
             response_format=_RESPONSE_FORMAT,
+            cache_validator=_valid_draft,
         )
         return _parse_draft(result.text)
 
@@ -259,15 +262,17 @@ def _web_context(hits: list[WebHit]) -> str:
 
 
 def _parse_draft(text: str) -> ChatDraft:
-    return _ADAPTER.validate_python(_load_json(text))
+    return _ADAPTER.validate_python(extract_json(text))
 
 
-def _load_json(text: str) -> Any:
-    """json.loads after stripping a markdown code fence, mirroring structured outputs."""
-    stripped = text.strip()
-    if stripped.startswith("```"):
-        body = stripped.split("```", 2)[1]
-        if body.startswith("json"):
-            body = body[4:]
-        stripped = body.strip()
-    return json.loads(stripped)
+def _valid_draft(text: str) -> bool:
+    """True when ``text`` parses and validates as a ChatDraft.
+
+    Gates the cache so a previously-invalid reply is recalled live instead of
+    replaying the same failure every call.
+    """
+    try:
+        _parse_draft(text)
+        return True
+    except (ValidationError, json.JSONDecodeError):
+        return False

@@ -14,7 +14,7 @@ from typing import Any, Literal
 
 from sqlalchemy.engine import Engine
 
-from delta.evidence import PRIMARY_FILING_SOURCES, EvidenceItem, evidence
+from delta.evidence import PRIMARY_FILING_SOURCES, EvidenceItem, evidence, falsifier_hit
 
 PRICE_STALE_AFTER = timedelta(days=3)
 NEWS_STALE_AFTER = timedelta(days=14)
@@ -63,9 +63,18 @@ def primary_sources_for(delta: Any, instrument_id: str) -> frozenset[str]:
     inst = next((item for item in delta.universe() if item.id == instrument_id), None)
     if inst is None:
         return frozenset()
+    return _primary_sources(delta.plugins, inst)
+
+
+def _primary_sources(plugins: Any, inst: Any) -> frozenset[str]:
+    """Core of :func:`primary_sources_for` without the ``delta.universe()`` lookup.
+
+    Lets a caller that already holds the instrument (and has a plugins map handy)
+    skip rebuilding the universe, which the review queue does once per call.
+    """
     fallback_markets = {"sec_edgar": "us", "asx_announcements": "asx"}
     configured: set[str] = set()
-    for name, plugin in getattr(delta, "plugins", {}).items():
+    for name, plugin in plugins.items():
         if name not in PRIMARY_FILING_SOURCES or not getattr(plugin, "enabled", False):
             continue
         market = getattr(plugin, "market", fallback_markets.get(name))
@@ -80,11 +89,17 @@ def evidence_audit(
     *,
     now: datetime | None = None,
     primary_sources: Iterable[str] = (),
+    items: Sequence[EvidenceItem] | None = None,
 ) -> EvidenceAudit:
-    """Summarise recency and diversity without inferring an exchange schedule."""
+    """Summarise recency and diversity without inferring an exchange schedule.
+
+    ``items`` lets a caller that has already fetched the pool (``review_queue``)
+    hand it in, avoiding a second full read per instrument.
+    """
     now = _now(now)
     primary_sources = frozenset(primary_sources)
-    items = evidence(engine, target=instrument_id, limit=10_000)
+    if items is None:
+        items = evidence(engine, target=instrument_id, limit=10_000)
     prices = [item for item in items if item.kind == "bar" and item.ts <= now]
     news = [item for item in items if item.kind == "news" and item.ts <= now]
     primary = [
@@ -136,10 +151,19 @@ def review_queue(
 
     ``since`` controls the "new disclosure" window.  A caller passes the
     session's captured last-seen value, rather than this service mutating it.
+
+    One pass over each instrument's evidence and a single memoised universe /
+    source map: the previous implementation fetched the pool twice per
+    instrument (once here, once inside :func:`evidence_audit`) and re-built
+    ``delta.universe()`` on every loop iteration.
     """
     now = _now(now)
-    ids = tuple(instrument_ids) or tuple(item.id for item in delta.universe())
+    universe = delta.universe()
+    ids = tuple(instrument_ids) or tuple(item.id for item in universe)
     since = _as_utc(since) if since is not None else now - timedelta(days=7)
+    sources: dict[str, frozenset[str]] = {
+        inst.id: _primary_sources(delta.plugins, inst) for inst in universe
+    }
     primary_items: list[ReviewItem] = []
     falsifiers: list[ReviewItem] = []
     stale: list[ReviewItem] = []
@@ -147,15 +171,16 @@ def review_queue(
     active = _active_theses(delta.engine)
     for instrument_id in ids:
         items = evidence(delta.engine, target=instrument_id, limit=10_000)
+        primary_sources = sources.get(instrument_id, frozenset())
         for item in items:
-            if item.kind == "filing" and item.source in primary_sources_for(delta, instrument_id) and since <= item.ts <= now:
+            if item.kind == "filing" and item.source in primary_sources and since <= item.ts <= now:
                 primary_items.append(_item("primary_disclosure", instrument_id, item))
             if since <= item.ts <= now:
                 for thesis_id, terms in active:
-                    if (not terms[0] or instrument_id in terms[0]) and _matches(item, terms[1]):
+                    if (not terms[0] or instrument_id in terms[0]) and falsifier_hit(item, terms[1]):
                         falsifiers.append(_item("falsifier", instrument_id, item, thesis_id=thesis_id))
         audit = evidence_audit(
-            delta.engine, instrument_id, now=now, primary_sources=primary_sources_for(delta, instrument_id)
+            delta.engine, instrument_id, now=now, primary_sources=primary_sources, items=items
         )
         stale_warnings = tuple(w for w in audit.warnings if w.startswith(("no primary", "latest", "no price", "latest price", "no news", "latest news")))
         if stale_warnings:
@@ -174,11 +199,6 @@ def _active_theses(engine: Engine) -> list[tuple[str, tuple[tuple[str, ...], tup
         for thesis in list_theses(engine)
         if thesis.status == "active" and thesis.falsifiers
     ]
-
-
-def _matches(item: EvidenceItem, terms: Sequence[str]) -> bool:
-    haystack = " ".join((item.title, item.body or "")).casefold()
-    return any(term in haystack for term in terms)
 
 
 def _item(kind: ReviewKind, instrument_id: str, item: EvidenceItem, *, thesis_id: str | None = None) -> ReviewItem:

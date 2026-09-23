@@ -90,3 +90,25 @@ def test_decide_raises_on_api_error(tmp_engine):
 
     with pytest.raises(JevError, match="502"):
         asyncio.run(client.decide(task="sentiment", state={"title": "x"}, questions=[QUESTION]))
+
+
+@respx.mock
+def test_decide_logs_cache_hits(tmp_engine):
+    route = respx.post(DECISIONS_URL).mock(
+        return_value=httpx.Response(
+            200, json=_body({"stance": {"type": "choice", "choice": "bull"}})
+        )
+    )
+    client = JevClient("k", tmp_engine)
+    state = {"title": "same"}
+
+    asyncio.run(client.decide(task="sentiment", state=state, questions=[QUESTION]))
+    asyncio.run(client.decide(task="sentiment", state=state, questions=[QUESTION]))
+
+    assert route.call_count == 1
+    with Session(tmp_engine) as session:
+        rows = session.exec(select(LLMCallTable)).all()
+    assert [row.cached for row in rows] == [False, True]
+    assert rows[1].task == "sentiment"
+    assert rows[1].input_tokens == 0
+    assert rows[1].cost_usd == 0.0

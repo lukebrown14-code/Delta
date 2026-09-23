@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from datetime import datetime, timedelta
 
-from delta.tui.axes import format_price, nice_ticks, x_ticks
+from delta.tui.axes import format_price, nice_ticks, plot_scale, x_ticks
 
 
 def _times(start: str, count: int, step: timedelta) -> list[str]:
@@ -44,6 +44,21 @@ def test_count_is_respected_and_ends_cover_the_range():
         assert len(ticks) == count
         assert ticks == sorted(ticks)
         assert ticks[0] <= 10.0 and ticks[-1] >= 20.0
+
+
+def test_plot_scale_bounds_to_outer_ticks():
+    """K2: the plot bounds are the first/last nice tick, never the raw extremes."""
+    low, high = plot_scale(309.90, 338.98, 3)
+    assert low == 300.0 and high == 340.0
+    assert low <= 309.90 and high >= 338.98
+
+
+def test_plot_scale_spans_every_tick():
+    """A series scaled to its bounds places first/last data on first/last tick."""
+    low, high = plot_scale(0.0, 99.0, 5)
+    assert (low, high) == (0.0, 100.0)
+    ticks = nice_ticks(low, high, 5)
+    assert ticks[0] == low and ticks[-1] == high
 
 
 def test_price_format_adds_thousands_separators():

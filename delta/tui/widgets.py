@@ -580,23 +580,110 @@ class BrailleGraph(Widget):
             if chunk
         ]
 
+    def _resample(self, points: list[float], width: int) -> list[float]:
+        """Linearly stretch ``points`` to exactly ``width`` values (K1).
+
+        When there are fewer closes than dot columns, the bucket mean repeats
+        each close across several columns as a flat, gappy run. Resampling
+        instead interpolates a point per column so consecutive columns differ
+        by at most a dot row and the line reads as continuous.
+        """
+        if len(points) == width:
+            return points
+        if len(points) < 2 or width < 1:
+            return points
+        step = (len(points) - 1) / (width - 1)
+        return [self._lerp(points, index * step) for index in range(width)]
+
+    @staticmethod
+    def _lerp(points: list[float], pos: float) -> float:
+        """Linear interpolation into ``points`` at fractional index ``pos``."""
+        low = int(pos)
+        high = min(low + 1, len(points) - 1)
+        frac = pos - low
+        return points[low] + (points[high] - points[low]) * frac
+
+    @staticmethod
+    def _bresenham(x0: int, y0: int, x1: int, y1: int, dots: dict) -> None:
+        """Mark every dot on the integer line from (x0, y0) to (x1, y1) (K1)."""
+        dx = abs(x1 - x0)
+        dy = -abs(y1 - y0)
+        sx = 1 if x0 < x1 else -1
+        sy = 1 if y0 < y1 else -1
+        err = dx + dy
+        while True:
+            dots[(x0, y0)] = True
+            if x0 == x1 and y0 == y1:
+                return
+            double = 2 * err
+            if double >= dy:
+                err += dy
+                x0 += sx
+            if double <= dx:
+                err += dx
+                y0 += sy
+
+    def _scaled_points(self, dot_columns: int) -> list[float]:
+        """One value per dot column: resampled when sparse, else the bucket mean.
+
+        Fewer closes than columns resample so the points join; more closes than
+        columns fall back to the bucket mean (each column is one representative
+        value). Either way the caller dots the vertical span between samples.
+        """
+        series = self.data
+        if len(series) > dot_columns:
+            return self._sample(dot_columns)
+        return self._resample(list(series), dot_columns)
+
+    def _dot_coords(self, dot_columns: int, dot_rows: int, low: float, span: float) -> dict:
+        """Connected ``(dot column, dot row)`` coordinates for the whole series.
+
+        Plots one dot per column and Bresenham-joins consecutive columns so the
+        line is continuous (K1) regardless of how many source points exist.
+        """
+        dots: dict = {}
+        previous: tuple[int, int] | None = None
+        for column, value in enumerate(self._scaled_points(dot_columns)):
+            row = max(
+                0, min(dot_rows - 1, dot_rows - 1 - round((value - low) / span * (dot_rows - 1)))
+            )
+            if previous is None:
+                dots[(column, row)] = True
+            else:
+                self._bresenham(previous[0], previous[1], column, row, dots)
+            previous = (column, row)
+        return dots
+
+    def _cell_grid(self, columns: int, rows: int, low: float, span: float) -> list[list[int]]:
+        """Braille cell bitmaps for a connected line over ``low``/``span``.
+
+        Shared by :meth:`BrailleGraph.rows` and :meth:`PriceChart._runs`: the
+        connected dot coordinates (with the optional area fill) OR-ed into
+        ``columns`` braille cells of ``rows`` cells tall.
+        """
+        dot_rows = rows * 4
+        dot_columns = columns * 2
+        dots = self._dot_coords(dot_columns, dot_rows, low, span)
+        if self.fill:
+            column_tops: dict[int, int] = {}
+            for column, row in dots:
+                column_tops[column] = min(column_tops.get(column, dot_rows), row)
+            for column, top in column_tops.items():
+                for row in range(top, dot_rows):
+                    dots[(column, row)] = True
+        grid = [[0] * columns for _ in range(rows)]
+        for column, row in dots:
+            grid[row // 4][column // 2] |= self.DOTS[column % 2][row % 4]
+        return grid
+
     def rows(self, width: int, height: int) -> list[str]:
         """The graph as ``height`` strings of ``width`` braille cells."""
         blank = [self.EMPTY * width for _ in range(height)]
         if not self.data or width < 1 or height < 1:
             return blank
-        points = self._sample(width * 2)
-        if not points:
-            return blank
-        low, high = min(points), max(points)
+        low, high = min(self.data), max(self.data)
         span = (high - low) or 1.0
-        dot_rows = height * 4
-        grid = [[0] * width for _ in range(height)]
-        for x, value in enumerate(points):
-            # Dot rows count down from the top, so invert the scaled value.
-            top = dot_rows - 1 - int(round((value - low) / span * (dot_rows - 1)))
-            for y in range(top, dot_rows) if self.fill else (top,):
-                grid[y // 4][x // 2] |= self.DOTS[x % 2][y % 4]
+        grid = self._cell_grid(width, height, low, span)
         return ["".join(chr(0x2800 + cell) for cell in row) for row in grid]
 
     def render(self) -> RenderResult:
@@ -645,10 +732,11 @@ class PriceChart(BrailleGraph):
     """A braille price line with a right-hand Y gutter and an X date axis.
 
     The inspector's chart: the same dot grid as :class:`BrailleGraph` plus the
-    axes a price needs — Y ticks in a right gutter, a faint rule across the
-    middle tick's dot row, and up to three date labels on a ``┬`` rule. There
-    is deliberately no "now"/last-price marker: the pane's figures carry the
-    current price, and a dotted marker would fight the line for the same dots.
+    axes a price needs — Y ticks in a right gutter, a faint ``┄`` gridline on
+    each tick row, and up to three date labels on a ``┬`` rule. A ``●`` marks
+    the last close and carries its price in the gutter: with a connected line
+    (K1) the marker no longer fights the dots, so it can answer "where is it
+    now?" instead of leaving that to the figures above.
 
     Callers set ``times`` and ``y_format`` first, then assign ``data`` (or call
     ``refresh()``): the ``data`` assignment is the reactive that repaints, so a
@@ -660,13 +748,15 @@ class PriceChart(BrailleGraph):
     label rows; under three rows it degrades to a bare braille line. The
     gutter is ``2 + widest tick label`` cells wide and hides before it would
     squeeze the plot under 12 cells. The line reuses BrailleGraph's component
-    classes; ``price-chart--grid`` draws the faint gridline and unused gutter
-    rules, ``price-chart--axis`` the rule row and its labels.
+    classes; ``price-chart--grid`` draws the faint ``┄`` gridline and unused
+    gutter rules, ``price-chart--axis`` the rule row and tick labels, and
+    ``price-chart--marker`` the last-price bullet and its gutter label.
     """
 
     COMPONENT_CLASSES: ClassVar[set[str]] = {
         "price-chart--grid",
         "price-chart--axis",
+        "price-chart--marker",
     }
 
     DEFAULT_CSS = """
@@ -677,6 +767,7 @@ class PriceChart(BrailleGraph):
     PriceChart > .braille-graph--high-color { color: $text-primary; }
     PriceChart > .price-chart--grid { color: $text-disabled; }
     PriceChart > .price-chart--axis { color: $text-muted; }
+    PriceChart > .price-chart--marker { color: $text-primary; }
     """
 
     def __init__(
@@ -692,21 +783,6 @@ class PriceChart(BrailleGraph):
         # Last: the reactive assignment is what schedules the first repaint.
         self.data = list(data or [])
 
-    def _plot_cells(self, columns: int, rows: int, low: float, span: float) -> list[list[int]]:
-        """Braille bitmaps for the line: one sampled point per dot column.
-
-        BrailleGraph's grid build, but mapped on the scale the ticks name
-        rather than the sampled extremes: with labels on the axis, a tick and
-        the dots it describes cannot afford to disagree by a bucket mean.
-        """
-        dot_rows = rows * 4
-        grid = [[0] * columns for _ in range(rows)]
-        for x, value in enumerate(self._sample(columns * 2)):
-            top = dot_rows - 1 - int(round((value - low) / span * (dot_rows - 1)))
-            for y in range(top, dot_rows) if self.fill else (top,):
-                grid[y // 4][x // 2] |= self.DOTS[x % 2][y % 4]
-        return grid
-
     def rows(self, width: int, height: int) -> list[str]:
         """The chart as ``height`` strings of ``width`` columns.
 
@@ -715,13 +791,18 @@ class PriceChart(BrailleGraph):
         """
         return ["".join(text for text, _ in row) for row in self._runs(width, height)]
 
+    @staticmethod
+    def _tick_count(plot_rows: int) -> int:
+        """How many Y ticks fit the plot: at least 3, at most 5 (K2)."""
+        return max(3, min(5, plot_rows))
+
     def _runs(self, width: int, height: int) -> list[list[tuple[str, str]]]:
         """Layout as per-line ``(text, style kind)`` runs, ready to paint.
 
         Pure — no app state — so tests assert layout without mounting an App.
-        Kinds: ``line`` (the price line), ``grid`` (faint gridline and unused
-        gutter rules), ``axis`` (rule row, tick labels) and ``blank`` (empty
-        cells, styled but invisible).
+        Kinds: ``line`` (the price line), ``marker`` (the last-price bullet and
+        its gutter label), ``grid`` (faint gridline and unused gutter rules),
+        ``axis`` (rule row, tick labels) and ``blank`` (empty cells).
         """
         if width < 1 or height < 1:
             return []
@@ -731,7 +812,7 @@ class PriceChart(BrailleGraph):
             if not self.data:
                 return [[(self.EMPTY * width, "line")] for _ in range(height)]
             low, high = min(self.data), max(self.data)
-            cells = self._plot_cells(width, height, low, (high - low) or 1.0)
+            cells = self._cell_grid(width, height, low, (high - low) or 1.0)
             return [[("".join(chr(0x2800 + cell) for cell in row), "line")] for row in cells]
 
         plot_rows = height - 2
@@ -746,8 +827,11 @@ class PriceChart(BrailleGraph):
             )
 
         low, high = min(self.data), max(self.data)
-        span = (high - low) or 1.0
-        ticks = nice_ticks(low, high, 3)
+        tick_count = self._tick_count(plot_rows)
+        ticks = nice_ticks(low, high, tick_count)
+        # K2: scale to the outer ticks so every tick lands exactly on a row.
+        plot_low, plot_high = ticks[0], ticks[-1]
+        span = (plot_high - plot_low) or 1.0
         labels = [self.y_format(tick) for tick in ticks]
         gutter = 2 + max(map(len, labels))
         plot = width - gutter
@@ -756,25 +840,19 @@ class PriceChart(BrailleGraph):
             # the meaning, the labels are secondary. Real price labels make
             # this every width under 20.
             plot, gutter = width, 0
-        cells = self._plot_cells(plot, plot_rows, low, span)
+        cells = self._cell_grid(plot, plot_rows, plot_low, span)
         # One label per text row: a tick owns the gutter row its dot lands on.
         tick_rows: dict[int, str] = {}
         for tick, label in zip(ticks, labels, strict=True):
-            row = (dot_rows - 1 - int(round((tick - low) / span * (dot_rows - 1)))) // 4
+            row = (dot_rows - 1 - round((tick - plot_low) / span * (dot_rows - 1))) // 4
             tick_rows[row] = label
-        # Only the middle tick draws a rule across its dot row: the outer
-        # ticks sit on the box edges, where dots would read as a border.
-        grid_dot_row = -1
-        if len(ticks) > 2:
-            grid_dot_row = dot_rows - 1 - int(round((ticks[1] - low) / span * (dot_rows - 1)))
-        grid_mask = (
-            self.DOTS[0][grid_dot_row % 4] | self.DOTS[1][grid_dot_row % 4]
-            if 0 <= grid_dot_row < dot_rows
-            else 0
-        )
+        # The last close marks its gutter row with a bullet and price (K4).
+        marker_row = (dot_rows - 1 - round((self.data[-1] - plot_low) / span * (dot_rows - 1))) // 4
+        marker_row = max(0, min(plot_rows - 1, marker_row))
+        marker_label = self.y_format(self.data[-1])
         runs: list[list[tuple[str, str]]] = []
         for index in range(plot_rows):
-            on_grid = bool(grid_mask) and grid_dot_row // 4 == index
+            on_tick = index in tick_rows
             row_runs: list[tuple[str, str]] = []
             parts: list[str] = []
             kind = ""
@@ -785,7 +863,7 @@ class PriceChart(BrailleGraph):
                 text, cell_kind = (
                     (chr(0x2800 + cell), "line")
                     if cell
-                    else ((chr(0x2800 + grid_mask), "grid") if on_grid else (self.EMPTY, "blank"))
+                    else ("┄" if on_tick else self.EMPTY, "grid" if on_tick else "blank")
                 )
                 if cell_kind == kind:
                     parts.append(text)
@@ -796,12 +874,15 @@ class PriceChart(BrailleGraph):
             if parts:
                 row_runs.append(("".join(parts), kind))
             if gutter:
-                label = tick_rows.get(index)
-                row_runs.append(
-                    ("┤ " + label.rjust(gutter - 2), "axis")
-                    if label is not None
-                    else ("│" + " " * (gutter - 1), "grid")
-                )
+                if index == marker_row:
+                    row_runs.append(("● " + marker_label.rjust(gutter - 2), "marker"))
+                else:
+                    label = tick_rows.get(index)
+                    row_runs.append(
+                        ("├ " + label.rjust(gutter - 2), "axis")  # K3: ├ ticks, not ┤
+                        if label is not None
+                        else ("│" + " " * (gutter - 1), "grid")
+                    )
             runs.append(row_runs)
         # Rule and label rows. Without the gutter the rule shrinks to fit the
         # widget; the line stays full width.
@@ -811,7 +892,9 @@ class PriceChart(BrailleGraph):
         for column, _ in xaxis:
             if column < rule_cells:
                 rule[column] = "┬"
-        rule_row = "└" + "".join(rule) + "┘"
+        # K3: with a gutter the ┘ meets the Y gutter │ exactly under column 0;
+        # without one the └ roots an otherwise free-standing rule.
+        rule_row = "".join(rule) + "┘" if gutter else "└" + "".join(rule) + "┘"
         runs.append([(rule_row, "axis"), (" " * max(width - len(rule_row), 0), "blank")])
         canvas: list[str] = [" "] * plot
         cursor = 0
@@ -824,12 +907,38 @@ class PriceChart(BrailleGraph):
         runs.append([("".join(canvas) + " " * max(width - plot, 0), "axis")])
         return runs
 
+    def _direction(self) -> str:
+        """``-up`` / ``-down`` / ``-flat`` over the displayed range (K5)."""
+        if len(self.data) < 2:
+            return "-flat"
+        first, last = self.data[0], self.data[-1]
+        if last > first:
+            return "-up"
+        if last < first:
+            return "-down"
+        return "-flat"
+
     def render(self) -> RenderResult:
         base = self.background_colors[1]
+        # K5: the line takes the direction colour (up/down/flat) instead of the
+        # neutral primary, so a glance reads the range without the figures.
+        token = {
+            "-up": "text-success",
+            "-down": "text-error",
+            "-flat": "text-accent",
+        }[self._direction()]
+        direction = token_color(self.app, token, "#d4d4d4")
+        try:
+            line = (base + Color.parse(direction)).rich_color
+        except Exception:
+            line = base.rich_color
         return _PriceChartRender(
             self._runs(self.size.width, self.size.height),
-            low=(base + self.get_component_styles("braille-graph--low-color").color).rich_color,
-            high=(base + self.get_component_styles("braille-graph--high-color").color).rich_color,
+            # A single colour on both ends keeps a bare line flat rather than a
+            # gradient that fades its bottom half to nothing.
+            low=line,
+            high=line,
+            marker=line,
             grid=(base + self.get_component_styles("price-chart--grid").color).rich_color,
             axis=(base + self.get_component_styles("price-chart--axis").color).rich_color,
             fill=self.fill,
@@ -852,6 +961,7 @@ class _PriceChartRender:
     high: RichColor
     grid: RichColor
     axis: RichColor
+    marker: RichColor
     fill: bool
 
     def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
@@ -859,6 +969,7 @@ class _PriceChartRender:
         flat = {
             "grid": Style(color=self.grid),
             "axis": Style(color=self.axis),
+            "marker": Style(color=self.marker),
             "blank": Style(),
         }
         for index, row in enumerate(self.rows):

@@ -1,16 +1,19 @@
 """Asset-class-aware live metrics for the Watchlist inspector.
 
-One Yahoo ``ticker.info`` payload feeds every profile: the key tables below
-name the labels worth showing and how to render each value. The same kind of
-number arrives scaled differently per key (``yield`` 0.0473 is a ratio while
-``dividendYield`` 0.32 is already a percent), so every key states its format
-explicitly rather than guessing from magnitude.
+One Yahoo ``ticker.info`` payload feeds every profile: the metric tables in
+``delta/metrics.toml`` name the labels worth showing and how to render each
+value. The same kind of number arrives scaled differently per key (``yield``
+0.0473 is a ratio while ``dividendYield`` 0.32 is already a percent), so every
+key states its format explicitly rather than guessing from magnitude.
 """
 
 from __future__ import annotations
 
+import time
+import tomllib
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from importlib.resources import files
 from typing import Any
 
 from delta.core.db import BarTable
@@ -42,10 +45,24 @@ class AssetMetrics:
     period_high: float | None = None
     period_low: float | None = None
     volatility: float | None = None
+    # Raw 52-week spread for the header position bar (K7); kept separate from
+    # the formatted "52w high"/"52w low" values so the bar needs no parsing.
+    week_52_high: float | None = None
+    week_52_low: float | None = None
     error: str | None = None
 
 
 PROFILES = {"equity", "etf", "commodity", "bond", "fx", "crypto", "cash", "other"}
+
+#: How long (seconds) a successful ``fetch_asset_metrics`` answer is reused
+#: (B12): reopening the inspector within the window skips the Yahoo calls.
+_CACHE_TTL = 60.0
+_metrics_cache: dict[tuple[str, str], tuple[float, AssetMetrics]] = {}
+
+
+def clear_metrics_cache() -> None:
+    """Drop the in-memory fetch cache (tests and explicit refreshes)."""
+    _metrics_cache.clear()
 
 
 def profile_for(instrument: Instrument) -> str:
@@ -55,442 +72,32 @@ def profile_for(instrument: Instrument) -> str:
     return "other"
 
 
-EQUITY_KEYS: KeySpec = {
-    "Revenue growth": ("revenueGrowth", "ratio"),
-    "EPS growth": ("earningsGrowth", "ratio"),
-    "Gross margin": ("grossMargins", "ratio"),
-    "Operating margin": ("operatingMargins", "ratio"),
-    "Net margin": ("profitMargins", "ratio"),
-    "EBITDA margin": ("ebitdaMargins", "ratio"),
-    "ROIC": ("returnOnInvestedCapital", "ratio"),
-    "ROE": ("returnOnEquity", "ratio"),
-    "EPS (trailing)": ("trailingEps", "number"),
-    "EPS (forward)": ("forwardEps", "number"),
-    "Revenue / share": ("revenuePerShare", "number"),
-    "P/E": ("trailingPE", "x"),
-    "Forward P/E": ("forwardPE", "x"),
-    "PEG ratio": ("trailingPegRatio", "x"),
-    "Price / Book": ("priceToBook", "x"),
-    "Price / Sales": ("priceToSalesTrailing12Months", "x"),
-    "EV / EBITDA": ("enterpriseToEbitda", "x"),
-    "Free cash flow": ("freeCashflow", "money"),
-    "Operating cash flow": ("operatingCashflow", "money"),
-    "Total cash": ("totalCash", "money"),
-    "Total debt": ("totalDebt", "money"),
-    "Debt / EBITDA": ("netDebtToEBITDA", "x"),
-    "Interest coverage": ("interestCoverage", "x"),
-    "Current ratio": ("currentRatio", "x"),
-    "Quick ratio": ("quickRatio", "x"),
-    "Debt / Equity": ("debtToEquity", "percent"),
-    "Dividend yield": ("dividendYield", "percent"),
-    "Dividend rate": ("dividendRate", "number"),
-    "Payout ratio": ("payoutRatio", "ratio"),
-    "5y avg yield": ("fiveYearAvgDividendYield", "percent"),
-    "Market cap": ("marketCap", "money"),
-    "Enterprise value": ("enterpriseValue", "money"),
-    "Shares out": ("sharesOutstanding", "count"),
-    "Float": ("floatShares", "count"),
-    "Avg volume": ("averageVolume", "count"),
-    "Beta": ("beta", "number"),
-    "Short % of float": ("shortPercentOfFloat", "ratio"),
-    "Short ratio": ("shortRatio", "x"),
-    "Institutions held": ("heldPercentInstitutions", "ratio"),
-    "Insiders held": ("heldPercentInsiders", "ratio"),
-    "Consensus": ("recommendationKey", "text"),
-    "Target mean": ("targetMeanPrice", "price"),
-    "Target median": ("targetMedianPrice", "price"),
-    "Target high": ("targetHighPrice", "price"),
-    "Target low": ("targetLowPrice", "price"),
-    "Analysts": ("numberOfAnalystOpinions", "count"),
-    "52w high": ("fiftyTwoWeekHigh", "price"),
-    "52w low": ("fiftyTwoWeekLow", "price"),
-    "52w change": ("52WeekChange", "ratio"),
-    "S&P 52w change": ("SandP52WeekChange", "ratio"),
-    "50-day average": ("fiftyDayAverage", "price"),
-    "200-day average": ("twoHundredDayAverage", "price"),
-    "Next earnings": ("earningsTimestamp", "date"),
-    "Ex-dividend": ("exDividendDate", "date"),
-}
+def _load_metric_tables() -> tuple[dict[str, tuple[KeySpec, GroupSpec]], dict[str, str]]:
+    """Load the static metric tables and glossary from the bundled TOML.
 
-EQUITY_GROUPS: GroupSpec = (
-    (
-        "Profitability",
-        (
-            "Revenue growth",
-            "EPS growth",
-            "Gross margin",
-            "Operating margin",
-            "Net margin",
-            "EBITDA margin",
-            "ROIC",
-            "ROE",
-        ),
-    ),
-    (
-        "Balance Sheet",
-        (
-            "Free cash flow",
-            "Operating cash flow",
-            "Total cash",
-            "Total debt",
-            "Debt / EBITDA",
-            "Interest coverage",
-            "Current ratio",
-            "Quick ratio",
-            "Debt / Equity",
-        ),
-    ),
-    (
-        "Valuation",
-        (
-            "P/E",
-            "Forward P/E",
-            "PEG ratio",
-            "Price / Book",
-            "Price / Sales",
-            "EV / EBITDA",
-            "EPS (trailing)",
-            "EPS (forward)",
-            "Revenue / share",
-        ),
-    ),
-    (
-        "Analyst View",
-        ("Consensus", "Target mean", "Target median", "Target high", "Target low", "Analysts", "Next earnings"),
-    ),
-    (
-        "Price Context",
-        ("52w high", "52w low", "52w change", "S&P 52w change", "50-day average", "200-day average"),
-    ),
-    ("Shareholder Returns", ("Dividend yield", "Dividend rate", "Payout ratio", "5y avg yield", "Ex-dividend")),
-    ("Size", ("Market cap", "Enterprise value", "Shares out", "Float", "Avg volume")),
-    ("Trading & Ownership", ("Beta", "Short % of float", "Short ratio", "Institutions held", "Insiders held")),
-)
+    Kept in a data file (C10) so the ~450 lines of per-profile key/group
+    tables do not crowd the module. ``tomllib`` preserves the file's key and
+    group order, so card order is exactly what the file spells.
+    """
+    raw = tomllib.loads(files("delta").joinpath("metrics.toml").read_text(encoding="utf-8"))
+    tables: dict[str, tuple[KeySpec, GroupSpec]] = {}
+    for name, spec in raw["profiles"].items():
+        keys: KeySpec = {label: (key, fmt) for label, key, fmt in spec["keys"]}
+        groups: GroupSpec = tuple((title, tuple(labels)) for title, labels in spec["groups"])
+        tables[str(name)] = (keys, groups)
+    return tables, dict(raw.get("help", {}))
 
-ETF_KEYS: KeySpec = {
-    "Category": ("category", "text"),
-    "Fund family": ("fundFamily", "text"),
-    "NAV": ("navPrice", "price"),
-    "Expense ratio": ("annualReportExpenseRatio", "ratio"),
-    "Distribution yield": ("yield", "ratio"),
-    "3y return": ("threeYearAverageReturn", "ratio"),
-    "5y return": ("fiveYearAverageReturn", "ratio"),
-    "Assets under management": ("totalAssets", "money"),
-    "Holdings": ("holdingsCount", "count"),
-    "Previous close": ("previousClose", "price"),
-    "Open": ("open", "price"),
-    "Day high": ("dayHigh", "price"),
-    "Day low": ("dayLow", "price"),
-    "52w high": ("fiftyTwoWeekHigh", "price"),
-    "52w low": ("fiftyTwoWeekLow", "price"),
-    "Volume": ("volume", "count"),
-    "Avg volume": ("averageVolume", "count"),
-    "50-day average": ("fiftyDayAverage", "price"),
-    "200-day average": ("twoHundredDayAverage", "price"),
-}
 
-ETF_GROUPS: GroupSpec = (
-    ("Fund Info", ("Category", "Fund family", "NAV")),
-    ("Fund Costs", ("Expense ratio",)),
-    ("Income", ("Distribution yield",)),
-    ("Returns", ("3y return", "5y return")),
-    ("Fund Scale", ("Assets under management", "Holdings")),
-    (
-        "Price Context",
-        (
-            "Previous close",
-            "Open",
-            "Day high",
-            "Day low",
-            "52w high",
-            "52w low",
-            "Volume",
-            "Avg volume",
-            "50-day average",
-            "200-day average",
-        ),
-    ),
-)
+_TABLES, METRIC_HELP = _load_metric_tables()
 
-BOND_KEYS: KeySpec = {
-    "Coupon": ("couponRate", "ratio"),
-    "Maturity": ("maturityDate", "date"),
-    "Duration": ("duration", "number"),
-    "Credit rating": ("creditRating", "text"),
-    "Distribution yield": ("yield", "ratio"),
-    "Category": ("category", "text"),
-    "NAV": ("navPrice", "price"),
-    "Assets under management": ("totalAssets", "money"),
-    "Previous close": ("previousClose", "price"),
-    "Open": ("open", "price"),
-    "Day high": ("dayHigh", "price"),
-    "Day low": ("dayLow", "price"),
-    "52w high": ("fiftyTwoWeekHigh", "price"),
-    "52w low": ("fiftyTwoWeekLow", "price"),
-    "Volume": ("volume", "count"),
-    "Avg volume": ("averageVolume", "count"),
-    "50-day average": ("fiftyDayAverage", "price"),
-    "200-day average": ("twoHundredDayAverage", "price"),
-}
-
-BOND_GROUPS: GroupSpec = (
-    ("Income", ("Distribution yield",)),
-    ("Fund Scale", ("Assets under management", "NAV", "Category")),
-    ("Bond Terms", ("Coupon", "Maturity", "Duration", "Credit rating")),
-    (
-        "Price Context",
-        (
-            "Previous close",
-            "Open",
-            "Day high",
-            "Day low",
-            "52w high",
-            "52w low",
-            "Volume",
-            "Avg volume",
-            "50-day average",
-            "200-day average",
-        ),
-    ),
-)
-
-COMMODITY_KEYS: KeySpec = {
-    "Volume": ("volume", "count"),
-    "Avg volume": ("averageVolume", "count"),
-    "Open interest": ("openInterest", "count"),
-    "Underlying": ("underlyingSymbol", "text"),
-    "Expires": ("expireDate", "date"),
-    "Open": ("open", "price"),
-    "Day high": ("dayHigh", "price"),
-    "Day low": ("dayLow", "price"),
-    "Previous close": ("previousClose", "price"),
-    "52w high": ("fiftyTwoWeekHigh", "price"),
-    "52w low": ("fiftyTwoWeekLow", "price"),
-    "50-day average": ("fiftyDayAverage", "price"),
-    "200-day average": ("twoHundredDayAverage", "price"),
-}
-
-COMMODITY_GROUPS: GroupSpec = (
-    ("Market Activity", ("Volume", "Avg volume", "Open interest")),
-    ("Contract", ("Underlying", "Expires")),
-    (
-        "Price Context",
-        (
-            "Open",
-            "Day high",
-            "Day low",
-            "Previous close",
-            "52w high",
-            "52w low",
-            "50-day average",
-            "200-day average",
-        ),
-    ),
-)
-
-FX_KEYS: KeySpec = {
-    "Bid": ("bid", "fx"),
-    "Ask": ("ask", "fx"),
-    "Open": ("open", "fx"),
-    "Day high": ("dayHigh", "fx"),
-    "Day low": ("dayLow", "fx"),
-    "Previous close": ("previousClose", "fx"),
-    "52w high": ("fiftyTwoWeekHigh", "fx"),
-    "52w low": ("fiftyTwoWeekLow", "fx"),
-    "50-day average": ("fiftyDayAverage", "fx"),
-    "200-day average": ("twoHundredDayAverage", "fx"),
-}
-
-FX_GROUPS: GroupSpec = (
-    ("Live Quote", ("Bid", "Ask")),
-    ("Session Range", ("Open", "Day high", "Day low", "Previous close")),
-    ("Price Context", ("52w high", "52w low", "50-day average", "200-day average")),
-)
-
-CRYPTO_KEYS: KeySpec = {
-    "Market cap": ("marketCap", "money"),
-    "Circulating supply": ("circulatingSupply", "count"),
-    "24h volume": ("volume24Hr", "money"),
-    "Avg volume": ("averageVolume", "money"),
-    "Open": ("open", "price"),
-    "Day high": ("dayHigh", "price"),
-    "Day low": ("dayLow", "price"),
-    "Previous close": ("previousClose", "price"),
-    "52w high": ("fiftyTwoWeekHigh", "price"),
-    "52w low": ("fiftyTwoWeekLow", "price"),
-}
-
-CRYPTO_GROUPS: GroupSpec = (
-    ("Market Size", ("Market cap", "Circulating supply")),
-    ("Activity", ("24h volume", "Avg volume")),
-    (
-        "Price Context",
-        ("Open", "Day high", "Day low", "Previous close", "52w high", "52w low"),
-    ),
-)
-
-CASH_KEYS: KeySpec = {
-    "Yield": ("yield", "ratio"),
-    "Dividend yield": ("dividendYield", "percent"),
-    "Category": ("category", "text"),
-    "NAV": ("navPrice", "price"),
-    "Assets under management": ("totalAssets", "money"),
-    "Previous close": ("previousClose", "price"),
-    "52w high": ("fiftyTwoWeekHigh", "price"),
-    "52w low": ("fiftyTwoWeekLow", "price"),
-}
-
-CASH_GROUPS: GroupSpec = (
-    ("Income", ("Yield", "Dividend yield")),
-    ("Fund Scale", ("Assets under management", "NAV", "Category")),
-    ("Price Context", ("Previous close", "52w high", "52w low")),
-)
-
-OTHER_KEYS: KeySpec = {
-    "Previous close": ("previousClose", "price"),
-    "Open": ("open", "price"),
-    "Day high": ("dayHigh", "price"),
-    "Day low": ("dayLow", "price"),
-    "52w high": ("fiftyTwoWeekHigh", "price"),
-    "52w low": ("fiftyTwoWeekLow", "price"),
-    "Volume": ("volume", "count"),
-    "Avg volume": ("averageVolume", "count"),
-}
-
-OTHER_GROUPS: GroupSpec = (
-    (
-        "Price Context",
-        (
-            "Previous close",
-            "Open",
-            "Day high",
-            "Day low",
-            "52w high",
-            "52w low",
-            "Volume",
-            "Avg volume",
-        ),
-    ),
-)
-
-_TABLES: dict[str, tuple[KeySpec, GroupSpec]] = {
-    "equity": (EQUITY_KEYS, EQUITY_GROUPS),
-    "etf": (ETF_KEYS, ETF_GROUPS),
-    "bond": (BOND_KEYS, BOND_GROUPS),
-    "commodity": (COMMODITY_KEYS, COMMODITY_GROUPS),
-    "fx": (FX_KEYS, FX_GROUPS),
-    "crypto": (CRYPTO_KEYS, CRYPTO_GROUPS),
-    "cash": (CASH_KEYS, CASH_GROUPS),
-}
+#: The fallback profile for unknown asset classes, from the data file.
+OTHER_KEYS, OTHER_GROUPS = _TABLES["other"]
 
 
 def groups_for(profile: str) -> GroupSpec:
     """The profile's static group table, in card order."""
     table = _TABLES.get(profile)
     return table[1] if table else OTHER_GROUPS
-
-
-METRIC_HELP: dict[str, str] = {
-    # Profitability
-    "Revenue growth": "How fast sales grew in the most recent year.",
-    "EPS growth": "How fast profit per share grew in the most recent year.",
-    "Gross margin": "Profit left after making the product, per dollar of sales.",
-    "Operating margin": "Profit from core operations, per dollar of sales.",
-    "Net margin": "Final profit after every expense, per dollar of sales.",
-    "EBITDA margin": "Operating profit before accounting charges, per dollar of sales.",
-    "ROIC": "Profit made per dollar invested into the business.",
-    "ROE": "Profit made per dollar of shareholders' money.",
-    "EPS (trailing)": "Profit per share over the past year.",
-    "EPS (forward)": "Expected profit per share for the coming year.",
-    "Revenue / share": "Sales divided by shares outstanding.",
-    # Valuation
-    "P/E": "Price per dollar of past-year profit.",
-    "Forward P/E": "Price per dollar of expected profit.",
-    "PEG ratio": "P/E relative to growth; near 1 reads as fairly priced.",
-    "Price / Book": "Price per dollar of accounting net worth.",
-    "Price / Sales": "Price per dollar of sales.",
-    "EV / EBITDA": "Whole-company price per dollar of operating profit.",
-    # Balance sheet
-    "Free cash flow": "Cash left after running and growing the business.",
-    "Operating cash flow": "Cash the business generated from operations.",
-    "Total cash": "Cash and short-term investments held.",
-    "Total debt": "All money owed.",
-    "Debt / EBITDA": "Years of operating profit needed to repay all debt.",
-    "Interest coverage": "How easily profit covers interest payments.",
-    "Current ratio": "Ability to pay bills due within a year.",
-    "Quick ratio": "Ability to pay bills due within a year, excluding inventory.",
-    "Debt / Equity": "How much of the company is funded by borrowing.",
-    # Shareholder returns
-    "Dividend yield": "Yearly dividend as a percent of the price.",
-    "Dividend rate": "Dividend paid per share per year.",
-    "Payout ratio": "Share of profit paid out as dividends.",
-    "5y avg yield": "Average dividend yield over five years.",
-    # Size & liquidity
-    "Market cap": "Total value of all shares or coins outstanding.",
-    "Enterprise value": "Price to buy the whole company including its debt.",
-    "Shares out": "All shares issued.",
-    "Float": "Shares freely tradable by the public.",
-    "Avg volume": "Typical number of shares traded daily.",
-    "Beta": "Sensitivity to market swings; 1 moves with the market.",
-    "Short % of float": "Share of tradable shares sold short.",
-    "Short ratio": "Days of typical volume needed to cover short positions.",
-    "Institutions held": "Share owned by professional funds.",
-    "Insiders held": "Share owned by company insiders.",
-    # Analyst view
-    "Consensus": "Most common analyst rating: buy, hold, or sell.",
-    "Target mean": "Average analyst price forecast.",
-    "Target median": "Middle analyst price forecast.",
-    "Target high": "Highest analyst price forecast.",
-    "Target low": "Lowest analyst price forecast.",
-    "Analysts": "Number of analysts offering forecasts.",
-    "EPS est (next q)": "Analyst forecast for next quarter's profit per share.",
-    "EPS growth est": "Forecast growth in profit per share for this year.",
-    "Revenue est (fy)": "Analyst forecast for this year's sales.",
-    # Price context
-    "52w high": "Highest price over the past year.",
-    "52w low": "Lowest price over the past year.",
-    "52w change": "Price change over the past year.",
-    "S&P 52w change": "The S&P 500's change over the same period.",
-    "50-day average": "Average price over the last 50 trading days.",
-    "200-day average": "Average price over the last 200 trading days.",
-    "From 52w high": "How far the current price sits below its yearly high.",
-    "Previous close": "Yesterday's official closing price.",
-    "Open": "The first traded price of the session.",
-    "Day high": "Highest price traded so far today.",
-    "Day low": "Lowest price traded so far today.",
-    "Volume": "Shares or contracts traded recently.",
-    "Current price": "Most recent traded price.",
-    "Current yield": "Yearly income as a percent of the current price.",
-    # Calendar
-    "Next earnings": "When the next results report is due.",
-    "Ex-dividend": "Buy before this date to receive the next dividend.",
-    # Fund profiles
-    "Category": "What kind of product this is.",
-    "Fund family": "Company that runs the fund.",
-    "NAV": "Per-unit value of the fund's holdings.",
-    "Expense ratio": "Yearly fee as a percent of assets.",
-    "Distribution yield": "Yearly payouts as a percent of the price.",
-    "3y return": "Average yearly return over three years.",
-    "5y return": "Average yearly return over five years.",
-    "Assets under management": "Total money invested in the fund.",
-    "Holdings": "Number of securities the fund holds.",
-    # Bond terms
-    "Coupon": "Fixed interest the bond pays each year.",
-    "Maturity": "When the bond repays its face value.",
-    "Duration": "Price sensitivity to interest-rate moves, in years.",
-    "Credit rating": "Grading of the issuer's default risk.",
-    # Commodity contract
-    "Open interest": "Number of outstanding contracts.",
-    "Underlying": "The exchange symbol of this contract.",
-    "Expires": "When the contract settles.",
-    # FX
-    "Bid": "Price buyers are offering.",
-    "Ask": "Price sellers are asking.",
-    # Crypto / cash
-    "Circulating supply": "Coins in public circulation.",
-    "24h volume": "Value traded in the last day.",
-    "Yield": "Yearly interest as a percent of the price.",
-}
 
 
 def _compact(value: float) -> str:
@@ -506,6 +113,16 @@ def _compact(value: float) -> str:
 def _money(value: float) -> str:
     sign = "-" if value < 0 else ""
     return f"{sign}${_compact(abs(value))}"
+
+
+def _as_float(value: Any) -> float | None:
+    """Coerce a provider value to float, or None when it is absent/non-numeric."""
+    try:
+        if value is None or value == "":
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _fmt(value: Any, fmt: str) -> str | None:
@@ -540,26 +157,61 @@ def _fmt(value: Any, fmt: str) -> str | None:
     return f"{number:,.2f}"
 
 
+#: Yahoo ``(period, interval)`` per inspector range (K8). The legacy ``day`` /
+#: ``month`` / ``all`` names are kept as aliases so older callers keep working.
+_RANGES: dict[str, tuple[str, str]] = {
+    "day": ("1d", "5m"),
+    "1d": ("1d", "5m"),
+    "5d": ("5d", "1d"),
+    "month": ("1mo", "1d"),
+    "1m": ("1mo", "1d"),
+    "6m": ("6mo", "1d"),
+    "ytd": ("ytd", "1d"),
+    "1y": ("1y", "1d"),
+    "all": ("max", "1wk"),
+}
+
+
 def fetch_asset_metrics(
     instrument: Instrument,
     range_name: str = "month",
     engine: Any = None,
     suffixes: dict[str, str] | None = None,
 ) -> AssetMetrics:
-    """Fetch provider data and normalize it; intended to run off the UI thread."""
+    """Fetch provider data and normalize it, cached briefly (B12).
+
+    Intended to run off the UI thread. A successful answer is reused for a
+    short window so reopening the inspector does not repeat the Yahoo calls;
+    the entry is keyed by ``(instrument id, range)``, the only inputs that
+    vary across a session.
+    """
+    key = (instrument.id, range_name)
+    cached = _metrics_cache.get(key)
+    if cached is not None and time.monotonic() - cached[0] < _CACHE_TTL:
+        return cached[1]
+    now = time.monotonic()
+    result = _fetch_asset_metrics(instrument, range_name, engine, suffixes)
+    if result.error is None:
+        _metrics_cache[key] = (now, result)
+    return result
+
+
+def _fetch_asset_metrics(
+    instrument: Instrument,
+    range_name: str = "month",
+    engine: Any = None,
+    suffixes: dict[str, str] | None = None,
+) -> AssetMetrics:
+    """Provider fetch and normalization; the uncached body of ``fetch_asset_metrics``."""
     result = AssetMetrics(instrument.id, profile_for(instrument))
     try:
         import yfinance as yf
 
         ticker = yf.Ticker(yf_symbol(instrument, suffixes or DEFAULT_SUFFIXES))
         info: dict[str, Any] = ticker.info or {}
-        period, interval = {
-            "day": ("1d", "5m"),
-            "month": ("1mo", "1d"),
-            "all": ("max", "1wk"),
-        }.get(range_name, ("1mo", "1d"))
+        period, interval = _RANGES.get(range_name, ("1mo", "1d"))
         history = ticker.history(period=period, interval=interval, auto_adjust=True)
-        if range_name == "day" and (history is None or history.empty):
+        if range_name in ("day", "1d") and (history is None or history.empty):
             history = ticker.history(period="5d", interval="1d", auto_adjust=True)
         closes: list[float] = []
         times: list[str] = []
@@ -621,6 +273,8 @@ def fetch_asset_metrics(
         if result.profile == "equity":
             _merge_estimates(ticker, result.groups)
         _add_position(result.groups, closes, info)
+        result.week_52_high = _as_float(info.get("fiftyTwoWeekHigh"))
+        result.week_52_low = _as_float(info.get("fiftyTwoWeekLow"))
         result.values.update(
             {label: value for group in result.groups.values() for label, value in group.items()}
         )

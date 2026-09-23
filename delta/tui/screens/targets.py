@@ -28,9 +28,10 @@ from delta.asset_metrics import (
 from delta.core.models import Instrument
 from delta.core.plugin import MarketPlugin, discover_plugins
 from delta.plugins.data.yfinance import DEFAULT_SUFFIXES
-from delta.quotes import SearchResult, YahooQuotes, canonical_symbol, yahoo_search
+from delta.quotes import SearchResult, canonical_symbol, yahoo_search
 from delta.targets import DEFAULT_KIND, KNOWN_KINDS
 from delta.tui.axes import format_price
+from delta.tui.components import EmptyState, QuoteFeedMixin, SuggestionList, require_selection
 from delta.tui.shell import DeltaScreen, age_text
 from delta.tui.widgets import (
     MODAL_WIDTH,
@@ -55,6 +56,46 @@ class WatchlistList(OptionList):
 
 
 ASSET_CLASS_ORDER = ("equity", "etf", "bond", "commodity", "fx", "crypto", "cash", "other")
+
+#: The inspector's visible range strip (K8), left to right, plus the display
+#: label and the trailing-window size each range shows on the chart.
+RANGES = ("1d", "5d", "1m", "6m", "ytd", "1y", "all")
+RANGE_LABELS = {
+    "1d": "1D",
+    "5d": "5D",
+    "1m": "1M",
+    "6m": "6M",
+    "ytd": "YTD",
+    "1y": "1Y",
+    "all": "ALL",
+}
+RANGE_WINDOW: dict[str, int | None] = {
+    "1d": None,
+    "5d": 5,
+    "1m": 30,
+    "6m": 130,
+    "ytd": 250,
+    "1y": 252,
+    "all": None,
+}
+DEFAULT_RANGE = "1m"
+
+#: Block-eighth glyphs for the 52-week position bar (K7), from 1/8 to 7/8.
+_BAR_EIGHTHS = "▏▎▍▌▋▊▉"
+
+
+def _fraction_bar(fraction: float, width: int = 16) -> str:
+    """A ``▕██▊▏`` bar showing ``fraction`` (0..1) filled over ``width`` cells."""
+    fraction = max(0.0, min(1.0, fraction))
+    filled = fraction * width
+    whole = int(filled)
+    bar = "█" * whole
+    if whole < width:
+        eighth = int((filled - whole) * 8)
+        if eighth > 0:
+            bar += _BAR_EIGHTHS[min(eighth - 1, len(_BAR_EIGHTHS) - 1)]
+            whole += 1
+    return "▕" + bar + " " * (width - whole) + "▏"
 
 
 def _friendly_date_range(start: str | None, end: str | None) -> str:
@@ -131,7 +172,6 @@ class TargetAddModal(Dialog):
         self._search_timer: Any = None
         self._search_generation = 0
         self._results_by_key: dict[str, SearchResult] = {}
-        self._highlight = 0
         self._suppress_name_search = False
         self._suffixes = DEFAULT_SUFFIXES | getattr(self.delta.cfg, "plugins", {}).get(
             "yfinance", {}
@@ -163,7 +203,7 @@ class TargetAddModal(Dialog):
                 Input(placeholder="company or ticker — type to search", id="tg-name"),
                 classes="tg-field",
             ),
-            OptionList(id="tg-suggestions"),
+            SuggestionList(id="tg-suggestions"),
             Static("", id="tg-summary", markup=False),
             Vertical(
                 Horizontal(
@@ -294,18 +334,15 @@ class TargetAddModal(Dialog):
         return merged[: self.RESULT_CAP]
 
     def _show_results(self, results: list[SearchResult]) -> None:
-        options = self.query_one("#tg-suggestions", OptionList)
-        options.clear_options()
         self._results_by_key = {self._result_key(result): result for result in results}
+        options = []
         for result in results:
             exchange = f" · {result.exchange}" if result.exchange else ""
             prompt = Text(f"{result.symbol} — {result.name} · {result.market.upper()}{exchange}")
             if self._is_watched(result):
                 prompt.append("  ✓ watched", style=token_color(self.app, "text-success"))
-            options.add_option(Option(prompt, id=self._result_key(result)))
-        self._highlight = 0
-        if results:
-            options.highlighted = 0
+            options.append(Option(prompt, id=self._result_key(result)))
+        self.query_one("#tg-suggestions", SuggestionList).show(options)
 
     def _set_network(self, text: str, state: str) -> None:
         indicator = self.query_one("#tg-network", Static)
@@ -328,9 +365,6 @@ class TargetAddModal(Dialog):
 
     def on_mount(self) -> None:
         self.query_one("#tg-name", Input).focus()
-        # Suggestions are browsed through the name field's arrows; the list
-        # itself must never steal focus or tab stops.
-        self.query_one("#tg-suggestions", OptionList).can_focus = False
         self._update_summary()
 
     # ----- reactions ------------------------------------------------------
@@ -371,17 +405,8 @@ class TargetAddModal(Dialog):
 
     def on_key(self, event: Any) -> None:
         """Arrows browse the suggestions while the name input keeps focus."""
-        if getattr(self.focused, "id", None) != "tg-name":
-            return
-        options = self.query_one("#tg-suggestions", OptionList)
-        count = len(options.options)
-        if not count or event.key not in {"down", "up"}:
-            return
-        event.stop()
-        event.prevent_default()
-        delta = 1 if event.key == "down" else -1
-        self._highlight = (self._highlight + delta) % count
-        options.highlighted = self._highlight
+        if getattr(self.focused, "id", None) == "tg-name":
+            self.query_one("#tg-suggestions", SuggestionList).browse(event)
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
         if getattr(event.option_list, "id", None) != "tg-suggestions":
@@ -435,9 +460,8 @@ class TargetAddModal(Dialog):
         # Pick, then confirm: enter with suggestions open adopts one; the
         # next enter (or enter on an empty dropdown) saves.
         if event.input.id == "tg-name" and self._results_by_key:
-            options = self.query_one("#tg-suggestions", OptionList)
-            index = min(self._highlight, len(options.options) - 1)
-            option = options.options[index]
+            options = self.query_one("#tg-suggestions", SuggestionList)
+            option = options.get_option_at_index(options.highlighted_index)
             if option.id:
                 self._pick(str(option.id))
                 return
@@ -547,11 +571,12 @@ class MetricHelpModal(Dialog):
                     yield Static(entry, classes="glossary-entry")
 
 
-class Targets(DeltaScreen):
+class Targets(QuoteFeedMixin, DeltaScreen):
     name = "targets"
     BINDINGS = [
         ("enter", "inspect", "refresh metrics"),
-        ("r", "cycle_range", "range"),
+        ("r", "cycle_range(1)", "range"),
+        ("R", "cycle_range(-1)", "range"),
         ("i", "metric_help", "glossary"),
         ("a", "add", "add"),
         ("d", "remove", "remove"),
@@ -561,9 +586,6 @@ class Targets(DeltaScreen):
         ("right", "member(1)", "member"),
         ("escape", "cancel", "back"),
     ]
-    #: Below this terminal width the list takes the whole screen and the
-    #: metrics pane opens on enter — the two do not fit side by side.
-    NARROW_WIDTH = 100
     #: Column widths of a watchlist row: name, last, change, age.
     COLUMNS = (12, 10, 8, 4)
     CSS = """
@@ -577,30 +599,22 @@ class Targets(DeltaScreen):
     #tg-filter { margin: 0 0 0 0; }
     #tg-empty { height: auto; padding: 0 1; color: $text-muted; }
     #target-inspector-content { width: 1fr; height: 1fr; padding: 0 1; overflow-y: auto; }
-    #target-inspector-title { width: 1fr; height: 1; }
     #target-inspector-empty { width: 1fr; height: auto; color: $text-muted; }
-    #target-inspector-hero { width: 1fr; height: 1; margin: 1 0 0 0; }
-    #target-inspector-status { width: 1fr; height: auto; color: $text-muted; }
-    #target-chart-header { width: 1fr; height: 1; margin: 1 0 0 0; }
-    #target-chart-label { width: 1fr; color: $text-muted; text-style: bold; }
-    #target-chart-change { width: auto; text-style: bold; }
-    #target-chart-change.-up { color: $text-success; }
-    #target-chart-change.-down { color: $text-error; }
-    #target-chart { width: 1fr; height: 8; padding: 0 1; background: $panel; }
-    #target-metric-grid { width: 1fr; height: auto; layout: grid; grid-size: 2; grid-columns: 1fr 1fr; grid-gutter: 1 1; }
-    Targets.-narrow #target-metric-grid { grid-size: 1; grid-columns: 1fr; }
-    .metric-card { height: auto; padding: 0 1; }
-    .metric-card-body { width: 1fr; height: auto; color: $foreground; }
+    #target-inspector-title { width: 1fr; height: 1; color: $text-primary; text-style: bold; }
+    #target-inspector-hero { width: 1fr; height: 1; }
+    #target-range-strip { width: 1fr; height: 1; margin: 0; }
+    #target-range-tabs { width: auto; color: $text-muted; }
+    #target-range-summary { width: 1fr; content-align-horizontal: right; color: $text-muted; }
+    #target-chart { width: 1fr; height: 1fr; min-height: 6; max-height: 16; padding: 0 1;
+                   background: transparent; }
+    #target-metric-grid { width: 1fr; height: auto; }
     #target-inspector-source { width: 1fr; height: auto; margin: 1 0 0 0; color: $text-muted; }
     """
 
     def __init__(self, delta: Any) -> None:
         super().__init__(delta)
         self.rows: dict[str, tuple[str, str | None]] = {}
-        self.feed: YahooQuotes | None = None
-        self.feed_task: asyncio.Task | None = None
         self.active = False
-        self.signature: tuple = ()
         self.specs = {}
         #: Cached metrics per (instrument id, range): range switches must not
         #: refetch what the provider already answered for that window.
@@ -609,7 +623,7 @@ class Targets(DeltaScreen):
         self._collapsed_groups: set[str] = set()
         self._option_indices: dict[str, int] = {}
         self._collect_task: asyncio.Task | None = None
-        self._range = "month"
+        self._range = DEFAULT_RANGE
         self._members_by_target: dict[str, list[str]] = {}
         self._selected_member: dict[str, str] = {}
         self.detail_open = False
@@ -627,30 +641,17 @@ class Targets(DeltaScreen):
                     placeholder="/ filter names, tickers, markets, kinds or tags", id="tg-filter"
                 )
                 yield WatchlistList(id="target-table")
-                yield Static("no targets yet — press a to add one", id="tg-empty")
+                yield EmptyState("no targets yet", key="a", action="add one", id="tg-empty")
             with Pane(title="metrics", hints=self._metric_hints(), id="target-inspector-pane"):
                 with Vertical(id="target-inspector-content"):
+                    yield Static("", id="target-inspector-empty", markup=False)
                     yield Static("", id="target-inspector-title", markup=False)
-                    yield Static(
-                        "no target selected — ↑↓ picks one",
-                        id="target-inspector-empty",
-                        markup=False,
-                    )
                     yield Static("", id="target-inspector-hero", markup=False)
-                    yield Static("", id="target-inspector-status", markup=False)
-                    with Horizontal(id="target-chart-header"):
-                        yield Static("price · month", id="target-chart-label", markup=False)
-                        yield Static("", id="target-chart-change", markup=False)
+                    with Horizontal(id="target-range-strip"):
+                        yield Static("", id="target-range-tabs", markup=False)
+                        yield Static("", id="target-range-summary", markup=False)
                     yield PriceChart([], id="target-chart")
-                    with Vertical(id="target-metric-grid"):
-                        for index in range(8):
-                            with Pane(classes="metric-card -auto", id=f"metric-card-{index}"):
-                                yield Static(
-                                    "",
-                                    classes="metric-card-body",
-                                    id=f"metric-card-body-{index}",
-                                    markup=False,
-                                )
+                    yield Static("", id="target-metric-grid", markup=False)
                     yield Static("", id="target-inspector-source", markup=False)
 
     def _colours(self) -> dict[str, str]:
@@ -670,7 +671,7 @@ class Targets(DeltaScreen):
     def _metric_hints(self) -> str:
         pairs = [
             ("enter", "refresh"),
-            ("r", f"range: {self._range_label()}"),
+            ("r/R", f"range: {self._range_label()}"),
             ("i", "glossary"),
         ]
         target_key = self._selected() if self.is_mounted else None
@@ -682,8 +683,7 @@ class Targets(DeltaScreen):
 
     def layout_views(self) -> None:
         """Wide: both panes. Narrow: the list, or the metrics after enter."""
-        narrow = self.size.width < self.NARROW_WIDTH
-        self.set_class(narrow, "-narrow")
+        narrow = self.apply_breakpoint()
         self.query_one("#target-list-pane").display = not (narrow and self.detail_open)
         self.query_one("#target-inspector-pane").display = not narrow or self.detail_open
         self.query_one("#target-inspector-pane", Pane).set_hints(self._metric_hints())
@@ -778,13 +778,12 @@ class Targets(DeltaScreen):
                 inst = members[0] if len(members) == 1 else None
                 self.rows[key] = (target.id, inst)
                 table.add_option(Option(self._row_prompt(target, members), id=key))
-        empty = self.query_one("#tg-empty", Static)
+        empty = self.query_one("#tg-empty", EmptyState)
         empty.display = not table.row_count
-        empty.update(
-            "no targets match the filter — press esc to clear it"
-            if specs
-            else "no targets yet — press a to add one"
-        )
+        if specs:
+            empty.set_message("no targets match the filter", key="esc", action="clear it")
+        else:
+            empty.set_message("no targets yet", key="a", action="add one")
         if selected:
             with suppress(Exception):
                 table.highlighted = table.get_option_index(selected)
@@ -856,37 +855,22 @@ class Targets(DeltaScreen):
 
     def _render_metrics(self) -> None:
         instrument = self._selected_instrument
-        metric = (
-            self._metrics.get((instrument.id, self._range)) if instrument else None
-        )
+        metric = self._metrics.get((instrument.id, self._range)) if instrument else None
         empty = self.query_one("#target-inspector-empty", Static)
         title = self.query_one("#target-inspector-title", Static)
-        status = self.query_one("#target-inspector-status", Static)
         hero = self.query_one("#target-inspector-hero", Static)
-        chart_change = self.query_one("#target-chart-change", Static)
         source = self.query_one("#target-inspector-source", Static)
-        cards = [
-            (
-                self.query_one(f"#metric-card-{i}", Pane),
-                self.query_one(f"#metric-card-body-{i}", Static),
-            )
-            for i in range(8)
-        ]
+        grid = self.query_one("#target-metric-grid", Static)
         self.query_one("#target-inspector-pane", Pane).set_hints(self._metric_hints())
-        self.query_one("#target-chart-label", Static).update(self._chart_label())
-
-        def clear_cards() -> None:
-            for card, body in cards:
-                card.display = False
-                body.update("")
 
         def clear_chart() -> None:
-            chart_change.update("")
-            chart_change.set_classes("")
             chart = self.query_one("#target-chart", PriceChart)
             chart.times = []
             chart.data = []
             source.update("")
+
+        def clear_cards() -> None:
+            grid.update("")
 
         selected = self._selected()
         target = self.specs.get(self.rows[selected][0]) if selected in self.rows else None
@@ -902,7 +886,7 @@ class Targets(DeltaScreen):
             empty.update(message)
             title.update(f"{target.id} · {target.kind}" if target else "")
             hero.update("")
-            status.update("")
+            self._render_range_strip(metric=None)
             clear_chart()
             clear_cards()
             return
@@ -913,26 +897,32 @@ class Targets(DeltaScreen):
             if instrument.id in members and len(members) > 1
             else ""
         )
-        tags = f" · tags: {', '.join(sorted(target.tags))}" if target and target.tags else ""
         tokens = self._colours()
+        # K7 row 1: name left, exchange · class · currency right.
+        meta = " · ".join(
+            part
+            for part in (
+                instrument.market.upper(),
+                instrument.asset_class,
+                instrument.currency,
+            )
+            if part
+        )
         title.update(
             Text.assemble(
                 (name, f"bold {tokens['foreground']}"),
-                (
-                    f"  {instrument.id} · {instrument.market.upper()} · {instrument.asset_class}{tags}{member_note}",
-                    tokens["text-muted"],
-                ),
+                (f"  {meta}{member_note}", tokens["text-muted"]),
             )
         )
         if metric is None:
-            hero.update("")
-            status.update("loading metrics…")
+            hero.update(Text("loading metrics…", style=tokens["text-muted"]))
+            self._render_range_strip(metric=None)
             clear_chart()
             clear_cards()
             return
         current_label = "Current yield" if metric.profile == "bond" else "Current price"
         current = metric.values.get(current_label, "—")
-        quote = self._quote_for(instrument.id)
+        quote = self.quote_for(instrument.id)
         up, down, flat = tokens["text-success"], tokens["text-error"], tokens["text-muted"]
         hero_text = Text()
         hero_text.append(current, style=f"bold {tokens['foreground']}")
@@ -941,89 +931,105 @@ class Targets(DeltaScreen):
         if quote is not None and quote.change_pct is not None:
             pct = quote.change_pct
             arrow = "▲" if pct > 0 else "▼" if pct < 0 else "─"
-            hero_text.append(
-                f"{arrow} {pct:+.2f}%", style=up if pct > 0 else down if pct < 0 else flat
-            )
+            style = up if pct > 0 else down if pct < 0 else flat
+            hero_text.append(f"{arrow} {pct:+.2f}%", style=style)
             hero_text.append("  today", style=flat)
         else:
-            hero_text.append("— today", style=flat)
+            if metric.history_end:
+                closed = _friendly_date_range(metric.history_end, metric.history_end)
+                hero_text.append(f"closed · last {closed}", style=flat)
+            else:
+                hero_text.append("— today", style=flat)
+        hero_text.append("   ")
+        # K7: a 52-week position bar sits on the same row.
+        if (
+            metric.week_52_high is not None
+            and metric.week_52_low is not None
+            and metric.week_52_high > metric.week_52_low
+            and metric.series
+        ):
+            price = metric.series[-1]
+            fraction = (price - metric.week_52_low) / (metric.week_52_high - metric.week_52_low)
+            hero_text.append("52w ", style=flat)
+            hero_text.append(_fraction_bar(fraction), style=tokens["text-primary"])
+            hero_text.append(f" {fraction * 100:.0f}% of high", style=flat)
         hero.update(hero_text)
         if metric.error:
-            status.update(f"metrics unavailable: {metric.error} — press enter to retry")
+            source.update(f"metrics unavailable: {metric.error} — press enter to retry")
         else:
-            range_context = (
-                f"high {metric.period_high:,.2f} · low {metric.period_low:,.2f}"
-                if metric.period_high is not None and metric.period_low is not None
-                else "range unavailable"
-            )
-            volatility = (
-                f"vol {metric.volatility * 100:.1f}%"
-                if metric.volatility is not None
-                else "vol unavailable"
-            )
-            status.update(f"{range_context} · {volatility}")
-        chart_change.update(metric.change_label or "—")
-        chart_change.set_class(metric.change_label.startswith("+"), "-up")
-        chart_change.set_class(metric.change_label.startswith("-"), "-down")
+            history = _friendly_date_range(metric.history_start, metric.history_end)
+            quote_stamp = quote.timestamp.strftime("%H:%M:%S UTC") if quote else "—"
+            source.update(f"{metric.source} · live {quote_stamp} · history {history}")
+        self._render_range_strip(metric=metric)
         chart = self.query_one("#target-chart", PriceChart)
         window, window_times = chart_window(
-            metric.series, None if self._range == "all" else 30, metric.series_times
+            metric.series, self._range_window(), metric.series_times
         )
         chart.times = window_times
         chart.y_format = partial(
             format_price, kind="yield" if metric.profile == "bond" else "price"
         )
         chart.data = window
-        history = _friendly_date_range(metric.history_start, metric.history_end)
+        grid.update(self._metric_grid(metric, tokens))
+
+    def _render_range_strip(self, metric: AssetMetrics | None = None) -> None:
+        """The visible range tabs plus the range's change and hi/lo (K8, J10)."""
+        tokens = self._colours()
+        active = self._range
+        tabs = Text()
+        for index, label in enumerate(RANGES):
+            if index:
+                tabs.append("  ")
+            display = RANGE_LABELS[label]
+            if label == active:
+                tabs.append(display, style=f"bold {tokens['text-primary']}")
+            else:
+                tabs.append(display, style="")
+        self.query_one("#target-range-tabs", Static).update(tabs)
+        summary = Text()
+        if metric is not None and metric.change_label:
+            label = metric.change_label
+            arrow = "▲" if label.startswith("+") else "▼" if label.startswith("-") else "─"
+            style = (
+                tokens["text-success"]
+                if label.startswith("+")
+                else (tokens["text-error"] if label.startswith("-") else tokens["text-muted"])
+            )
+            summary.append(f"{arrow} {label}", style=style)
+            if metric.period_high is not None and metric.period_low is not None:
+                summary.append(
+                    f"   hi {metric.period_high:,.2f}   lo {metric.period_low:,.2f}",
+                    style=tokens["text-muted"],
+                )
+        self.query_one("#target-range-summary", Static).update(summary)
+
+    def _metric_grid(self, metric: AssetMetrics, tokens: dict[str, str]) -> Table:
+        """A borderless two-column key/value grid under muted headings (J8)."""
         groups = metric.groups or ({"Available Metrics": metric.values} if metric.values else {})
-        clear_cards()
-        for index, (card, body) in enumerate(cards):
-            if index >= len(groups):
+        table = Table.grid(expand=True, padding=(0, 1))
+        table.add_column(ratio=1, no_wrap=True, overflow="ellipsis")
+        table.add_column(justify="right", no_wrap=True)
+        table.add_column(ratio=1, no_wrap=True, overflow="ellipsis")
+        table.add_column(justify="right", no_wrap=True)
+        for title, values in groups.items():
+            if not values:
                 continue
-            group, values = list(groups.items())[index]
-            card.display = True
-            card.set_title(group.casefold())
-            grid = Table.grid(expand=True, padding=(0, 1))
-            grid.add_column(ratio=1, no_wrap=True, overflow="ellipsis")
-            grid.add_column(justify="right", no_wrap=True)
-            for label, value in values.items():
-                grid.add_row(label, Text(value, style=tokens["foreground"]))
-            body.update(grid)
-        quote_stamp = quote.timestamp.strftime("%H:%M:%S UTC") if quote else "—"
-        source.update(f"{metric.source} · live {quote_stamp} · history {history}")
+            heading = Text(title, style=f"bold {tokens['text-muted']}")
+            table.add_row(heading, "", "", "")
+            pairs = list(values.items())
+            for index in range(0, max(len(pairs), 1), 2):
+                left_label, left_raw = pairs[index]
+                left_value = Text(left_raw, style=tokens["foreground"])
+                if index + 1 < len(pairs):
+                    right_label, right_raw = pairs[index + 1]
+                    right_value = Text(right_raw, style=tokens["foreground"])
+                else:
+                    right_label, right_value = "", Text("")
+                table.add_row(left_label, left_value, right_label, right_value)
+        return table
 
     def _sync_feed(self) -> None:
-        suffixes = DEFAULT_SUFFIXES | getattr(self.delta.cfg, "plugins", {}).get(
-            "yfinance", {}
-        ).get("suffixes", {})
-        signature = (
-            tuple(sorted(i.id for i in self._instruments)),
-            tuple(sorted(suffixes.items())),
-        )
-        if self.feed_task and not self.feed_task.done() and signature == self.signature:
-            return
-        old_task = self.feed_task
-        if old_task:
-            old_task.cancel()
-        old_quotes = self.feed.quotes if self.feed else {}
-        self.signature = signature
-        self.feed = YahooQuotes(self._instruments, suffixes, self._quote_state)
-        self.feed.quotes.update({k: v for k, v in old_quotes.items() if k in signature[0]})
-        feed = self.feed
-
-        async def start() -> None:
-            if old_task:
-                with suppress(asyncio.CancelledError):
-                    await old_task
-            await feed.run()
-
-        self.feed_task = asyncio.create_task(start())
-
-    def _quote_state(self, state: str) -> None:
-        self._feed_state = state
-
-    def _quote_for(self, ident: str | None) -> Any:
-        return self.feed.quotes.get(ident) if self.feed and ident else None
+        self.sync_quotes(self._instruments)
 
     def _row_prompt(self, target: Any, members: list[str]) -> Text:
         """One watchlist row: name, last, change, quote age — columns, not prose.
@@ -1040,7 +1046,7 @@ class Targets(DeltaScreen):
             name = f"{target.id} ▸{len(members)}"
         else:
             name = target.id
-        quote = self._quote_for(ident)
+        quote = self.quote_for(ident)
         row = Text(f"  {name[:name_w]:<{name_w}}")
         if quote is None:
             row.append(
@@ -1076,7 +1082,7 @@ class Targets(DeltaScreen):
         moves = [
             quote.change_pct
             for _target, members in entries
-            for quote in (self._quote_for(members[0] if len(members) == 1 else None),)
+            for quote in (self.quote_for(members[0] if len(members) == 1 else None),)
             if quote is not None and quote.change_pct is not None
         ]
         if moves:
@@ -1122,7 +1128,7 @@ class Targets(DeltaScreen):
                     ),
                 )
         live = self.feed is not None and any(
-            self._quote_for(ident) for _t, ident in self.rows.values() if ident
+            self.quote_for(ident) for _t, ident in self.rows.values() if ident
         )
         self.query_one("#target-list-pane", Pane).set_badge(
             f"{'● live' if live else '○ idle'} · {len(self.rows)}"
@@ -1189,34 +1195,21 @@ class Targets(DeltaScreen):
     def action_metric_help(self) -> None:
         """Open the plain-English glossary for the selected instrument's profile."""
         instrument = self._selected_instrument
-        if instrument is None:
-            self.notify("select a target first", severity="warning")
+        if not require_selection(self, instrument, "a target"):
             return
         self.app.push_screen(MetricHelpModal(profile_for(instrument)))
 
     def _range_label(self) -> str:
-        return {"day": "day", "month": "month", "all": "all time"}[self._range]
+        return RANGE_LABELS.get(self._range, RANGE_LABELS[DEFAULT_RANGE])
 
-    def _chart_label(self) -> str:
-        """The chart header: what the line is, its window, and the currency.
+    def _range_window(self) -> int | None:
+        return RANGE_WINDOW.get(self._range, RANGE_WINDOW[DEFAULT_RANGE])
 
-        The kind follows the selected instrument's asset class — the same
-        mapping the metrics profile uses — so the header is right while the
-        metrics are still loading and when ``r`` cycles the range.
-        """
-        instrument = self._selected_instrument
-        parts = [
-            "yield" if instrument is not None and profile_for(instrument) == "bond" else "price",
-            self._range_label(),
-        ]
-        if instrument is not None and instrument.currency:
-            parts.append(instrument.currency)
-        return " · ".join(parts)
-
-    def action_cycle_range(self) -> None:
-        self._range = {"month": "all", "all": "day", "day": "month"}[self._range]
+    def action_cycle_range(self, delta: int = 1) -> None:
+        index = RANGES.index(self._range) if self._range in RANGES else RANGES.index(DEFAULT_RANGE)
+        self._range = RANGES[(index + delta) % len(RANGES)]
         self.query_one("#target-inspector-pane", Pane).set_hints(self._metric_hints())
-        self.query_one("#target-chart-label", Static).update(self._chart_label())
+        self._render_range_strip()
         self._select_instrument(force=True)
 
     def action_filter(self) -> None:
@@ -1297,8 +1290,7 @@ class Targets(DeltaScreen):
 
     def action_remove(self) -> None:
         key = self._selected()
-        if key is None or key.startswith("child:"):
-            self.notify("select a target first", severity="error")
+        if key is None or not require_selection(self, not key.startswith("child:"), "a target"):
             return
         name = self.rows[key][0]
         try:
@@ -1315,11 +1307,7 @@ class Targets(DeltaScreen):
 
     async def _stop_feed(self) -> None:
         self.active = False
-        if self.feed_task:
-            self.feed_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await self.feed_task
-            self.feed_task = None
+        await self.stop_quotes()
 
     async def on_screen_suspend(self) -> None:
         await self._stop_feed()

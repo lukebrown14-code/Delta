@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, get_args
 
-from sqlmodel import Session, select
+from sqlmodel import Session, func, select
 
 from delta.core.db import (
     BarTable,
@@ -20,6 +21,7 @@ from delta.core.db import (
     store_items,
 )
 from delta.core.json import from_json
+from delta.core.models import AssetClass
 from delta.core.time import parse_date, to_utc
 from delta.evidence import FILING_SOURCE
 from delta.llm.providers import PROVIDERS, ProviderSpec
@@ -28,6 +30,10 @@ from delta.theses import Thesis
 from delta.thesis_health import HealthResult
 
 Log = Callable[[str], None]
+
+#: The single roster of asset classes, derived from the canonical ``AssetClass``
+#: literal so the service layer never hard-codes its own copy (C11).
+ASSET_CLASSES: frozenset[str] = frozenset(get_args(AssetClass))
 
 #: Settings attribute serving each fixed provider's env var; custom reads .env.
 _ENV_TO_ATTR = {
@@ -109,8 +115,6 @@ def configure_data_provider(
     A secret field must declare its fixed environment-variable name; it goes
     to `.env`, never to `config.toml`.
     """
-    import tomli_w
-
     from delta.core import config as config_mod
     from delta.core.plugin import DataPlugin
 
@@ -125,27 +129,29 @@ def configure_data_provider(
         field = fields[field_name]
         if field.secret and value.strip() and not field.env_var:
             raise ValueError(f"{field.label} has no declared environment variable")
-    raw = config_mod.load_toml()
     if markets is not None:
         known = set(market_profiles())
         unknown_markets = set(markets) - known
         if unknown_markets:
             raise ValueError(f"unknown markets: {', '.join(sorted(unknown_markets))}")
-    table = raw.setdefault("plugins", {}).setdefault(name, {})
-    for field_name, value in values.items():
-        field = fields[field_name]
-        value = value.strip()
-        if field.secret:
+
+    def mutate(raw: dict[str, Any]) -> None:
+        table = raw.setdefault("plugins", {}).setdefault(name, {})
+        for field_name, value in values.items():
+            field = fields[field_name]
+            value = value.strip()
+            if field.secret:
+                if field.required and not value:
+                    raise ValueError(f"{field.label} is required")
+                continue
             if field.required and not value:
                 raise ValueError(f"{field.label} is required")
-            continue
-        if field.required and not value:
-            raise ValueError(f"{field.label} is required")
-        table[field_name] = value
-    if markets is not None:
-        table.setdefault("scope", {})["markets"] = markets
-    table["enabled"] = True
-    Path("config.toml").write_text(tomli_w.dumps(raw), encoding="utf-8")
+            table[field_name] = value
+        if markets is not None:
+            table.setdefault("scope", {})["markets"] = markets
+        table["enabled"] = True
+
+    config_mod.update_config(mutate)
     for field_name, value in values.items():
         field = fields[field_name]
         if field.secret and value.strip():
@@ -171,25 +177,59 @@ async def ingest(
     if tickers:
         wanted = set(tickers.split(","))
         instruments = [i for i in instruments if i.symbol in wanted]
+    # B2: bars are the only source rebuilt from scratch each run; everything else
+    # filters by its own recency or dedupes.  Fetch bars from the newest stored
+    # bar (with a one-day overlap for intraday) instead of the full lookback.
+    bar_since = _latest_bar_floor(delta.engine, since)
     total: dict[str, int] = {}
     from delta.core.plugin import DataPlugin
 
+    max_workers = max(1, int(_config_plugins(delta).get("ingest_workers", 4) or 4))
+    semaphore = asyncio.Semaphore(max_workers)
+
+    async def run(plugin: Any, name: str) -> None:
+        target = [i for i in instruments if plugin.market is None or i.market == plugin.market]
+        if isinstance(plugin, DataPlugin):
+            target = plugin.scope.filter(target)
+        if not target:
+            return
+        fetch_since = bar_since if name == "yfinance" else since
+        async with semaphore:
+            log(f"Ingesting via [bold]{name}[/bold] ({len(target)} instruments)...")
+            counts = store_items(delta.engine, await plugin.fetch(target, parse_date(fetch_since)))
+        for table, count in counts.items():
+            total[table] = total.get(table, 0) + count
+        log("  stored " + ", ".join(f"{n} {t}" for t, n in counts.items()))
+
+    tasks = []
     for name, plugin in delta.plugins.items():
         if not plugin.enabled or not hasattr(plugin, "fetch"):
             continue
         if plugin.market and market and plugin.market != market:
             continue
-        target = [i for i in instruments if plugin.market is None or i.market == plugin.market]
-        if isinstance(plugin, DataPlugin):
-            target = plugin.scope.filter(target)
-        if not target:
-            continue
-        log(f"Ingesting via [bold]{name}[/bold] ({len(target)} instruments)...")
-        counts = store_items(delta.engine, await plugin.fetch(target, parse_date(since)))
-        for table, count in counts.items():
-            total[table] = total.get(table, 0) + count
-        log("  stored " + ", ".join(f"{n} {t}" for t, n in counts.items()))
+        # Independent data sources run concurrently instead of serial round-trips.
+        tasks.append(asyncio.create_task(run(plugin, name)))
+    for task in tasks:
+        await task
     return IngestResult(total)
+
+
+def _config_plugins(delta: Any) -> dict[str, Any]:
+    cfg = getattr(delta, "cfg", None)
+    return dict(getattr(cfg, "plugins", {}) or {})
+
+
+def _latest_bar_floor(engine: Any, default: str) -> str:
+    """The newest stored bar date (overlap 1 day), or ``default`` when empty.
+
+    ``since`` offsets: overlapping one day re-fetches any partial last bar and
+    keeps this cheap — an indexed ``MAX(ts)``, not a scan.
+    """
+    with Session(engine) as session:
+        latest = session.exec(select(func.max(BarTable.ts))).one()
+    if latest is None:
+        return default
+    return (to_utc(latest) - timedelta(days=1)).strftime("%Y-%m-%d")
 
 
 async def extract(
@@ -231,14 +271,38 @@ async def classify_sentiment(
     return SentimentResult(len(rows), instruments)
 
 
-def set_plugin_enabled(delta: Any, name: str, value: bool) -> None:
-    import tomli_w
+async def gather(
+    delta: Any,
+    *,
+    market: str | None = None,
+    tickers: str | None = None,
+    instruments: Sequence[Any] | None = None,
+    since: str | None = None,
+    log: Log = _noop_log,
+) -> dict[str, Any]:
+    """The full evidence pipeline: ingest -> extract -> sentiment.
 
+    A single entry point so every caller runs the same three stages; the previous
+    ``ingest``+``extract`` pair silently skipped Jev sentiment classification,
+    which is why the stance column never filled (A3).
+    """
+    ingested = await ingest(delta, market=market, tickers=tickers, instruments=instruments, since=since, log=log)
+    extracted = await extract(delta, since=since, instruments=instruments, log=log)
+    sentiment = await classify_sentiment(delta, since=since, log=log)
+    return {
+        "ingested": ingested.counts,
+        "events": extracted.events,
+        "sentiment": sentiment.classified,
+    }
+
+
+def set_plugin_enabled(delta: Any, name: str, value: bool) -> None:
     from delta.core import config as config_mod
 
-    raw = config_mod.load_toml()
-    raw.setdefault("plugins", {}).setdefault(name, {})["enabled"] = value
-    Path("config.toml").write_text(tomli_w.dumps(raw), encoding="utf-8")
+    def mutate(raw: dict[str, Any]) -> None:
+        raw.setdefault("plugins", {}).setdefault(name, {})["enabled"] = value
+
+    config_mod.update_config(mutate)
 
 
 _MARKET_ID = re.compile(r"^[a-z][a-z0-9_]*$")
@@ -254,8 +318,6 @@ def market_profiles() -> dict[str, Any]:
 
 def save_market(name: str, *, label: str, currency: str, yahoo_suffix: str) -> None:
     """Create or edit a config-backed exchange profile."""
-    import tomli_w
-
     from delta.core import config as config_mod
 
     name = name.strip().lower()
@@ -269,18 +331,19 @@ def save_market(name: str, *, label: str, currency: str, yahoo_suffix: str) -> N
     raw = config_mod.load_toml()
     if name in {"us", "asx"} and name not in raw.get("markets", {}):
         raise ValueError(f"{name} is built in and cannot be edited")
-    raw.setdefault("markets", {})[name] = {
-        "label": label.strip(),
-        "currency": currency,
-        "yahoo_suffix": yahoo_suffix.strip().upper(),
-    }
-    Path("config.toml").write_text(tomli_w.dumps(raw), encoding="utf-8")
+
+    def mutate(toml: dict[str, Any]) -> None:
+        toml.setdefault("markets", {})[name] = {
+            "label": label.strip(),
+            "currency": currency,
+            "yahoo_suffix": yahoo_suffix.strip().upper(),
+        }
+
+    config_mod.update_config(mutate)
 
 
 def remove_market(name: str) -> None:
     """Remove a user-defined market when nothing still depends on it."""
-    import tomli_w
-
     from delta.core import config as config_mod
 
     name = name.strip().lower()
@@ -304,8 +367,8 @@ def remove_market(name: str) -> None:
     if targets or sources:
         used_by = sorted(targets | sources)
         raise ValueError(f"{name} is still used by: {', '.join(used_by)}")
-    del raw["markets"][name]
-    Path("config.toml").write_text(tomli_w.dumps(raw), encoding="utf-8")
+
+    config_mod.update_config(lambda toml: toml["markets"].pop(name))
 
 
 def target_specs() -> dict[str, WatchTarget]:
@@ -337,8 +400,6 @@ def add_target(
     label: str | None = None,
     asset_class: str = "equity",
 ) -> None:
-    import tomli_w
-
     from delta.core import config as config_mod
 
     kind = kind.lower()
@@ -358,12 +419,11 @@ def add_target(
             raise ValueError(f"market target {name!r} takes no tickers")
     elif not tickers:
         raise ValueError(f"{kind} target {name!r} requires tickers")
-    raw = config_mod.load_toml()
-    if name in raw.get("targets", {}) or name in raw.get("watchlists", {}):
+    if asset_class not in ASSET_CLASSES:
+        raise ValueError(f"unknown asset class {asset_class!r}")
+    if _existing_target(name):
         raise ValueError(f"target {name!r} already exists")
     spec: dict[str, Any] = {"kind": kind, "market": market}
-    if asset_class not in {"equity", "etf", "bond", "commodity", "fx", "crypto", "cash", "other"}:
-        raise ValueError(f"unknown asset class {asset_class!r}")
     spec["asset_class"] = asset_class
     if kind != "market":
         spec["tickers"] = tickers
@@ -373,20 +433,30 @@ def add_target(
         spec["notes"] = notes
     if label:
         spec["label"] = label
-    raw.setdefault("targets", {})[name] = spec
-    Path("config.toml").write_text(tomli_w.dumps(raw), encoding="utf-8")
+
+    def mutate(raw: dict[str, Any]) -> None:
+        raw.setdefault("targets", {})[name] = spec
+
+    config_mod.update_config(mutate)
 
 
-def remove_target(name: str) -> None:
-    import tomli_w
-
+def _existing_target(name: str) -> bool:
     from delta.core import config as config_mod
 
     raw = config_mod.load_toml()
+    return name in raw.get("targets", {}) or name in raw.get("watchlists", {})
+
+
+def remove_target(name: str) -> None:
+    from delta.core import config as config_mod
+
     for section in ("targets", "watchlists"):
-        if name in raw.get(section, {}):
-            del raw[section][name]
-            Path("config.toml").write_text(tomli_w.dumps(raw), encoding="utf-8")
+        if name in config_mod.load_toml().get(section, {}):
+
+            def mutate(raw: dict[str, Any], section: str = section) -> None:
+                raw[section].pop(name)
+
+            config_mod.update_config(mutate)
             return
     raise KeyError(f"unknown target: {name}")
 
@@ -424,15 +494,10 @@ def data_health(delta: Any) -> DataHealth:
     }
     with Session(delta.engine) as session:
         counts = {name: _count(session, table) for name, table in tables.items()}
-        latest: dict[str, datetime] = {}
-        for instrument in delta.universe():
-            row = session.exec(
-                select(BarTable)
-                .where(BarTable.instrument_id == instrument.id)
-                .order_by(BarTable.ts.desc())  # type: ignore[attr-defined]
-            ).first()
-            if row:
-                latest[instrument.id] = row.ts
+        rows = session.exec(
+            select(BarTable.instrument_id, func.max(BarTable.ts)).group_by(BarTable.instrument_id)
+        ).all()
+        latest = {instrument_id: to_utc(ts) for instrument_id, ts in rows}
         last_llm = session.exec(select(LLMCallTable.ts).order_by(LLMCallTable.ts.desc())).first()  # type: ignore[attr-defined]
     return DataHealth(counts, latest, last_llm)
 
@@ -502,18 +567,34 @@ class CostRow:
 
 
 def llm_costs(engine: Any, since: str | None = None) -> list[CostRow]:
+    """Calls and spend per (task, model), aggregated in SQL.
+
+    Only the grouped columns are read: loading whole rows would pull every
+    cached response payload into memory just to sum a float.
+    """
+    query = select(
+        LLMCallTable.task,
+        LLMCallTable.model,
+        func.count(),
+        func.coalesce(func.sum(LLMCallTable.cost_usd), 0.0),
+    ).group_by(LLMCallTable.task, LLMCallTable.model)
+    if since:
+        query = query.where(LLMCallTable.ts >= parse_date(since))
     with Session(engine) as session:
-        query = select(LLMCallTable)
-        if since:
-            query = query.where(LLMCallTable.ts >= parse_date(since))
-        rows = session.exec(query).all()
-    grouped: dict[tuple[str, str], list[float]] = {}
-    for row in rows:
-        grouped.setdefault((row.task, row.model), []).append(row.cost_usd)
-    return [
-        CostRow(task, model, len(costs), sum(costs))
-        for (task, model), costs in sorted(grouped.items())
-    ]
+        rows = session.exec(query.order_by(LLMCallTable.task, LLMCallTable.model)).all()
+    return [CostRow(task, model, int(calls), float(cost)) for task, model, calls, cost in rows]
+
+
+def total_spend(engine: Any, since: str | None = None) -> float:
+    """Total LLM spend, optionally since a date; 0.0 when the log is unreadable."""
+    query = select(func.coalesce(func.sum(LLMCallTable.cost_usd), 0.0))
+    if since:
+        query = query.where(LLMCallTable.ts >= parse_date(since))
+    try:
+        with Session(engine) as session:
+            return float(session.exec(query).one())
+    except Exception:
+        return 0.0
 
 
 @dataclass
@@ -676,6 +757,8 @@ def _provider_key(delta: Any, spec: ProviderSpec) -> str:
 
 
 def setup_checks(delta: Any) -> list[Check]:
+    from delta.core.config import CONFIG_PATH
+
     provider = delta.cfg.llm_provider
     spec = PROVIDERS.get(provider)
     if spec is None:
@@ -703,7 +786,7 @@ def setup_checks(delta: Any) -> list[Check]:
                 f"Set {spec.env_var} in .env or press p on the Config screen",
             )
         ]
-    checks.append(Check("Config file", Path("config.toml").exists(), "Create config.toml"))
+    checks.append(Check("Config file", CONFIG_PATH.exists(), "Create config.toml"))
     try:
         with Session(delta.engine) as session:
             session.get(LLMCallTable, "probe")  # never matches; just checks reachability

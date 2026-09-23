@@ -8,6 +8,7 @@ between panes, ↑↓ move inside the focused table, enter acts on the row.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -21,6 +22,7 @@ from delta import services
 from delta.core.config import read_env_value
 from delta.llm.catalog import ModelInfo, set_llm_model
 from delta.llm.providers import PROVIDERS
+from delta.tui.components import require_selection
 from delta.tui.screens.model_picker import ModelPicker
 from delta.tui.shell import DeltaScreen
 from delta.tui.widgets import DeltaTable, Pane, hint_markup
@@ -43,8 +45,6 @@ class Config(DeltaScreen):
         ("escape", "close_diagnostics", "back"),
     ]
 
-    #: Below this terminal width the two columns stack and diagnostics folds.
-    NARROW_WIDTH = 100
     #: Land on the model row, the pane you most often act in.
     AUTO_FOCUS = "#cfg-model"
 
@@ -111,16 +111,22 @@ class Config(DeltaScreen):
                     yield Static("no plugins discovered", id="cfg-plugins-empty", markup=False)
                 with Pane(
                     title="data sources & markets",
-                    hints=hint_markup(("enter", "configure/edit"), ("a", "add market"), ("x", "remove market")),
+                    hints=hint_markup(
+                        ("enter", "configure/edit"), ("a", "add market"), ("x", "remove market")
+                    ),
                     id="cfg-sources-pane",
                 ):
                     with Horizontal(classes="cfg-heading"):
                         yield Static("sources", markup=False)
-                        yield Static("", id="cfg-sources-count", classes="cfg-heading-right", markup=False)
+                        yield Static(
+                            "", id="cfg-sources-count", classes="cfg-heading-right", markup=False
+                        )
                     yield DeltaTable(id="cfg-sources")
                     with Horizontal(classes="cfg-heading", id="cfg-markets-head"):
                         yield Static("markets", markup=False)
-                        yield Static("", id="cfg-markets-count", classes="cfg-heading-right", markup=False)
+                        yield Static(
+                            "", id="cfg-markets-count", classes="cfg-heading-right", markup=False
+                        )
                     yield DeltaTable(id="cfg-markets")
             with Pane(
                 title="diagnostics",
@@ -159,17 +165,12 @@ class Config(DeltaScreen):
     # ------------------------------------------------------------ layout
 
     @property
-    def narrow(self) -> bool:
-        return self.size.width < self.NARROW_WIDTH
-
-    @property
     def diag_open(self) -> bool:
         return (not self.narrow) if self._diag_open is None else self._diag_open
 
     def layout_views(self) -> None:
-        narrow = self.narrow
+        narrow = self.apply_breakpoint()
         open_ = self.diag_open
-        self.set_class(narrow, "-narrow")
         self.set_class(not open_, "-diag-folded")
         self.set_class(narrow and open_, "-diag-full")
         diag = self.query_one("#cfg-diag", Pane)
@@ -192,7 +193,8 @@ class Config(DeltaScreen):
         self._refresh_plugins()
         self._refresh_sources()
         self._refresh_markets()
-        self._refresh_diagnostics()
+        data = await asyncio.to_thread(self._diagnostics_data)
+        self._render_diagnostics(*data)
 
     def _refresh_ai(self) -> None:
         """Two rows: ``provider: ● name`` and ``model: id`` — the two things to get right.
@@ -281,7 +283,9 @@ class Config(DeltaScreen):
         table.clear()
         markets = sorted(getattr(self.delta.cfg, "markets", {}).items())
         for name, profile in markets:
-            table.add_row(name, profile.label, profile.currency, profile.yahoo_suffix or "—", key=name)
+            table.add_row(
+                name, profile.label, profile.currency, profile.yahoo_suffix or "—", key=name
+            )
         self.query_one("#cfg-markets-count", Static).update(f"{len(markets)}" if markets else "")
 
     def _selected_market(self) -> str | None:
@@ -295,8 +299,8 @@ class Config(DeltaScreen):
         from delta.tui.screens.source_setup import configure_source
 
         table = self.query_one("#cfg-sources", DeltaTable)
-        if table.cursor_row is None or table.row_count == 0:
-            self.notify("select a data source first", severity="warning")
+        chosen = table.row_count > 0 and table.cursor_row is not None
+        if not require_selection(self, chosen, "a data source"):
             return
         row_key = table.coordinate_to_cell_key((table.cursor_row, 0)).row_key
         if row_key is not None:
@@ -319,13 +323,17 @@ class Config(DeltaScreen):
         from delta.tui.screens.market_setup import MarketSetupModal
 
         name = self._selected_market()
-        if name is None:
-            self.notify("select a market first", severity="warning")
+        if not require_selection(self, name, "a market"):
             return
         profile = self.delta.cfg.markets[name]
         values = await self.app.push_screen_wait(
             MarketSetupModal(
-                {"id": name, "label": profile.label, "currency": profile.currency, "yahoo_suffix": profile.yahoo_suffix},
+                {
+                    "id": name,
+                    "label": profile.label,
+                    "currency": profile.currency,
+                    "yahoo_suffix": profile.yahoo_suffix,
+                },
                 editable_id=False,
             )
         )
@@ -353,8 +361,7 @@ class Config(DeltaScreen):
 
     async def action_remove_market(self) -> None:
         name = self._selected_market()
-        if name is None:
-            self.notify("select a market first", severity="warning")
+        if not require_selection(self, name, "a market"):
             return
         try:
             services.remove_market(name)
@@ -366,8 +373,27 @@ class Config(DeltaScreen):
             reload_markets()
         await self.refresh_view()
 
-    def _refresh_diagnostics(self) -> None:
+    def _diagnostics_data(self) -> tuple[Any, list[Any], float, float, str]:
+        """Run the diagnostics queries off the event loop.
+
+        Returns ``(health, cost_rows, total, today, db_size)`` for the renderer.
+        """
         health = services.data_health(self.delta)
+        cost_rows = services.llm_costs(self.delta.engine)
+        total = sum(row.cost_usd for row in cost_rows)
+        today = services.total_spend(self.delta.engine, since=datetime.now(UTC).date().isoformat())
+        db_path = Path(str(getattr(self.delta.cfg, "db_path", "") or ""))
+        size = ""
+        try:
+            if db_path.is_file():
+                size = f"{db_path.name} · {_human_size(db_path.stat().st_size)}"
+        except OSError:
+            size = ""
+        return health, cost_rows, total, today, size
+
+    def _render_diagnostics(
+        self, health: Any, cost_rows: list[Any], total: float, today: float, db_size: str
+    ) -> None:
         table = self.query_one("#health-table", DeltaTable)
         table.clear()
         for name, count in sorted(health.counts.items()):
@@ -384,33 +410,15 @@ class Config(DeltaScreen):
         if health.last_llm:
             lines.append(f"last model call {_stamp(health.last_llm)}")
         self.query_one("#health-latest", Static).update("\n".join(lines))
-        db_path = Path(str(getattr(self.delta.cfg, "db_path", "") or ""))
-        size = ""
-        try:
-            if db_path.is_file():
-                size = f"{db_path.name} · {_human_size(db_path.stat().st_size)}"
-        except OSError:
-            size = ""
-        self.query_one("#cfg-db-size", Static).update(size)
+        self.query_one("#cfg-db-size", Static).update(db_size)
 
         costs = self.query_one("#costs-table", DeltaTable)
         costs.clear()
-        cost_rows = services.llm_costs(self.delta.engine)
         for row in cost_rows:
             costs.add_row(row.task, row.model, str(row.calls), f"${row.cost_usd:.3f}")
-        total = sum(row.cost_usd for row in cost_rows)
         calls = sum(row.calls for row in cost_rows)
         self.query_one("#costs-total", Static).update(f"total  {calls} calls  ${total:.2f}")
-        try:
-            today = sum(
-                row.cost_usd
-                for row in services.llm_costs(
-                    self.delta.engine, since=datetime.now(UTC).date().isoformat()
-                )
-            )
-            self.query_one("#costs-today", Static).update(f"today ${today:.2f}")
-        except Exception:
-            self.query_one("#costs-today", Static).update("")
+        self.query_one("#costs-today", Static).update(f"today ${today:.2f}")
         now = datetime.now().strftime("%H:%M:%S")
         self.query_one("#cfg-refreshed", Static).update(
             f"[$text-muted]refreshed {now} · press [/][bold $text-primary]r[/]"

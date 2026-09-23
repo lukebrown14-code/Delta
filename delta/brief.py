@@ -17,6 +17,7 @@ from delta.core.json import from_json
 from delta.core.models import Instrument
 from delta.core.plugin import Context
 from delta.core.time import to_utc
+from delta.evidence import PRIMARY_FILING_SOURCES
 
 NEWS_WINDOW_DAYS = 14
 EVENT_WINDOW_DAYS = 14
@@ -94,7 +95,7 @@ def _prices(session: Session, inst: Instrument, as_of: datetime) -> Section | No
 
     rows = list(reversed(rows))
     closes = [r.close for r in rows]
-    evidence_ids = [str(r.id) for r in rows[-EVIDENCE_BARS:]]
+    evidence_ids = [f"bar:{r.id}" for r in rows[-EVIDENCE_BARS:]]
 
     latest = rows[-1].close
     change_20 = (latest / closes[-21] - 1) * 100 if len(closes) > 21 else 0.0
@@ -129,7 +130,8 @@ def _news(session: Session, inst: Instrument, as_of: datetime) -> Section:
         if inst.id not in from_json(r.instrument_ids):
             continue
         section.lines.append(f"{to_utc(r.published):%Y-%m-%d} [{r.source}] {r.title}")
-        section.evidence_ids.append(r.id)
+        kind = "filing" if r.source in PRIMARY_FILING_SOURCES else "news"
+        section.evidence_ids.append(f"{kind}:{r.id}")
         if len(section.lines) >= NEWS_LIMIT:
             break
     return section
@@ -149,7 +151,7 @@ def _events(session: Session, inst: Instrument, as_of: datetime) -> Section:
         section.lines.append(
             f"{to_utc(r.ts):%Y-%m-%d} {r.kind}: {r.summary} (sentiment {r.sentiment:+.1f})"
         )
-        section.evidence_ids.append(r.id)
+        section.evidence_ids.append(f"event:{r.id}")
     return section
 
 
@@ -183,7 +185,7 @@ def _calendar(session: Session, inst: Instrument, as_of: datetime) -> Section:
     section = Section(title="Upcoming events")
     for r in rows:
         section.lines.append(f"{to_utc(r.ts):%Y-%m-%d} {r.kind}: {r.summary}")
-        section.evidence_ids.append(r.id)
+        section.evidence_ids.append(f"event:{r.id}")
     return section
 
 

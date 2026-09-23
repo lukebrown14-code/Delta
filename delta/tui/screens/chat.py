@@ -9,6 +9,7 @@ the right stack folds away behind ``t``, which opens it full width.
 from __future__ import annotations
 
 import time
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -19,23 +20,35 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.markup import escape
-from textual.widgets import Button, Input, Static
+from textual.widgets import Input, Static
 
-from delta import services, theses
+from delta import services
 from delta.chat import ChatMessage, chat
 from delta.core.ids import make_instrument_id
 from delta.evidence import evidence, evidence_by_ids
 from delta.llm.router import model_for
 from delta.targets import WatchTarget
+from delta.tui.components import goto, thesis_from_citations
 from delta.tui.shell import DeltaScreen
 from delta.tui.widgets import (
-    ActionChip,
     DeltaTable,
     Pane,
     PaneRow,
     PaneStack,
     hint_markup,
+    token_color,
 )
+
+#: Evidence kind -> theme token, mirroring the Research pane so citations read
+#: the same everywhere.
+KIND_TOKENS = {
+    "news": "kind-news",
+    "filing": "kind-filing",
+    "event": "kind-event",
+    "fundamental": "kind-fundamental",
+    "bar": "kind-price",
+}
+KIND_LABELS = {"bar": "price", "fundamental": "fundam."}
 
 #: ``delta.chat`` offers the model this many items per instrument, so the
 #: "evidence in scope" figure counts what the model will actually see.
@@ -65,7 +78,6 @@ class Chat(DeltaScreen):
     """Standalone chat surface: pick targets, ask, watch the cited answer arrive."""
 
     name = "chat"
-    NARROW_WIDTH = 100
     # No AUTO_FOCUS here: the input would swallow the global single-letter
     # navigation keys (1..5, c, h, m, p, g, q) before they reach the app.
 
@@ -81,7 +93,7 @@ class Chat(DeltaScreen):
         ("t", "focus_targets", "targets"),
         ("space", "toggle_target", "toggle target"),
         ("a", "toggle_all", "all / none"),
-        ("w", "toggle_web", "web search"),
+        ("z", "zoom", "zoom"),
         ("x", "clear_transcript", "clear"),
         Binding("y", "confirm_clear", "confirm", show=False),
         Binding("left", "prev_citation", "citation", show=False),
@@ -110,10 +122,8 @@ class Chat(DeltaScreen):
     #chat-targets-pane { height: 1fr; }
     #chat-targets { height: 1fr; }
     #chat-scope-count { height: 1; padding: 0 1; color: $text-muted; }
-    #chat-options-pane { height: auto; }
-    #chat-options-pane ActionChip { margin: 0 0 0 1; }
-    #chat-options-pane .chip-note { height: 1; padding: 0 0 0 3; color: $text-muted; }
-    #chat-options-pane .chip-gap { height: 1; }
+    #chat-citations-pane { height: 1fr; }
+    #chat-citations { height: 1fr; }
     #chat-session { height: 1; padding: 0 1; color: $text-muted; }
     .msg { height: auto; margin: 0 0 1 0; padding: 0 0 0 1; }
     .msg-user { border-left: solid $panel; color: $text-muted; }
@@ -128,7 +138,6 @@ class Chat(DeltaScreen):
         self.history: list[ChatMessage] = []
         self.meta: dict[int, TurnMeta] = {}
         self.scope: set[str] = set()
-        self.allow_web = False
         self.picker_open = False
         self.confirm_pending = False
         self.selected_answer = -1
@@ -136,6 +145,7 @@ class Chat(DeltaScreen):
         self.busy_since: float | None = None
         self.session_cost = 0.0
         self.ready = False
+        self.zoomed = False
 
     # ------------------------------------------------------------ compose
 
@@ -157,19 +167,12 @@ class Chat(DeltaScreen):
                     yield DeltaTable(id="chat-targets")
                     yield Static("", id="chat-scope-count", markup=False)
                 with Pane(
-                    title="options",
-                    hints=hint_markup(("w", "web"), ("x", "clear"), ("s", "save")),
-                    id="chat-options-pane",
+                    title="citations",
+                    key="o",
+                    hints=hint_markup(("←→", "citation"), ("o", "open"), ("s", "save")),
+                    id="chat-citations-pane",
                 ):
-                    yield ActionChip("w", "web search: off", id="chat-web")
-                    yield Static("used once, never stored", classes="chip-note", markup=False)
-                    yield Static("", classes="chip-gap")
-                    yield ActionChip("m", "model: —", id="chat-model")
-                    yield ActionChip("p", "provider: —", id="chat-provider")
-                    yield Static("", classes="chip-gap")
-                    yield ActionChip("x", "clear transcript", id="chat-clear")
-                    yield ActionChip("s", "save answer to thesis", id="chat-save")
-                    yield Static("", classes="chip-gap")
+                    yield DeltaTable(id="chat-citations")
                     yield Static("", id="chat-session", markup=False)
 
     async def on_mount(self) -> None:
@@ -178,10 +181,14 @@ class Chat(DeltaScreen):
         table.add_column("Target", key="target")
         table.add_column("Kind", key="kind")
         table.add_column("Evidence", key="evidence")
+        cites = self.query_one("#chat-citations", DeltaTable)
+        cites.add_column("#", key="n", width=3)
+        cites.add_column("Evidence", key="evidence")
+        cites.add_column("Kind", key="kind", width=11)
         self.scope = set(services.target_specs())
         self.ready = True
         self.refresh_targets()
-        self.render_options()
+        self.render_citations()
         self.layout_views()
         self.set_interval(1, self.tick)
         await self._render_transcript()
@@ -190,7 +197,7 @@ class Chat(DeltaScreen):
         """Targets may have changed on another screen since the last visit."""
         if self.ready:
             self.refresh_targets()
-            self.render_options()
+            self.render_citations()
 
     # ------------------------------------------------------------ targets
 
@@ -257,15 +264,13 @@ class Chat(DeltaScreen):
         scoped = self.scoped_targets()
         ids = self._selected_targets()
         names = " ".join(spec.id for spec in scoped) or "none"
-        web = "on" if self.allow_web else "off"
         narrow = self.has_class("-narrow")
         if narrow:
             line = " ".join(part for part in ("scope:", names, " ".join(ids)) if part)
-            line += f"  · web {web}"
         else:
             count, capped = self.evidence_count(ids)
             pool = f"{count}{'+' if capped else ''} evidence items"
-            line = f"scope: {names} → {' '.join(ids) or '—'} · web {web} · {pool}"
+            line = f"scope: {names} → {' '.join(ids) or '—'} · {pool}"
         self.query_one("#chat-scope", Static).update(line)
         count_line = f"{len(scoped)} of {len(specs)} in scope"
         if ids and not narrow:
@@ -311,11 +316,7 @@ class Chat(DeltaScreen):
             self.layout_views()
         self.query_one("#chat-targets", DeltaTable).focus()
 
-    def on_data_table_row_selected(self, event: DeltaTable.RowSelected) -> None:
-        if event.data_table.id == "chat-targets":
-            self.action_focus_input()
-
-    # ------------------------------------------------------------ options
+    # ------------------------------------------------------------ citations sidebar
 
     def model_name(self) -> str:
         try:
@@ -326,41 +327,60 @@ class Chat(DeltaScreen):
     def provider_name(self) -> str:
         return str(getattr(self.delta.cfg, "llm_provider", "") or "—")
 
-    def render_options(self) -> None:
-        web = self.query_one("#chat-web", ActionChip)
-        web.set_text(f"web search: {'on' if self.allow_web else 'off'}")
-        web.set_class(self.allow_web, "-active")
-        self.query_one("#chat-model", ActionChip).set_text(f"model: {self.model_name()}")
-        self.query_one("#chat-provider", ActionChip).set_text(f"provider: {self.provider_name()}")
+    def render_citations(self) -> None:
+        """Populate the citations sidebar: the evidence behind the highlighted answer."""
+        table = self.query_one("#chat-citations", DeltaTable)
+        with self.prevent(DeltaTable.RowHighlighted):
+            table.clear()
+            for n, citation in enumerate(self.citations()):
+                table.add_row(
+                    str(n + 1),
+                    self._citation_label(citation),
+                    self._kind_cell(citation),
+                    key=citation,
+                )
         answers = sum(1 for m in self.history if m.role == "assistant")
         plural = "s" if answers != 1 else ""
         self.query_one("#chat-session", Static).update(
             f"this session: {answers} answer{plural} · ${self.session_cost:.3f}"
         )
-        self.query_one("#chat-save", ActionChip).disabled = self.answer() is None
+        self._place_citation_cursor()
 
-    def action_toggle_web(self) -> None:
-        self.allow_web = not self.allow_web
-        self.render_options()
-        self.render_scope()
+    def _citation_label(self, citation: str) -> str:
+        """Short evidence label for the sidebar: title · date, or the host for a url."""
+        if citation.startswith(_WEB):
+            return urlsplit(citation).netloc or citation
+        items = evidence_by_ids(self.delta.engine, [citation])
+        if items:
+            item = items[0]
+            return f"{item.title} · {item.ts:%-d %b}"
+        return citation
 
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        button = event.button.id or ""
-        if button == "chat-web":
-            self.action_toggle_web()
-        elif button == "chat-clear":
-            self.action_clear_transcript()
-        elif button == "chat-save":
-            self.action_save_answer()
-        elif button in ("chat-model", "chat-provider"):
-            name = (
-                "action_show_model_picker"
-                if button == "chat-model"
-                else "action_show_provider_picker"
-            )
-            action = getattr(self.app, name, None)
-            if callable(action):
-                action()
+    def _kind_cell(self, citation: str) -> Text:
+        """Kind cell for a citation, colouring by evidence kind like the Research pane."""
+        if citation.startswith(_WEB):
+            return Text("web", style=token_color(self.app, "text-muted"))
+        items = evidence_by_ids(self.delta.engine, [citation])
+        kind = items[0].kind if items else "other"
+        label = KIND_LABELS.get(kind, kind)
+        return Text(label, style=token_color(self.app, KIND_TOKENS.get(kind, "text-muted")))
+
+    def _place_citation_cursor(self) -> None:
+        table = self.query_one("#chat-citations", DeltaTable)
+        cites = self.citations()
+        if not cites:
+            return
+        index = min(self.selected_citation, len(cites) - 1)
+        with suppress(Exception):
+            with self.prevent(DeltaTable.RowHighlighted):
+                table.move_cursor(row=index)
+
+    def on_data_table_row_selected(self, event: DeltaTable.RowSelected) -> None:
+        if event.data_table.id == "chat-targets":
+            self.action_focus_input()
+        elif event.data_table.id == "chat-citations":
+            # Enter on a citation jumps to it in Research, matching ``o``.
+            self.action_open_citation()
 
     # ------------------------------------------------------------ clear
 
@@ -404,18 +424,44 @@ class Chat(DeltaScreen):
             self.layout_views()
             self.query_one("#chat-scroll", VerticalScroll).focus()
 
+    def action_zoom(self) -> None:
+        """Maximise the focused pane (``z`` toggles back).
+
+        The transcript and the stack fight for width on a wide terminal, and
+        on a narrow one they share the single column. ``z`` gives the focused
+        half the whole surface, tmux-style.
+        """
+        if not self.ready:
+            return
+        self.zoomed = not self.zoomed
+        self.layout_views()
+
+    def _focused_side(self) -> str:
+        """Which side of the split has focus: the transcript or the stack."""
+        focused = self.focused
+        if focused is not None and self.query_one("#chat-stack") in focused.ancestors_with_self:
+            return "stack"
+        return "main"
+
     def layout_views(self) -> None:
         """Wide: transcript and stack. Narrow: the transcript, or the picker after ``t``."""
-        narrow = self.size.width < self.NARROW_WIDTH
-        self.set_class(narrow, "-narrow")
+        narrow = self.apply_breakpoint()
         if not narrow:
             self.picker_open = False
-        self.query_one("#chat-main").display = not (narrow and self.picker_open)
-        self.query_one("#chat-stack").display = not narrow or self.picker_open
+        if self.zoomed:
+            side = self._focused_side()
+            self.query_one("#chat-main").display = side == "main"
+            self.query_one("#chat-stack").display = side == "stack"
+        else:
+            self.query_one("#chat-main").display = not (narrow and self.picker_open)
+            self.query_one("#chat-stack").display = not narrow or self.picker_open
         self.query_one("#chat-targets-pane", Pane).set_hints(
             hint_markup(("space", "toggle"), ("a", "all"), ("esc", "back to ask"))
             if narrow
             else hint_markup(("space", "toggle"), ("a", "all"), ("enter", "ask"))
+        )
+        self.query_one("#chat-citations-pane", Pane).set_hints(
+            hint_markup(("←→", "citation"), ("o", "open"), ("s", "save"))
         )
         self.render_scope()
         self.render_hints()
@@ -447,7 +493,7 @@ class Chat(DeltaScreen):
             return
         hints = [("i", "ask")]
         if narrow:
-            hints += [("t", "targets"), ("w", "web")]
+            hints += [("t", "targets")]
         else:
             hints.append(("↑↓", "scroll"))
         if self.citations():
@@ -456,6 +502,7 @@ class Chat(DeltaScreen):
             hints.append(("s", "save"))
         if self.history:
             hints.append(("x", "clear"))
+        hints.append(("z", "zoom"))
         pane.set_hints(hint_markup(*hints))
 
     # ------------------------------------------------------------ ask
@@ -474,10 +521,7 @@ class Chat(DeltaScreen):
         self.run_worker(self._answer(), exclusive=True)
 
     def spend(self) -> float:
-        try:
-            return sum(row.cost_usd for row in services.llm_costs(self.delta.engine))
-        except Exception:
-            return 0.0
+        return services.total_spend(self.delta.engine)
 
     async def _answer(self) -> None:
         started = time.monotonic()
@@ -487,7 +531,6 @@ class Chat(DeltaScreen):
                 self.delta,
                 self.history,
                 targets=self._selected_targets(),
-                allow_web=self.allow_web,
             )
         except Exception as exc:
             self.notify(f"ask failed: {exc} — press i to try again", severity="error")
@@ -546,6 +589,7 @@ class Chat(DeltaScreen):
         for row in self.query(CiteRow):
             if row.turn == self.selected_answer:
                 row.update(self.citation_markup(self.selected_answer))
+        self._place_citation_cursor()
         self.render_hints()
 
     def citation_labels(self, citations: tuple[str, ...]) -> list[str]:
@@ -586,46 +630,22 @@ class Chat(DeltaScreen):
             return
         research = getattr(self.app, "screens_by_name", {}).get("data")
         inspect = getattr(research, "inspect_evidence", None)
-        switch = getattr(self.app, "action_switch_screen", None)
-        if not callable(inspect) or not callable(switch):
+        if not callable(inspect) or not goto(self.app, "data"):
             self.notify("the research panel is not available here", severity="warning")
             return
-        switch("data")
         await inspect(citation)
 
     # ------------------------------------------------------------ save
 
     def action_save_answer(self) -> None:
         """Turn the selected answer into a thesis, carrying its stored citations across."""
-        from delta.tui.screens.theses import ThesisForm
-
         message = self.answer()
         if message is None:
             self.notify("no answer to save yet — press i to ask something", severity="warning")
             return
         stored = [c for c in message.citations if not c.startswith(_WEB)]
-        targets = self._selected_targets()
-
-        def created(fields: dict[str, Any] | None) -> None:
-            if fields is None:
-                return
-            text = fields.pop("claim")
-            fields["targets"] = fields["targets"] or tuple(targets)
-            try:
-                thesis = theses.create_thesis(self.delta.engine, text, **fields)
-            except ValueError as exc:
-                self.notify(str(exc), severity="error")
-                return
-            for evidence_id in stored:
-                # Accepted, not queued: the citation contract already verified
-                # these against the pool, and the reader just read them.
-                theses.add_evidence(
-                    self.delta.engine, thesis.id, evidence_id, "support", "from ask", accepted=True
-                )
-            self.notify(f"thesis created with {len(stored)} linked evidence items", timeout=6)
-
         claim = message.text.split("\n\n")[0]
-        self.app.push_screen(ThesisForm(claim=claim, targets=", ".join(targets)), created)
+        thesis_from_citations(self, claim, self._selected_targets(), stored, "from ask")
 
     # ------------------------------------------------------------ transcript
 
@@ -655,7 +675,7 @@ class Chat(DeltaScreen):
         self.query_one("#chat-main", Pane).set_badge(
             f"{count} message{'s' if count != 1 else ''}" if count else ""
         )
-        self.render_options()
+        self.render_citations()
         self.render_hints()
         scroll.scroll_end(animate=False)
 

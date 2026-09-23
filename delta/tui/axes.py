@@ -53,6 +53,17 @@ def nice_ticks(low: float, high: float, count: int = 3) -> list[float]:
     return [round(low + index * step, 10) for index in range(count)]
 
 
+def plot_scale(low: float, high: float, count: int = 5) -> tuple[float, float]:
+    """The ``[first tick, last tick]`` bounds a plot is scaled to (K2).
+
+    Scaling the chart to the outer ``nice_ticks`` bounds — rather than the raw
+    data min/max — means every tick lands exactly on a dot row rather than
+    between rows or off the edge. Returns ``(plot_low, plot_high)``.
+    """
+    ticks = nice_ticks(low, high, count)
+    return ticks[0], ticks[-1]
+
+
 def format_price(value: float, *, kind: str = "price", currency: str = "") -> str:
     """Format one axis label.
 

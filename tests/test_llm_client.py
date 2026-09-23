@@ -94,3 +94,66 @@ def test_client_logs_and_caches(tmp_engine):
     assert r2.cached is True
     assert r2.cost_usd == 0.0
     assert provider.calls == 1  # cache hit, no second call
+
+
+def test_cache_hits_are_logged_as_a_cached_row(tmp_engine):
+    from sqlmodel import Session, select
+
+    from delta.core.db import LLMCallTable
+    from delta.llm.client import LLMClient
+
+    provider = _FakeProvider()
+    client = LLMClient(provider=provider, engine=tmp_engine)
+
+    asyncio.run(
+        client.complete(task="analyse", model="m", prompt_version="v1", prompt="same prompt")
+    )
+    asyncio.run(
+        client.complete(task="analyse", model="m", prompt_version="v1", prompt="same prompt")
+    )
+
+    with Session(tmp_engine) as session:
+        rows = session.exec(select(LLMCallTable)).all()
+    cached_flags = [row.cached for row in rows]
+    assert cached_flags == [False, True]
+    assert all(row.task == "analyse" for row in rows)
+    assert rows[1].input_tokens == 0
+    assert rows[1].cost_usd == 0.0
+
+
+def test_cache_validator_rejects_poisoned_response(tmp_engine):
+    from delta.llm.client import LLMClient
+
+    provider = _FakeProvider()  # always returns "hello", which is not JSON
+    client = LLMClient(provider=provider, engine=tmp_engine)
+
+    def not_json(text: str) -> bool:
+        import json
+
+        try:
+            json.loads(text)
+            return True
+        except json.JSONDecodeError:
+            return False
+
+    asyncio.run(
+        client.complete(
+            task="analyse",
+            model="m",
+            prompt_version="v1",
+            prompt="same prompt",
+            cache_validator=not_json,
+        )
+    )
+    second = asyncio.run(
+        client.complete(
+            task="analyse",
+            model="m",
+            prompt_version="v1",
+            prompt="same prompt",
+            cache_validator=not_json,
+        )
+    )
+    # The cached "hello" fails the validator, so it is a miss and re-called.
+    assert second.cached is False
+    assert provider.calls == 2

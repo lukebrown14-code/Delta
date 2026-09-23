@@ -12,17 +12,19 @@ from rich.text import Text
 from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, VerticalScroll
-from textual.markup import escape
+from textual.containers import VerticalScroll
 from textual.widget import Widget
-from textual.widgets import Button, Input, Select, Static
+from textual.widgets import Input, Static
 
 from delta import theses, thesis_summary
 from delta.core.time import to_utc
 from delta.evidence import EvidenceItem, cite, evidence_by_ids
 from delta.thesis_health import HealthResult, compute_health
+from delta.tui.components import require_selection
+from delta.tui.screens.thesis_form import ThesisForm
+from delta.tui.screens.thesis_panes import HealthPane
 from delta.tui.shell import DeltaScreen, age_text
-from delta.tui.widgets import DeltaTable, Dialog, Pane, PaneRow, hint_markup
+from delta.tui.widgets import DeltaTable, Pane, PaneRow, hint_markup
 
 #: Per side: ledger glyph, the theme token that colours it, and the word the
 #: preview uses. One table so the ledger, the legend and the preview cannot
@@ -64,173 +66,6 @@ LIST_TILT_WIDTH = 5
 LIST_QUEUE_WIDTH = 9
 
 
-def _csv(value: str) -> tuple[str, ...]:
-    """Split a comma-separated input into stripped, non-empty parts."""
-    return tuple(part.strip() for part in value.split(",") if part.strip())
-
-
-class ThesisForm(Dialog):
-    """Create or edit a thesis: one form, seeded when editing.
-
-    New and edit differ only by seeded values, the status field and the button
-    label, so they are one class. Six framing fields at the app's default
-    three-row Input would overflow a 24-row terminal and clip the submit
-    button, so fields here are one row with a left marker for focus instead of
-    a full border.
-    """
-
-    dialog_hint = hint_markup(("tab", "next field"), ("enter", "save"), ("esc", "cancel"))
-
-    DEFAULT_CSS = """
-    ThesisForm Input, ThesisForm Select {
-        height: 1;
-        border: none;
-        border-left: thick $panel;
-        background: $panel;
-        padding: 0 1;
-        margin: 0 0 1 0;
-    }
-    ThesisForm Input:focus, ThesisForm Select:focus {
-        border-left: thick $primary;
-    }
-    ThesisForm SelectCurrent {
-        border: none;
-        padding: 0;
-    }
-    ThesisForm Button {
-        height: 1;
-        min-width: 0;
-        border: none;
-        padding: 0 1;
-    }
-    ThesisForm .form-row {
-        height: auto;
-    }
-    ThesisForm .form-row Input, ThesisForm .form-row Select {
-        width: 1fr;
-    }
-    """
-
-    def __init__(
-        self,
-        thesis: theses.Thesis | None = None,
-        *,
-        claim: str = "",
-        targets: str = "",
-    ) -> None:
-        super().__init__()
-        self.thesis = thesis
-        self.dialog_title = "edit thesis" if thesis else "new thesis"
-        self._seed = {
-            "claim": thesis.claim if thesis else claim,
-            "targets": ", ".join(thesis.targets) if thesis else targets,
-            "horizon": thesis.time_horizon if thesis else "",
-            "scope": thesis.scope if thesis else "",
-            "assumptions": ", ".join(thesis.assumptions) if thesis else "",
-            "falsifiers": ", ".join(thesis.falsifiers) if thesis else "",
-        }
-
-    def compose_dialog(self) -> ComposeResult:
-        yield Input(value=self._seed["claim"], placeholder="Claim", id="th-claim")
-        with Horizontal(classes="form-row"):
-            yield Input(
-                value=self._seed["targets"],
-                placeholder="Targets (US:AAPL)",
-                id="th-targets",
-            )
-            yield Input(value=self._seed["horizon"], placeholder="Horizon (5y)", id="th-horizon")
-        with Horizontal(classes="form-row"):
-            yield Input(
-                value=self._seed["scope"],
-                placeholder="Scope (what the claim is about)",
-                id="th-scope",
-            )
-            if self.thesis is not None:
-                yield Select(
-                    [(status.title(), status) for status in theses.STATUSES],
-                    value=self.thesis.status,
-                    allow_blank=False,
-                    id="th-status",
-                )
-        yield Input(
-            value=self._seed["assumptions"],
-            placeholder="Holds if — assumptions, comma separated",
-            id="th-assumptions",
-        )
-        yield Input(
-            value=self._seed["falsifiers"],
-            placeholder="Breaks if — what would disprove it",
-            id="th-falsifiers",
-        )
-        yield Button(
-            "Save changes" if self.thesis else "Create thesis",
-            id="th-save",
-            variant="primary",
-        )
-
-    def on_mount(self) -> None:
-        self.query_one("#th-claim", Input).focus()
-
-    def on_input_submitted(self) -> None:
-        self.save()
-
-    def on_button_pressed(self) -> None:
-        self.save()
-
-    def _value(self, field: str) -> str:
-        return self.query_one(f"#th-{field}", Input).value.strip()
-
-    def save(self) -> None:
-        """Dismiss with the ``create_thesis``/``update_thesis`` keywords.
-
-        A dict rather than a tuple: the two calls take different field sets, and
-        a positional contract silently mis-binds when one of them gains a field.
-        """
-        claim = self._value("claim")
-        if not claim:
-            self.notify("claim is required", severity="error")
-            return
-        fields: dict[str, Any] = {
-            "claim": claim,
-            "targets": _csv(self.query_one("#th-targets", Input).value),
-            "time_horizon": self._value("horizon"),
-            "scope": self._value("scope"),
-            "assumptions": _csv(self.query_one("#th-assumptions", Input).value),
-            "falsifiers": _csv(self.query_one("#th-falsifiers", Input).value),
-        }
-        if self.thesis is not None:
-            fields["status"] = str(self.query_one("#th-status", Select).value)
-        self.dismiss(fields)
-
-
-class HealthPane(Pane):
-    """A ``Pane`` whose badge can carry a theme colour.
-
-    ``Pane`` paints every badge in ``$text-muted``; the thesis pane's badge
-    is the health glyph and state, which reads in its own colour everywhere
-    else on the screen. Local until ``Pane.set_badge`` grows a token argument.
-    """
-
-    def __init__(self, *children, **kwargs) -> None:
-        self._badge_token = "text-muted"
-        super().__init__(*children, **kwargs)
-
-    def set_badge(self, text: str, token: str = "text-muted") -> None:  # type: ignore[override]
-        self._badge_token = token
-        super().set_badge(text)
-
-    def _paint(self) -> None:
-        super()._paint()
-        if self._badge:
-            parts = []
-            if self._key:
-                parts.append(f"[bold]{escape(self._key)}[/bold]")
-            if self._title:
-                parts.append(escape(self._title))
-            parts.append(f"[${self._badge_token}]· {escape(self._badge)}[/]")
-            self.border_title = " ".join(parts)
-
-
 class Theses(DeltaScreen):
     name = "theses"
     BINDINGS = [
@@ -249,11 +84,6 @@ class Theses(DeltaScreen):
         Binding("shift+down", "scroll_note_down", "scroll note", show=False),
         Binding("shift+up", "scroll_note_up", "scroll note", show=False),
     ]
-
-    #: Below this terminal width the three panes no longer fit side by side:
-    #: the claims list takes the whole width and the thesis and the ledger
-    #: open full-width on demand (enter / e), esc stepping back.
-    NARROW_WIDTH = 100
 
     CSS = """
     #thesis-split { height: 1fr; }
@@ -336,8 +166,9 @@ class Theses(DeltaScreen):
 
     def layout_views(self) -> None:
         """Wide: three panes. Narrow: one pane at a time, ``self._view``."""
-        self._narrow = self.size.width < self.NARROW_WIDTH
-        self.set_class(self._narrow, "-narrow")
+        # Narrow: the claims list takes the whole width and the thesis and the
+        # ledger open full-width on demand (enter / e), esc stepping back.
+        self._narrow = self.apply_breakpoint()
         for pane, view in (
             ("#thesis-claims", "claims"),
             ("#thesis-detail-pane", "detail"),
@@ -486,11 +317,12 @@ class Theses(DeltaScreen):
     # ---------- claims list ----------
 
     async def refresh_view(self) -> None:
-        self.reload_theses()
+        await asyncio.to_thread(self._query_theses)
+        self.refresh_list()
         await self.render_detail()
 
-    def reload_theses(self) -> None:
-        """Re-read the claims and their health, then redraw the list.
+    def _query_theses(self) -> None:
+        """Re-read the claims and their health off the event loop.
 
         The only place that queries: filtering and resizing redraw from this
         cache, so neither a keystroke in the filter box nor a column of a drag
@@ -521,7 +353,6 @@ class Theses(DeltaScreen):
             self._health[thesis.id] = (
                 compute_health(thesis, accepted, now=now) if accepted else None
             )
-        self.refresh_list()
 
     def _health_state(self, thesis: theses.Thesis) -> str:
         """The list glyph's key: a status when it overrides, else the health state."""
@@ -610,8 +441,7 @@ class Theses(DeltaScreen):
         self.app.push_screen(ThesisForm(), self._save_thesis)
 
     def action_edit_thesis(self) -> None:
-        if self.selected is None:
-            self.notify("select a thesis first", severity="error")
+        if not require_selection(self, self.selected, "a thesis"):
             return
         self.app.push_screen(
             ThesisForm(theses.get_thesis(self.delta.engine, self.selected)), self._save_thesis
@@ -648,8 +478,7 @@ class Theses(DeltaScreen):
         await self._summarise()
 
     async def _summarise(self) -> None:
-        if self.selected is None:
-            self.notify("select a thesis first", severity="error")
+        if not require_selection(self, self.selected, "a thesis"):
             return
         if self._summarising:
             return
@@ -673,8 +502,7 @@ class Theses(DeltaScreen):
 
     async def _find_evidence(self) -> None:
         """Ask the model for candidate evidence; it is stored unaccepted."""
-        if self.selected is None:
-            self.notify("select a thesis first", severity="error")
+        if not require_selection(self, self.selected, "a thesis"):
             return
         if self._finding:
             return
@@ -685,7 +513,8 @@ class Theses(DeltaScreen):
             found = await theses.propose_evidence(self.delta, selected)
             if self.selected != selected:
                 return
-            self.reload_theses()
+            await asyncio.to_thread(self._query_theses)
+            self.refresh_list()
             await self.render_detail()
             self.notify(
                 f"{len(found)} candidate{'' if len(found) == 1 else 's'} to review"
@@ -819,7 +648,8 @@ class Theses(DeltaScreen):
         self._summary = None
         # Health and the queue count changed for this claim, so the list
         # redraws too — its glyph and badge come from the same read.
-        self.reload_theses()
+        await asyncio.to_thread(self._query_theses)
+        self.refresh_list()
         await self.render_detail()
         self.query_one("#thesis-ledger").focus()
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from delta.core.config import read_env_value
+from delta.core.config import CONFIG_PATH, load_toml, read_env_value, update_config
 from delta.core.plugin import DataPlugin, DataProviderField, DataProviderSpec
 from delta.services import configure_data_provider, remove_market, save_market
 
@@ -64,3 +64,43 @@ def test_licensed_source_rejects_missing_required_key(monkeypatch, tmp_path):
         assert "API key is required" in str(exc)
     else:  # pragma: no cover
         raise AssertionError("missing required key was accepted")
+
+
+def test_update_config_mutates_and_respects_custom_path(monkeypatch, tmp_path):
+    """C6/A6: one helper loads, mutates and writes; a real ``CONFIG_PATH`` is honoured."""
+    custom = tmp_path / "elsewhere.toml"
+    custom.write_text("[llm]\nprovider = \"openrouter\"\n", encoding="utf-8")
+
+    update_config(lambda raw: raw.setdefault("llm", {}).update(provider="custom"), path=custom)
+
+    assert load_toml(custom)["llm"]["provider"] == "custom"
+
+
+def test_update_config_writes_to_configured_path_not_cwd_file(monkeypatch, tmp_path):
+    """A write land against the default path in the current working directory."""
+    monkeypatch.chdir(tmp_path)
+    update_config(lambda raw: raw.setdefault("targets", {}).setdefault("t", {}).update(kind="company"))
+
+    assert CONFIG_PATH.exists()
+    assert "company" in CONFIG_PATH.read_text(encoding="utf-8")
+
+
+def test_runtime_reload_parts_rebuild_only_what_is_asked(monkeypatch, tmp_path):
+    """C7: one ``reload(parts)``; ``llm`` leaves plugins/targets alone, ``targets`` rebuilds them."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "config.toml").write_text(
+        '[llm]\nprovider = "openrouter"\n[targets.apple]\nkind = "company"\nmarket = "us"\ntickers = ["AAPL"]\n',
+        encoding="utf-8",
+    )
+    from delta.runtime import Delta
+
+    delta = Delta()
+    targets_before = delta.targets
+    llm_before = delta.llm
+
+    delta.reload("llm")
+    assert delta.llm is not llm_before
+    assert delta.targets is targets_before
+
+    delta.reload("targets")
+    assert delta.targets is not targets_before
