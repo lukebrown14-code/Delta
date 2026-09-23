@@ -1160,7 +1160,8 @@ def _stub_fetch(monkeypatch, metric) -> None:
 async def _await_metric(pilot, screen) -> None:
     """The fetch runs on a worker over ``to_thread``; wait for it to land."""
     for _ in range(40):
-        if screen._metrics:
+        instrument = screen._selected_instrument
+        if instrument and (instrument.id, screen._range) in screen._metrics:
             return
         await pilot.pause(0.05)
     raise AssertionError("metrics never rendered")
@@ -1333,5 +1334,92 @@ def test_targets_inspector_without_selection_resets_the_header(delta, monkeypatc
             assert chart.times == []
             assert str(screen.query_one("#target-chart-label").render()) == "price · month"
             assert "no targets yet" in str(screen.query_one("#target-inspector-empty").render())
+
+    asyncio.run(run())
+
+
+def test_targets_inspector_builds_eight_metric_cards(delta, monkeypatch, tmp_path):
+    """The pane carries eight group cards, one per equity group."""
+    _home_config(tmp_path, monkeypatch, delta)
+
+    async def run():
+        app = DeltaApp(delta)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.press("2")
+            screen = app.screen
+            assert screen.query_one("#metric-card-7")
+            assert not screen.query("#metric-card-8")
+
+    asyncio.run(run())
+
+
+def test_targets_inspector_caches_metrics_per_range(delta, monkeypatch, tmp_path):
+    """``r`` must not evict what the provider already answered for other ranges."""
+    from delta.asset_metrics import AssetMetrics
+
+    _home_config(tmp_path, monkeypatch, delta)
+    series, times = _series_with_times()
+    _stub_fetch(
+        monkeypatch,
+        AssetMetrics(
+            "US:AAPL",
+            "equity",
+            values={"Current price": "139.00"},
+            series=series,
+            series_times=times,
+        ),
+    )
+
+    async def run():
+        app = DeltaApp(delta)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.press("2", "enter")
+            screen = app.screen
+            await _await_metric(pilot, screen)
+            assert set(screen._metrics) == {("US:AAPL", "month")}
+            await pilot.press("r")
+            await _await_metric(pilot, screen)
+            await pilot.press("r")
+            await _await_metric(pilot, screen)
+            assert set(screen._metrics) == {
+                ("US:AAPL", "month"),
+                ("US:AAPL", "all"),
+                ("US:AAPL", "day"),
+            }
+
+    asyncio.run(run())
+
+
+def test_targets_inspector_glossary_opens_and_closes(delta, monkeypatch, tmp_path):
+    """``i`` opens the glossary for the selected profile; escape returns."""
+    from delta.asset_metrics import AssetMetrics
+    from delta.tui.screens.targets import MetricHelpModal
+
+    _home_config(tmp_path, monkeypatch, delta)
+    series, times = _series_with_times()
+    _stub_fetch(
+        monkeypatch,
+        AssetMetrics(
+            "US:AAPL",
+            "equity",
+            values={"Current price": "139.00"},
+            series=series,
+            series_times=times,
+        ),
+    )
+
+    async def run():
+        app = DeltaApp(delta)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.press("2", "enter")
+            screen = app.screen
+            await _await_metric(pilot, screen)
+            await pilot.press("i")
+            assert isinstance(app.screen, MetricHelpModal)
+            frame = _frame(app)
+            assert "what these metrics mean" in frame
+            assert "How fast sales grew in the most recent year." in frame
+            await pilot.press("escape")
+            assert app.screen is screen
 
     asyncio.run(run())

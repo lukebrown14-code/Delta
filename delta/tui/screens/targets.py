@@ -12,15 +12,17 @@ from rich.table import Table
 from rich.text import Text
 from textual import work
 from textual.app import ComposeResult
-from textual.containers import Horizontal, Vertical
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.widgets import Button, Input, Label, OptionList, Select, Static
 from textual.widgets.option_list import Option
 
 from delta import services
 from delta.asset_metrics import (
+    METRIC_HELP,
     AssetMetrics,
     chart_window,
     fetch_asset_metrics,
+    groups_for,
     profile_for,
 )
 from delta.core.models import Instrument
@@ -32,6 +34,7 @@ from delta.tui.axes import format_price
 from delta.tui.shell import DeltaScreen, age_text
 from delta.tui.widgets import (
     MODAL_WIDTH,
+    MODAL_WIDTH_WIDE,
     Dialog,
     Pane,
     PaneRow,
@@ -503,11 +506,53 @@ class TargetAddModal(Dialog):
         self.dismiss(None)
 
 
+class MetricHelpModal(Dialog):
+    """Plain-English glossary for the selected instrument's metric cards."""
+
+    dialog_title = "what these metrics mean"
+    dialog_hint = hint_markup(("esc", "close"))
+    dialog_width = MODAL_WIDTH_WIDE
+
+    DEFAULT_CSS = """
+    MetricHelpModal #glossary-body {
+        max-height: 22;
+        padding: 0 1;
+    }
+    MetricHelpModal .glossary-group {
+        color: $text-primary;
+        text-style: bold;
+        margin-top: 1;
+    }
+    MetricHelpModal .glossary-entry {
+        color: $text-muted;
+        margin: 0 0 0 1;
+    }
+    """
+
+    def __init__(self, profile: str) -> None:
+        super().__init__()
+        self.profile = profile
+
+    def compose_dialog(self) -> ComposeResult:
+        with VerticalScroll(id="glossary-body"):
+            for title, labels in groups_for(self.profile):
+                if not labels:
+                    continue
+                yield Static(title.casefold(), classes="glossary-group", markup=False)
+                for label in labels:
+                    entry = Text(label, style="bold")
+                    help_text = METRIC_HELP.get(label)
+                    if help_text:
+                        entry.append(f" — {help_text}")
+                    yield Static(entry, classes="glossary-entry")
+
+
 class Targets(DeltaScreen):
     name = "targets"
     BINDINGS = [
         ("enter", "inspect", "refresh metrics"),
         ("r", "cycle_range", "range"),
+        ("i", "metric_help", "glossary"),
         ("a", "add", "add"),
         ("d", "remove", "remove"),
         ("slash", "filter", "filter"),
@@ -542,7 +587,7 @@ class Targets(DeltaScreen):
     #target-chart-change.-up { color: $text-success; }
     #target-chart-change.-down { color: $text-error; }
     #target-chart { width: 1fr; height: 8; padding: 0 1; background: $panel; }
-    #target-metric-grid { width: 1fr; height: auto; layout: grid; grid-size: 2; grid-columns: 1fr 1fr; grid-gutter: 0 1; }
+    #target-metric-grid { width: 1fr; height: auto; layout: grid; grid-size: 2; grid-columns: 1fr 1fr; grid-gutter: 1 1; }
     Targets.-narrow #target-metric-grid { grid-size: 1; grid-columns: 1fr; }
     .metric-card { height: auto; padding: 0 1; }
     .metric-card-body { width: 1fr; height: auto; color: $foreground; }
@@ -557,7 +602,9 @@ class Targets(DeltaScreen):
         self.active = False
         self.signature: tuple = ()
         self.specs = {}
-        self._metrics: dict[str, AssetMetrics] = {}
+        #: Cached metrics per (instrument id, range): range switches must not
+        #: refetch what the provider already answered for that window.
+        self._metrics: dict[tuple[str, str], AssetMetrics] = {}
         self._selected_instrument: Instrument | None = None
         self._collapsed_groups: set[str] = set()
         self._option_indices: dict[str, int] = {}
@@ -596,7 +643,7 @@ class Targets(DeltaScreen):
                         yield Static("", id="target-chart-change", markup=False)
                     yield PriceChart([], id="target-chart")
                     with Vertical(id="target-metric-grid"):
-                        for index in range(4):
+                        for index in range(8):
                             with Pane(classes="metric-card -auto", id=f"metric-card-{index}"):
                                 yield Static(
                                     "",
@@ -621,7 +668,11 @@ class Targets(DeltaScreen):
         }
 
     def _metric_hints(self) -> str:
-        pairs = [("enter", "refresh"), ("r", f"range: {self._range_label()}")]
+        pairs = [
+            ("enter", "refresh"),
+            ("r", f"range: {self._range_label()}"),
+            ("i", "glossary"),
+        ]
         target_key = self._selected() if self.is_mounted else None
         if target_key and len(self._members_by_target.get(self.rows[target_key][0], [])) > 1:
             pairs.append(("←→", "member"))
@@ -787,13 +838,27 @@ class Targets(DeltaScreen):
         metric = await asyncio.to_thread(
             fetch_asset_metrics, instrument, self._range, self.delta.engine
         )
-        self._metrics[instrument.id] = metric
+        key = (instrument.id, self._range)
+        self._metrics[key] = metric
+        self._cap_metrics(key)
         if self._selected_instrument and self._selected_instrument.id == instrument.id:
             self._render_metrics()
 
+    def _cap_metrics(self, keep: tuple[str, str]) -> None:
+        """Bound the cache; eviction is insertion-oldest, never the current key."""
+        while len(self._metrics) > 12:
+            for key in self._metrics:
+                if key != keep:
+                    del self._metrics[key]
+                    break
+            else:
+                break
+
     def _render_metrics(self) -> None:
         instrument = self._selected_instrument
-        metric = self._metrics.get(instrument.id) if instrument else None
+        metric = (
+            self._metrics.get((instrument.id, self._range)) if instrument else None
+        )
         empty = self.query_one("#target-inspector-empty", Static)
         title = self.query_one("#target-inspector-title", Static)
         status = self.query_one("#target-inspector-status", Static)
@@ -805,7 +870,7 @@ class Targets(DeltaScreen):
                 self.query_one(f"#metric-card-{i}", Pane),
                 self.query_one(f"#metric-card-body-{i}", Static),
             )
-            for i in range(4)
+            for i in range(8)
         ]
         self.query_one("#target-inspector-pane", Pane).set_hints(self._metric_hints())
         self.query_one("#target-chart-label", Static).update(self._chart_label())
@@ -1121,6 +1186,14 @@ class Targets(DeltaScreen):
             self.layout_views()
         self._select_instrument(force=True)
 
+    def action_metric_help(self) -> None:
+        """Open the plain-English glossary for the selected instrument's profile."""
+        instrument = self._selected_instrument
+        if instrument is None:
+            self.notify("select a target first", severity="warning")
+            return
+        self.app.push_screen(MetricHelpModal(profile_for(instrument)))
+
     def _range_label(self) -> str:
         return {"day": "day", "month": "month", "all": "all time"}[self._range]
 
@@ -1144,7 +1217,6 @@ class Targets(DeltaScreen):
         self._range = {"month": "all", "all": "day", "day": "month"}[self._range]
         self.query_one("#target-inspector-pane", Pane).set_hints(self._metric_hints())
         self.query_one("#target-chart-label", Static).update(self._chart_label())
-        self._metrics.clear()
         self._select_instrument(force=True)
 
     def action_filter(self) -> None:
