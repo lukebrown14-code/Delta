@@ -53,9 +53,12 @@ class Config(DeltaScreen):
     #cfg-left { width: 62; height: 1fr; }
     #cfg-diag { width: 1fr; height: 1fr; }
     #cfg-ai-pane, #cfg-plugins-pane, #cfg-sources-pane { height: auto; }
-    #cfg-model, #cfg-plugins { height: auto; max-height: 12; }
+    #cfg-model, #cfg-plugins, #cfg-sources, #cfg-markets { height: auto; }
+    #cfg-plugins { max-height: 12; }
     #cfg-model { scrollbar-size-horizontal: 0; }
-    #cfg-plugins-empty, #cfg-sources-hint { height: 1; padding: 0 1; color: $text-muted; }
+    #cfg-plugins-empty { height: 1; padding: 0 1; color: $text-muted; }
+    #cfg-sources, #cfg-markets { scrollbar-size-horizontal: 0; }
+    #cfg-markets-head { margin-top: 1; }
     #cfg-diag-body { height: 1fr; }
     #cfg-diag-summary { display: none; height: 1; padding: 0 1; }
     .cfg-heading { height: 1; padding: 0 1; }
@@ -108,12 +111,17 @@ class Config(DeltaScreen):
                     yield Static("no plugins discovered", id="cfg-plugins-empty", markup=False)
                 with Pane(
                     title="data sources & markets",
-                    hints=hint_markup(("s", "configure source"), ("a/e/x", "market")),
+                    hints=hint_markup(("enter", "configure/edit"), ("a", "add market"), ("x", "remove market")),
                     id="cfg-sources-pane",
                 ):
+                    with Horizontal(classes="cfg-heading"):
+                        yield Static("sources", markup=False)
+                        yield Static("", id="cfg-sources-count", classes="cfg-heading-right", markup=False)
                     yield DeltaTable(id="cfg-sources")
+                    with Horizontal(classes="cfg-heading", id="cfg-markets-head"):
+                        yield Static("markets", markup=False)
+                        yield Static("", id="cfg-markets-count", classes="cfg-heading-right", markup=False)
                     yield DeltaTable(id="cfg-markets")
-                    yield Static("s configure source · a add · e edit · x remove market", id="cfg-sources-hint", markup=False)
             with Pane(
                 title="diagnostics",
                 hints=hint_markup(("r", "refresh"), ("d", "fold"), ("↑↓", "scroll")),
@@ -266,12 +274,15 @@ class Config(DeltaScreen):
                 key=source.name,
             )
         table.display = bool(sources)
+        self.query_one("#cfg-sources-count", Static).update(f"{len(sources)}" if sources else "")
 
     def _refresh_markets(self) -> None:
         table = self.query_one("#cfg-markets", DeltaTable)
         table.clear()
-        for name, profile in sorted(getattr(self.delta.cfg, "markets", {}).items()):
+        markets = sorted(getattr(self.delta.cfg, "markets", {}).items())
+        for name, profile in markets:
             table.add_row(name, profile.label, profile.currency, profile.yahoo_suffix or "—", key=name)
+        self.query_one("#cfg-markets-count", Static).update(f"{len(markets)}" if markets else "")
 
     def _selected_market(self) -> str | None:
         table = self.query_one("#cfg-markets", DeltaTable)
@@ -401,7 +412,7 @@ class Config(DeltaScreen):
 
     # ------------------------------------------------------------ events
 
-    def on_data_table_row_selected(self, event: DeltaTable.RowSelected) -> None:
+    async def on_data_table_row_selected(self, event: DeltaTable.RowSelected) -> None:
         key = event.row_key.value if event.row_key else None
         if event.data_table.id == "cfg-model" and key == "model":
             self.pick_model()
@@ -409,6 +420,10 @@ class Config(DeltaScreen):
             self.app.action_show_provider_picker()
         elif event.data_table.id == "cfg-plugins" and key:
             self.show_plugin(str(key))
+        elif event.data_table.id == "cfg-sources":
+            await self.action_configure_source()
+        elif event.data_table.id == "cfg-markets":
+            await self.action_edit_market()
 
     def pick_model(self) -> None:
         """Open the model picker and save the choice as the one model for all tasks."""
