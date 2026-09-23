@@ -30,6 +30,9 @@ log = logging.getLogger(__name__)
 _TAG_RE = re.compile(r"<[^>]+>")
 _WS_RE = re.compile(r"\s+")
 
+#: Cap concurrent feed requests so a large feed list does not fan out unbounded.
+MAX_CONCURRENCY = 4
+
 
 def strip_html(text: str) -> str:
     """Drop tags, unescape entities and collapse whitespace."""
@@ -118,6 +121,7 @@ class RSSData(DataPlugin):
     def __init__(self) -> None:
         self.feeds: list[str] = []
         self.timeout: float = 20.0
+        self._semaphore = asyncio.Semaphore(MAX_CONCURRENCY)
 
     def configure(self, cfg: dict[str, Any]) -> None:
         self.feeds = [str(f) for f in cfg.get("feeds", [])]
@@ -144,11 +148,12 @@ class RSSData(DataPlugin):
         return list(items.values())
 
     async def _get(self, client: httpx.AsyncClient, url: str) -> bytes | None:
-        try:
-            resp = await client.get(url)
-            resp.raise_for_status()
-        except httpx.HTTPError as exc:
-            # One dead feed must not abort the whole ingest.
-            log.warning("rss: skipping feed %s: %s", url, exc)
-            return None
-        return resp.content
+        async with self._semaphore:
+            try:
+                resp = await client.get(url)
+                resp.raise_for_status()
+            except httpx.HTTPError as exc:
+                # One dead feed must not abort the whole ingest.
+                log.warning("rss: skipping feed %s: %s", url, exc)
+                return None
+            return resp.content

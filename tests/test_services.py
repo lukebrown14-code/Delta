@@ -79,6 +79,29 @@ def test_data_health_counts_bars(delta):
     assert set(health.latest_bar) >= {AAPL.id, MSFT.id}
 
 
+def test_data_health_latest_bar_is_one_group_by_max(tmp_engine):
+    """B6: latest_bar comes from a single GROUP BY MAX(ts), not per-instrument scans."""
+    seed_bars(tmp_engine, AAPL.id, n=3, start=datetime(2026, 1, 1, tzinfo=UTC))
+    delta = SimpleNamespace(engine=tmp_engine, universe=lambda: [AAPL])
+    health = services.data_health(delta)
+    assert health.latest_bar[AAPL.id] == datetime(2026, 1, 3, tzinfo=UTC)
+
+
+def test_latest_bar_floor_is_incremental(tmp_engine, tmp_path):
+    """B2: the bar fetch floor is the newest stored bar (minus an overlap), not 365d."""
+    from delta.core.db import init_engine
+
+    seed_bars(tmp_engine, AAPL.id, n=5, start=datetime(2026, 1, 1, tzinfo=UTC))
+    default = "2025-01-01"
+    floor = services._latest_bar_floor(tmp_engine, default)
+    # Newest bar is 2026-01-05 (midnight ts), the overlap is 1 day, so the
+    # floor sits at 2026-01-04 and is strictly more recent than the bare default.
+    assert floor == "2026-01-04"
+
+    empty_engine = init_engine(tmp_path / "empty.db")
+    assert services._latest_bar_floor(empty_engine, default) == default
+
+
 def test_llm_costs_groups_by_task_and_model(tmp_engine):
     with Session(tmp_engine) as session:
         for i in range(3):

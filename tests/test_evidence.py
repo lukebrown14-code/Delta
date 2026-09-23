@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from datetime import UTC, date, datetime
 
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 from delta.core.db import EventTable, FundamentalTable, NewsItemTable
 from delta.core.json import to_json
@@ -277,3 +277,49 @@ def test_evidence_by_ids_skips_unknown_and_malformed_ids(tmp_engine):
     _seed(tmp_engine)
     assert evidence_by_ids(tmp_engine, []) == []
     assert evidence_by_ids(tmp_engine, ["no-prefix", "news:nope"]) == []
+
+
+def test_news_instrument_mapping_drives_target_filtering(tmp_engine):
+    """B9: target filtering joins the indexed news_instrument table, not a JSON LIKE."""
+    _seed(tmp_engine)
+    from delta.core.db import NewsInstrumentTable
+
+    with Session(tmp_engine) as session:
+        links = set(
+            session.exec(select(NewsInstrumentTable.news_id, NewsInstrumentTable.instrument_id)).all()
+        )
+    assert ("news-1", INST) in links
+    assert ("news-1", OTHER) in links
+
+    aapl = evidence(tmp_engine, target=INST, kind="news")
+    assert [item.id for item in aapl] == ["news:news-1"]
+    msft = evidence(tmp_engine, target=OTHER, kind="news")
+    assert [item.id for item in msft] == ["news:news-1"]
+    assert evidence(tmp_engine, target="US:NONE", kind="news") == []
+
+
+def test_news_instrument_mapping_backfilled_at_init(tmp_path):
+    """Existing JSON ``instrument_ids`` are mirrored into the join table on startup."""
+    from delta.core.db import NewsInstrumentTable, init_engine
+
+    engine = init_engine(tmp_path / "t.db")
+    with Session(engine) as session:
+        session.add(
+            NewsItemTable(
+                id="old-1",
+                instrument_ids=to_json([INST, OTHER]),
+                published=datetime(2026, 1, 1, tzinfo=UTC),
+                title="Old",
+                url=NEWS_URL,
+                source="rss",
+            )
+        )
+        session.commit()
+
+    # A fresh engine over the same file backfills the mapping idempotently.
+    engine2 = init_engine(tmp_path / "t.db")
+    with Session(engine2) as session:
+        links = set(
+            session.exec(select(NewsInstrumentTable.news_id, NewsInstrumentTable.instrument_id)).all()
+        )
+    assert links == {("old-1", INST), ("old-1", OTHER)}

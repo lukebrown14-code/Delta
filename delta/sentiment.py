@@ -174,11 +174,13 @@ async def classify_news(
             logger.warning("jev stance failed for %s/%s; skipping", instrument_id, item.id)
             continue
         answer = decision.answers.get("stance") or {}
-        row = _row(item, instrument_id, decision.model, answer)
+        stored.append(_row(item, instrument_id, decision.model, answer))
+    if stored:
+        # One transaction for the whole run instead of a commit per judgment (B13).
         with Session(delta.engine) as session:
-            session.merge(row)
+            for row in stored:
+                session.merge(row)
             session.commit()
-        stored.append(row)
     say(
         f"[green]Classified {len(stored)} news stances via {model} "
         f"(bull/bear/neutral).[/green]"

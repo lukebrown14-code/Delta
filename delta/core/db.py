@@ -8,26 +8,15 @@ from __future__ import annotations
 from collections.abc import Iterable
 from datetime import date, datetime
 from pathlib import Path
+from typing import Any
 
-from sqlalchemy import UniqueConstraint
+from sqlalchemy import UniqueConstraint, event
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Connection, Engine
 from sqlmodel import Field, Session, SQLModel, create_engine
 
 from delta.core.json import to_json
 from delta.core.models import Bar, Event, Fundamental, NewsItem
-
-
-class InstrumentTable(SQLModel, table=True):
-    __tablename__ = "instrument"
-    __table_args__ = (UniqueConstraint("id", name="uq_instrument_id"),)
-
-    id: str = Field(primary_key=True)
-    market: str
-    symbol: str
-    name: str | None = None
-    currency: str
-    sector: str | None = None
 
 
 class BarTable(SQLModel, table=True):
@@ -55,6 +44,41 @@ class NewsItemTable(SQLModel, table=True):
     url: str
     body: str | None = None
     source: str
+
+
+class NewsInstrumentTable(SQLModel, table=True):
+    """Indexed news -> instrument mapping, kept in sync with ``newsitem.instrument_ids``.
+
+    Replaces the ``LIKE '%"id"%'`` scan over the JSON column for target
+    filtering: chat, reports, review and theses all join through here instead.
+    """
+
+    __tablename__ = "news_instrument"
+    __table_args__ = (
+        UniqueConstraint("news_id", "instrument_id", name="uq_news_instrument"),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    news_id: str = Field(index=True)
+    instrument_id: str = Field(index=True)
+
+
+@event.listens_for(NewsItemTable, "after_insert")
+def _sync_news_instrument(_mapper: Any, connection: Connection, target: NewsItemTable) -> None:
+    """Mirror a news row's ``instrument_ids`` into the join table on every write.
+
+    Registering here (rather than only in ``store_items``) keeps the mapping
+    correct for any writer — including direct ``Session.add`` in tests — so the
+    join never silently disagrees with the JSON column it indexes.
+    """
+    from delta.core.json import from_json
+
+    for instrument_id in from_json(target.instrument_ids):
+        connection.execute(
+            sqlite_insert(NewsInstrumentTable)
+            .values(news_id=target.id, instrument_id=instrument_id)
+            .on_conflict_do_nothing(index_elements=["news_id", "instrument_id"])
+        )
 
 
 class EventTable(SQLModel, table=True):
@@ -118,12 +142,34 @@ class SentimentTable(SQLModel, table=True):
     prompt_version: str
 
 
+def _apply_pragmas(dbapi_connection: Any, _record: Any) -> None:
+    """WAL + NORMAL synchronous + a long busy timeout on every new connection.
+
+    WAL lets readers proceed during writes; ``synchronous=NORMAL`` keeps WAL
+    durable against process crash (the trade the audit accepts) while avoiding
+    a per-commit fsync; ``busy_timeout`` makes concurrent access wait instead of
+    raising ``database is locked``.
+    """
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.execute("PRAGMA synchronous=NORMAL")
+    cursor.execute("PRAGMA busy_timeout=5000")
+    cursor.close()
+
+
 def init_engine(db_path: str | Path) -> Engine:
     path = Path(db_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     engine = create_engine(f"sqlite:///{path}", echo=False)
+    event.listen(engine, "connect", _apply_pragmas)
+    # ``create_all`` checks before creating, so this runs once at init and is the
+    # single place tables are materialised; per-call ``_ensure_tables`` copies
+    # elsewhere re-run it harmlessly but needlessly.  The news_instrument mapping
+    # is backfilled from any pre-existing ``newsitem.instrument_ids`` JSON.
     SQLModel.metadata.create_all(engine)
-    _migrate(engine)
+    with engine.begin() as conn:
+        _migrate(conn)
+        _backfill_news_instrument(conn)
     return engine
 
 
@@ -148,16 +194,34 @@ def _has_unique_index(conn: Connection, table: str, cols: tuple[str, ...]) -> bo
     return False
 
 
-def _migrate(engine: Engine) -> None:
-    with engine.begin() as conn:
-        for name, table, cols in _ADDED_UNIQUE_INDEXES:
-            if _has_unique_index(conn, table, cols):
-                continue  # fresh DB: the model's UniqueConstraint already created one
-            key = ", ".join(cols)
+def _migrate(conn: Connection) -> None:
+    for name, table, cols in _ADDED_UNIQUE_INDEXES:
+        if _has_unique_index(conn, table, cols):
+            continue  # fresh DB: the model's UniqueConstraint already created one
+        key = ", ".join(cols)
+        conn.exec_driver_sql(
+            f"DELETE FROM {table} WHERE id NOT IN (SELECT MIN(id) FROM {table} GROUP BY {key})"
+        )
+        conn.exec_driver_sql(f"CREATE UNIQUE INDEX IF NOT EXISTS {name} ON {table} ({key})")
+
+
+def _backfill_news_instrument(conn: Connection) -> None:
+    """Insert one ``news_instrument`` row per instrument_id for every newsitem.
+
+    Idempotent via the ``(news_id, instrument_id)`` unique constraint, so it is
+    safe to run on every startup: existing databases gain the indexed mapping
+    from their ``instrument_ids`` JSON without rewriting any news rows.
+    """
+    from delta.core.json import from_json
+
+    for news_id, raw_ids in conn.exec_driver_sql(
+        "SELECT id, instrument_ids FROM newsitem"
+    ).all():
+        for instrument_id in from_json(raw_ids):
             conn.exec_driver_sql(
-                f"DELETE FROM {table} WHERE id NOT IN (SELECT MIN(id) FROM {table} GROUP BY {key})"
+                "INSERT OR IGNORE INTO news_instrument (news_id, instrument_id) VALUES (?, ?)",
+                (news_id, instrument_id),
             )
-            conn.exec_driver_sql(f"CREATE UNIQUE INDEX IF NOT EXISTS {name} ON {table} ({key})")
 
 
 # SQLITE_MAX_VARIABLE_NUMBER default since SQLite 3.32.
@@ -198,9 +262,19 @@ def store_items(
                     .on_conflict_do_nothing(index_elements=list(key))
                 )
                 counts[name] += int(result.rowcount)
+        # Keep the indexed news -> instrument mapping in sync with the JSON column.
+        if counts.get("newsitem", 0):
+            links = [
+                {"news_id": item.id, "instrument_id": iid}
+                for item in items
+                if isinstance(item, NewsItem)
+                for iid in item.instrument_ids
+            ]
+            for start in range(0, len(links), _MAX_SQL_VARIABLES // 3):
+                session.exec(
+                    sqlite_insert(NewsInstrumentTable)
+                    .values(links[start : start + _MAX_SQL_VARIABLES // 3])
+                    .on_conflict_do_nothing(index_elements=["news_id", "instrument_id"])
+                )
         session.commit()
     return counts
-
-
-def session_factory(engine: Engine) -> Session:
-    return Session(engine)

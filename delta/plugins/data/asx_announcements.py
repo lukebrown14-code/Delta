@@ -29,6 +29,9 @@ BASE_URL = "https://asx.api.markitdigital.com/asx-research/1.0/companies/{code}/
 PAGE_URL = "https://www.asx.com.au/markets/trade-our-cash-market/announcements.{code}#{key}"
 PS_PREFIX = "[PS] "
 RETRY_STATUSES = {429, 500, 502, 503, 504}
+#: Cap concurrent announcement fetches so a full watchlist does not fan out
+#: without bound against Markit Digital.
+MAX_CONCURRENCY = 4
 
 
 def announcement_id(document_key: str) -> str:
@@ -46,6 +49,7 @@ class ASXAnnouncements(DataPlugin):
         self.max_retries = 3
         self.backoff_seconds = 1.0
         self.user_agent = user_agent("+https://github.com/lukebrown14-code/Delta")
+        self._semaphore = asyncio.Semaphore(MAX_CONCURRENCY)
 
     def configure(self, cfg: dict[str, Any]) -> None:
         self.count = int(cfg.get("count", self.count))
@@ -74,6 +78,12 @@ class ASXAnnouncements(DataPlugin):
         self, client: httpx.AsyncClient, code: str, since: datetime
     ) -> list[dict[str, Any]] | None:
         """Announcement rows for one code, or None when the request ultimately failed."""
+        async with self._semaphore:
+            return await self._get_one(client, code, since)
+
+    async def _get_one(
+        self, client: httpx.AsyncClient, code: str, since: datetime
+    ) -> list[dict[str, Any]] | None:
         url = BASE_URL.format(code=code.lower())
         params: dict[str, str | int] = {
             "fromDate": since.date().isoformat(),

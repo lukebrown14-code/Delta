@@ -16,7 +16,7 @@ from typing import Any, Literal
 from sqlalchemy.engine import Engine
 from sqlmodel import Session, col, select
 
-from delta.core.db import BarTable, EventTable, FundamentalTable, NewsItemTable
+from delta.core.db import BarTable, EventTable, FundamentalTable, NewsInstrumentTable, NewsItemTable
 from delta.core.json import from_json
 from delta.core.time import parse_date, to_utc
 
@@ -34,6 +34,19 @@ PRIMARY_DISCLOSURE_SOURCES = PRIMARY_FILING_SOURCES
 
 def source_quality(source: str) -> str:
     return "primary" if source in PRIMARY_DISCLOSURE_SOURCES else "secondary"
+
+
+def falsifier_hit(item: EvidenceItem, terms: Sequence[str]) -> bool:
+    """True when any falsifier ``terms`` (already casefolded) appear in the item.
+
+    The single matcher shared by the review queue and thesis health: it searches
+    kind, title and body together so the two callers can never disagree about
+    what counts as a hit. Empty terms never match.
+    """
+    if not terms:
+        return False
+    haystack = " ".join((item.kind, item.title, item.body or "")).casefold()
+    return any(term in haystack for term in terms)
 
 
 @dataclass
@@ -168,9 +181,11 @@ def _news(
 ) -> list[EvidenceItem]:
     stmt = select(NewsItemTable)
     if target is not None:
-        stmt = stmt.where(
-            NewsItemTable.instrument_ids.contains(f'"{target}"', autoescape=True)  # type: ignore[attr-defined]
-        )
+        # Indexed join through the news_instrument mapping instead of a LIKE
+        # scan over the unindexed `instrument_ids` JSON column.
+        stmt = stmt.join(
+            NewsInstrumentTable, NewsInstrumentTable.news_id == NewsItemTable.id
+        ).where(NewsInstrumentTable.instrument_id == target)
     if since is not None:
         stmt = stmt.where(NewsItemTable.published >= parse_date(since))
     if kind == "news":
