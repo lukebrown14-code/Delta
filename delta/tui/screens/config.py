@@ -36,8 +36,8 @@ class Config(DeltaScreen):
     name = "config"
 
     #: The keys dodge the app-level bindings (1-5, c, h, m, p, g, q, ?, f2):
-    #: ``m`` and ``p`` already open the pickers app-wide and are only surfaced
-    #: in the pane hints.
+    #: ``m`` and ``p`` already open the pickers app-wide; only ``p`` is
+    #: surfaced here, on the pane that names the provider.
     BINDINGS = [
         ("d", "toggle_diagnostics", "diagnostics"),
         ("r", "refresh", "refresh"),
@@ -110,7 +110,7 @@ class Config(DeltaScreen):
                 with Pane(
                     title="provider & model",
                     key="p",
-                    hints=hint_markup(("↑↓", "choose"), ("enter", "change"), ("m", "model")),
+                    hints=hint_markup(("↑↓", "choose"), ("enter", "change")),
                     id="cfg-ai-pane",
                 ):
                     yield DeltaTable(id="cfg-model", show_header=False)
