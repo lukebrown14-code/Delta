@@ -20,6 +20,7 @@ asx = [
 
 [llm]
 provider = "openrouter"
+model = "google/gemini-3.8-flash"
 
 [llm.routing]
 extract = "google/gemini-2.5-flash"
