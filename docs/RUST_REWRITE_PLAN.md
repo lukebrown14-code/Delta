@@ -26,7 +26,7 @@ That matters for a charts-and-live-data trading TUI.
 - Losing Textual's CSS, focus and palette means we build our own.
 - There is no official Anthropic or OpenAI Rust SDK.
 - There is no yfinance, so we write our own Yahoo client.
-- Estimated effort is about 3–5 months part-time.
+- Estimated effort is about 3–5 months part-time, assuming tiered parity (Rule 1); cell-for-cell parity everywhere would push it past 6.
 
 ## Getting started: new branch off main
 Do this first, once the audit has merged into `main`:
@@ -40,22 +40,26 @@ git worktree add ../Delta-rust -b rewrite/rust origin/main
 - Cutover (R4) is one PR from `rewrite/rust` into `main`.
 
 ## Rule 1: the UI looks exactly the same
-The rewrite changes the engine, not the look. Every screen at 80×24, 120×40 and 200×50 must match the post-audit Python app **cell for cell**: character, foreground, background and bold/italic/underline.
+The rewrite changes the engine, not the look. Parity is tiered, so effort goes where the eye goes:
+
+- **Tier A, cell for cell** — character, foreground, background and bold/italic/underline, at the canonical 120×40. Applies to the status bar, `PriceChart`, tables and the watchlist inspector.
+- **Tier B, structural** — same text, same resolved token colours, same region layout. Applies to prose panels (reports, chat, markdown). Wrap-point or glyph differences are logged as findings, not failures.
+- The full three-size matrix (80×24, 120×40, 200×50) runs for every screen only at cutover (R4). During R3, each PR gates on 120×40.
 
 **The oracle (built in R0, before any screen work):**
 - Add a golden-screen exporter to the Python suite: `tests/export_golden.py`, reusing the `snapshot_app` fixture from `tests/test_snapshots.py`.
 - For every panel, modal and key state (for example the chart scrubbed, a dialog open, the narrow layout), it dumps the Textual screen buffer as JSON: rows × cells of `{ch, fg, bg, attrs}` with **resolved RGB**.
   - Textual blends `$text-muted`, `$panel` and similar tokens with alpha. The exporter captures the final colours, so Rust never has to guess them.
-  - Output goes to `fixtures/golden_screens/<panel>/<state>@<w>x<h>.json`.
+  - Output goes to `fixtures/golden_screens/<panel>/<state>@<w>x<h>.json`. Each scenario is tagged Tier A or Tier B in the exporter's scenario list, so the harness knows the pass rule.
 - The Rust side runs the same scenario on the same `fixtures/` DB and frozen clock, renders to ratatui's `TestBackend`, and diffs cell by cell.
-  - Any mismatch fails the test.
+  - A Tier A mismatch fails the test; a Tier B mismatch is logged as a finding for triage.
   - The test also prints a side-by-side text diff so the agent can fix it.
 - `Theme` is **generated** from the exporter's resolved token table, not typed by hand.
 
 **Known hard spots.** Each gets a custom widget, not a stock crate:
 - **Markdown (reports, chat):**
   - `tui-markdown` won't match Textual's layout.
-  - Write a `DeltaMarkdown` renderer that copies Textual's heading, list, code-block and wrapping rules.
+  - Write a `DeltaMarkdown` renderer that copies Textual's heading, list and code-block rules. It is Tier B: wrap-point differences are findings, not failures.
 - **Text wrapping and Unicode width:**
   - Match Rich's word-wrap and cell-width rules. Use the `unicode-width` crate with the same emoji and CJK handling as Rich.
   - Covered by dedicated wrap-parity tests.
@@ -68,6 +72,7 @@ The rewrite changes the engine, not the look. Every screen at 80×24, 120×40 an
 - An exact match can be impossible in rare cases, for example terminal-specific glyphs.
 - Log each one in `docs/rewrite/DEVIATIONS.md` with a screenshot pair.
 - Each needs **your** approval before it's allowed. An agent can never approve its own deviation.
+- **Pre-approved classes** (listed in `DEVIATIONS.md` at R0, no gate needed): glyph fallbacks where the font lacks Textual's glyph, wrap-point differences inside Tier B prose, and trailing-whitespace cells. Colour, layout or binding differences are never pre-approved.
 
 ## Rule 2: review for bugs and improvements while porting
 Yes, this is the best moment for it. Every line gets read and re-expressed, and Rust's compiler (exhaustive `match`, no `None` surprises, typed SQL) surfaces bugs Python hides. But finding and fixing are kept separate, so the port never silently changes behaviour.
@@ -117,7 +122,7 @@ The plan is written so no step needs a human except the approval gates.
 
 **Hard gates, checked by machine rather than judgement:**
 - `cargo fmt --check`, then clippy with `-D warnings`, then `cargo nextest run`.
-- The golden-screen diff: zero mismatches or approved deviations.
+- The golden-screen diff: zero Tier A mismatches, Tier B findings logged, or approved deviations.
 - Service parity against `fixtures/`.
 - The Python suite stays green.
 
@@ -195,6 +200,7 @@ fixtures/          shared golden data: seeded DB, FakeLLM responses, HTTP casset
 ## Phases and parallel workstreams
 The rules are the same as the audit:
 - One branch per stream, `rewrite/r<N>-<slug>`, off `rewrite/rust`.
+- R2 needs only `delta-core` (R1a) and `delta-llm` (R1c): it starts as soon as those merge and runs alongside R1b and R1d, off the critical path.
 - Exclusive file ownership.
 - Each stream opens its own PR.
 - Checks: `cargo fmt --check`, then `cargo clippy --all-targets -- -D warnings`, then `cargo nextest run`, and the Python suite stays green.
@@ -206,17 +212,18 @@ The rules are the same as the audit:
 | | R1b Plugins | `delta-plugins` | Yahoo chart, quote and quoteSummary (with cookie/crumb), websocket quotes, SEC with 429 retry, ASX, RSS. Tests run through wiremock cassettes |
 | | R1c LLM | `delta-llm` | Cache, cost log, streaming, JSON repair, citation validator. The Python golden tests are ported and pass |
 | | R1d Widgets | `delta-tui/widgets`, `components` | `PriceChart` (connected line, nice Y ticks, markers, benchmark, scrub), `BrailleGraph`, table, Dialog/modal stack, `EmptyState`, `SectionHeading`, autocomplete, command palette, which-key |
-| **R2** serial | Services | `delta-services` | Every `services.py` operation is ported. Output matches Python on the fixture DB |
-| **R3** parallel | One stream per screen | `screens/{home,watchlist,research,theses,ask,decisions,settings}.rs` | Zero golden-screen mismatches at all 3 sizes and in every key state. Same bindings as Python |
-| **R4** serial | Parity and cutover | `bench/`, packaging | Parity checklist signed off, benchmarks recorded, `cargo-dist` binaries and a Homebrew tap. The Python app is tagged `python-final` and removed from `main` |
+| **R2** after R1a + R1c | Services | `delta-services` | Every `services.py` operation is ported. Output matches Python on the fixture DB |
+| **R3** parallel | One stream per screen | `screens/{home,watchlist,research,theses,ask,decisions,settings}.rs` | Zero Tier A mismatches at 120×40 in every key state; Tier B findings triaged. Same bindings as Python |
+| **R4** serial | Parity and cutover | `bench/`, packaging | Full 3-size golden matrix green (Tier A cell-for-cell, Tier B structural) beyond approved deviations. Benchmarks recorded, `cargo-dist` binaries and a Homebrew tap. The Python app is tagged `python-final` and removed from `main` |
 
 **De-risking spike (first week of R0):**
 - Build only the Watchlist inspector (header, range tabs, chart, scrub) against a copy of `data/delta.db`.
 - Compare it side by side with Python for looks, launch time, RSS and scrub smoothness.
+- The spike also proves the oracle tooling: export and diff just this one screen through `export_golden.py` and the `TestBackend` differ, so exporter fidelity is validated in week 1, not mid-R3.
 - Go/no-go for the rest.
 
 **Main risks and mitigations:**
-- **Yahoo breakage without yfinance:** the client is isolated behind the `DataSource` trait, pinned by cassettes and has a contract test run manually.
+- **Yahoo breakage without yfinance:** the client is isolated behind the `DataSource` trait, pinned by cassettes, and a weekly scheduled CI job hits the live endpoints once and diffs against the cassette, so silent breakage is caught instead of a manual test that rots.
 - **Provenance drift:** the citation validator and ID tests are ported first (R1c) and run against shared fixtures.
 - **Losing Textual conveniences** (focus, palette, modals): these are built once in R1d, before any screen work starts.
 
@@ -227,7 +234,7 @@ The rules are the same as the audit:
   - Offline only: wiremock and `FakeLlm`, with no live calls.
 - **Parity:**
   - `delta-services` output is diffed against Python on `fixtures/`.
-  - Every screen and state is diffed cell by cell against `fixtures/golden_screens/`, with zero mismatches beyond approved `DEVIATIONS.md` entries.
+  - Every screen and state is diffed against `fixtures/golden_screens/`: Tier A cell by cell with zero mismatches, Tier B structurally with differences triaged as findings, all beyond approved `DEVIATIONS.md` entries. The full 3-size matrix gates cutover, not each PR.
 - **Review:**
   - Reviewer-agent pass on every PR.
   - End-of-phase adversarial review.
