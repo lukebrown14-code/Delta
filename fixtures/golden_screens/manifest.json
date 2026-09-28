@@ -1,0 +1,28 @@
+{
+  "scenarios": [
+    {
+      "file": "default-120x40.json",
+      "size": "120x40",
+      "state": "default",
+      "tier": "A"
+    },
+    {
+      "file": "range-cycled-120x40.json",
+      "size": "120x40",
+      "state": "range-cycled",
+      "tier": "A"
+    },
+    {
+      "file": "glossary-120x40.json",
+      "size": "120x40",
+      "state": "glossary",
+      "tier": "B"
+    },
+    {
+      "file": "narrow-80x24.json",
+      "size": "80x24",
+      "state": "narrow",
+      "tier": "A"
+    }
+  ]
+}
