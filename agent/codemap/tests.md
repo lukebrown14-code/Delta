@@ -21,6 +21,7 @@ Offline pytest suite (~40 files, ~413 tests). Mirrors module names. No live netw
 - `delta/plugins/data/` → `test_data_sources.py`, `test_rss.py`, `test_sec_edgar.py`, `test_asx_announcements.py`, `test_yfinance_calendar.py`
 - `delta/plugins/markets/asx.py` → `test_asx_market.py`
 - `delta/tui/` → `test_tui.py` (app), `test_snapshots.py` (full-app snapshots), `test_home.py`, `test_research.py`, `test_chart.py`/`test_chart_axes.py` (widgets/axes), `test_targets_inspector.py`, `test_market_setup.py`, `test_provider_setup.py`
+- `tests/export_golden.py` — golden-screen exporter (Rust rewrite oracle): CLI dumps watchlist states as JSON cell grids with resolved RGB to `fixtures/golden_screens/` (+ `manifest.json`, Tier A/B tags); includes a determinism test
 
 ## Conventions
 
