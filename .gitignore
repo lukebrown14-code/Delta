@@ -4,6 +4,7 @@
 /data/*.db-shm
 /data/model_catalog.json
 /reports/
+/target/
 __pycache__/
 .venv/
 *.pyc
