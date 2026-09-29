@@ -1,69 +1,69 @@
-//! Delta TUI skeleton: `Component`/`Action` template with a ratatui loop stub.
-//!
-//! Mirrors the Python TUI's shell structure: panes handle keys and return
-//! [`Action`]s, the app updates panes with them, and the loop never blocks.
+//! Delta TUI binary: runs the component loop over the terminal.
+//! The app library lives in `delta_tui` (see `lib.rs`).
 
 use std::io::Stdout;
 use std::time::Duration;
 
-use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{Event, KeyEvent};
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
 use crossterm::{execute, queue};
 use ratatui::backend::CrosstermBackend;
-use ratatui::layout::Rect;
+use ratatui::layout::{Constraint, Layout};
 use ratatui::{Frame, Terminal};
 
-/// Shared breakpoint carried over from `delta/tui/shell.py` (`NARROW_WIDTH`).
-pub const NARROW_WIDTH: u16 = 100;
+use delta_tui::components::WhichKey;
+use delta_tui::dialog::ModalStack;
+use delta_tui::{is_quit_key, Action, Component, NARROW_WIDTH};
 
-/// A discrete app-level event flowing through the (future) action bus.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Action {
-    /// Placeholder for future action variants.
-    #[allow(dead_code)]
-    Noop,
-    /// Shut the app down.
-    Quit,
+/// The app shell: one pane over a which-key footer, with a modal stack.
+struct App {
+    footer: WhichKey,
+    modals: ModalStack,
+    quit: bool,
 }
 
-/// Ratatui component template (see `docs/RUST_REWRITE_PLAN.md`).
-pub trait Component {
-    fn handle_key(&mut self, key: KeyEvent) -> Option<Action>;
-    fn update(&mut self, action: Action);
-    fn draw(&mut self, frame: &mut Frame, area: Rect);
-}
-
-/// A single TUI pane stub; will become one of the real screens/widgets.
-pub struct Pane {
-    #[allow(dead_code)]
-    title: String,
-}
-
-impl Pane {
-    pub fn new(title: impl Into<String>) -> Self {
-        Self {
-            title: title.into(),
-        }
-    }
-}
-
-impl Component for Pane {
+impl Component for App {
     fn handle_key(&mut self, key: KeyEvent) -> Option<Action> {
-        match key.code {
-            KeyCode::Char('q') => Some(Action::Quit),
-            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                Some(Action::Quit)
+        if self.modals.is_open() {
+            return self.modals.handle_key(key);
+        }
+        if is_quit_key(key) {
+            return Some(Action::Quit);
+        }
+        None
+    }
+
+    fn update(&mut self, action: Action) {
+        match action {
+            Action::Quit => self.quit = true,
+            Action::OpenDialog(name) => {
+                self.modals
+                    .push(delta_tui::dialog::Dialog::new(name, vec![]));
             }
-            _ => None,
+            Action::CloseDialog => {
+                self.modals.pop();
+            }
+            _ => {}
         }
     }
 
-    fn update(&mut self, _action: Action) {}
-
-    fn draw(&mut self, frame: &mut Frame, area: Rect) {
-        frame.render_widget(ratatui::widgets::Block::bordered(), area);
+    fn draw(&mut self, frame: &mut Frame, area: ratatui::layout::Rect) {
+        let [content, footer] =
+            Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).areas(area);
+        // Placeholder pane shell until the R3 screens land; the footer and the
+        // modal stack are the real R1d components.
+        let narrow = area.width < NARROW_WIDTH;
+        let title = if narrow { "delta (narrow)" } else { "delta" };
+        frame.render_widget(
+            ratatui::widgets::Paragraph::new(title).style(
+                ratatui::style::Style::default().fg(delta_tui::theme::Theme::TEXT_PRIMARY.color()),
+            ),
+            content,
+        );
+        self.footer.draw(frame, footer);
+        self.modals.draw(frame, area);
     }
 }
 
@@ -75,16 +75,25 @@ fn main() -> std::io::Result<()> {
 }
 
 fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> std::io::Result<()> {
-    let mut pane = Pane::new("Delta");
+    let mut app = App {
+        footer: WhichKey {
+            bindings: vec![("q".to_string(), "quit".to_string())],
+        },
+        modals: ModalStack::default(),
+        quit: false,
+    };
     loop {
-        terminal.draw(|frame| pane.draw(frame, frame.area()))?;
+        terminal.draw(|frame| app.draw(frame, frame.area()))?;
         if !crossterm::event::poll(Duration::from_millis(100))? {
             continue;
         }
         if let Event::Key(key) = crossterm::event::read()? {
-            if let Some(Action::Quit) = pane.handle_key(key) {
-                return Ok(());
+            if let Some(action) = app.handle_key(key) {
+                app.update(action);
             }
+        }
+        if app.quit {
+            return Ok(());
         }
     }
 }
@@ -105,21 +114,42 @@ fn teardown(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> std::io::Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crossterm::event::KeyModifiers;
 
     #[test]
     fn quit_keys_produce_quit_action() {
-        let mut pane = Pane::new("test");
+        let mut app = App {
+            footer: WhichKey { bindings: vec![] },
+            modals: ModalStack::default(),
+            quit: false,
+        };
         for key in [
-            KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),
-            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+            KeyEvent::new(crossterm::event::KeyCode::Char('q'), KeyModifiers::NONE),
+            KeyEvent::new(crossterm::event::KeyCode::Char('c'), KeyModifiers::CONTROL),
         ] {
-            assert_eq!(pane.handle_key(key), Some(Action::Quit));
+            assert_eq!(app.handle_key(key), Some(Action::Quit));
         }
     }
 
     #[test]
-    fn other_keys_do_nothing() {
-        let mut pane = Pane::new("test");
-        assert_eq!(pane.handle_key(KeyEvent::from(KeyCode::Enter)), None);
+    fn modal_intercepts_keys_before_the_shell() {
+        let mut app = App {
+            footer: WhichKey { bindings: vec![] },
+            modals: ModalStack::default(),
+            quit: false,
+        };
+        app.update(Action::OpenDialog("confirm"));
+        // `q` inside a modal is swallowed by the dialog, not the shell.
+        assert_eq!(
+            app.handle_key(KeyEvent::new(
+                crossterm::event::KeyCode::Char('q'),
+                KeyModifiers::NONE
+            )),
+            Some(Action::Quit)
+        );
+        assert_eq!(
+            app.handle_key(KeyEvent::from(crossterm::event::KeyCode::Esc)),
+            Some(Action::CloseDialog)
+        );
     }
 }

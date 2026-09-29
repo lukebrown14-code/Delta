@@ -1,0 +1,25 @@
+# Rust rewrite code map
+
+Plan: `docs/RUST_REWRITE_PLAN.md`. Findings: `docs/rewrite/findings/`.
+
+## Crates
+
+| Path | Status | Contents |
+|---|---|---|
+| `crates/delta-core/` | R1a done | `ids.rs` (stable_id, instrument ids), `models.rs` (Instrument, Bar, NewsItem, Event, Fundamental, LlmCall, enums), `json.rs` (list-column helpers), `time.rs` (naive-UTC helpers), `config.rs` (Settings, AppConfig, load/update config, .env read/write), `events.rs` (sync EventBus), `state.rs` (last-seen state), `db.rs` (rusqlite schema, migrations, news_instrument backfill, idempotent `store_items`, readers) |
+| `crates/delta-llm/` | R1c done | `eval.rs` (citation validity), `json.rs` (fence parser), `router.rs` (model routing), `client.rs` (cache + cost log, `CompleteParams`), `providers.rs` (OpenAI-compat + OpenRouter via reqwest: pricing, credits auto-fit, 402 retry, `verify_key`), `structured.rs` (minijinja prompts, retry-once), `prompts/` (verbatim `.j2` copies) |
+| `crates/delta-plugins/` | R1b done | `plugin.rs` (DataPlugin trait, Scope, static registry), `rss.rs` (feed parse + Matcher), `sec.rs` (filings→news, XBRL facts, rate cap + retry), `asx.rs` (announcements, retries), `yahoo.rs` (own client: chart/quote/quoteSummary with cookie→crumb, search, live-quote state machine), `markets.rs` (US/ASX universes + sessions), `http.rs` (User-Agent); wiremock tests reuse `tests/fixtures/` |
+| `crates/delta-tui/` | R0 + R1d done | `lib.rs` (Component/Action, quit keys), `axes.rs` (nice ticks, price/x labels), `braille.rs` (connected braille line, `py_round`), `chart.rs` (`PriceChart._runs` layout, direction colours), `theme.rs` (delta-dark tokens), `table.rs` (zebra + cursor), `dialog.rs` (Dialog + ModalStack), `components.rs` (EmptyState, SectionHeading, SuggestionList, CommandPalette, WhichKey); binary `main.rs` (component loop, footer + modal shell) |
+
+## Shared fixtures
+
+- `fixtures/delta.db` — Python-created seed DB (`delta.core.db.init_engine` + `store_items`); opened and round-tripped by `crates/delta-core/tests/parity.rs`.
+- `fixtures/golden_screens/` — golden screen exports for the R3 oracle (`tests/export_golden.py`).
+
+## Conventions
+
+- Datetimes: naive UTC (`NaiveDateTime`), stored as `YYYY-MM-DD HH:MM:SS.ffffff` — byte-compatible with SQLModel.
+- IDs: `stable_id` sha256 over NUL-joined parts; stored hashes must stay Python-compatible.
+- Checks: `cargo fmt --all`, `cargo clippy --all-targets -- -D warnings`, `cargo test --workspace`.
+- Provider tests run against `wiremock` — no live LLM/network calls, ever.
+- Findings: `docs/rewrite/findings/rust-core.md`, `docs/rewrite/findings/rust-llm.md`.

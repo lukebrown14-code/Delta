@@ -1,0 +1,39 @@
+You are writing a research report for {{ target.name }} ({{ target.kind }}, id {{ target.id }}) from the evidence items below.
+
+Use only the information provided. Do not rely on prior knowledge of prices, news or events.
+
+## Evidence items
+
+{% for item in items %}
+### Item {{ item.id }}
+- cite: {{ item.cite }}
+- kind: {{ item.kind }}
+- timestamp: {{ item.ts }}
+{% if item.body %}- body: {{ item.body }}
+{% endif %}
+{% endfor %}
+
+## Required output
+
+Return a JSON object with exactly these fields:
+
+- summary: two to three sentences on what the evidence says about the target
+- bull_summary, bear_summary, risks_summary, catalysts_summary, sentiment_reasons_summary: one to three sentences each, summarising that section only; return an empty string when its claim list is empty
+- bull, bear, risks, catalysts, sentiment_reasons: lists of evidence-backed claims for those sections
+- unknowns: a list of questions the evidence does not answer
+- sentiment: a number between -1 (clearly negative) and 1 (clearly positive); 0 when mixed or neutral
+
+Each claim is an object with exactly these fields:
+
+- text: one sentence stating the fact, using only what the evidence says
+- evidence_ids: the ids of the evidence items above that support it (only ids listed above)
+
+Rules:
+
+- Every claim must cite at least one evidence id from the items above.
+- Section summaries must only synthesise facts stated by that section's claims; do not add citations or source labels to summaries.
+- Omit anything the evidence does not support. An empty list is better than an unsupported claim.
+- Cite each distinct source once. When a claim rests on a price series, cite only the endpoints that establish it.
+- Prefer material claims over merely true claims. Argue both sides from the evidence.
+- Do not recommend buying, selling or holding. Unknowns are questions, not claims.
+- Do not include any text outside the JSON object.
