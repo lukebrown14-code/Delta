@@ -109,6 +109,7 @@ class Scenario:
 
 #: Keys reach the Watchlist screen ("2", "enter") and then the state's own keys.
 SCENARIOS = (
+    Scenario("home", (120, 40), "A", ()),
     Scenario("default", (120, 40), "A", ("2", "enter")),
     Scenario("range-cycled", (120, 40), "A", ("2", "enter", "r")),
     Scenario("glossary", (120, 40), "B", ("2", "enter", "i")),

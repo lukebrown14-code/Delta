@@ -698,6 +698,225 @@ pub fn draw_glossary_overlay(screen: &mut Screen, state: &WatchlistState) {
     screen.text(x, 29, &" ".repeat(29), Style::fg(color::MUTED));
 }
 
+/// Home state the painter renders (the seeded golden scenario's values).
+pub struct HomeState {
+    pub clock: String,
+    pub symbol: String,
+    pub last: String,
+    pub chg_label: String,
+    pub spark: String,
+    pub since_stamp: String,
+}
+
+/// The Home screen: header chip + clock, watchlist / since-you-last-looked,
+/// upcoming / theses, the agenda, and the status bar with `1 Home` active
+/// (port of `delta/tui/screens/home.py` at the captured 120x40 layout).
+pub fn draw_home(screen: &mut Screen, home: &HomeState) {
+    let w = screen.w;
+    let content_bottom = screen.h - 3; // 37 at h=40
+
+    // Header row: inked DELTA chip, "overview", clock right-aligned.
+    screen.put(0, 0, ' ', Style::DEFAULT);
+    let chip = Style::fg(color::WHITE).bg(color::BLUE_BG).bold();
+    screen.put(1, 0, ' ', chip);
+    screen.text(2, 0, "DELTA", chip);
+    screen.put(7, 0, ' ', chip);
+    screen.text(10, 0, "overview", Style::fg(color::MUTED));
+    let clock_x = w - 1 - home.clock.chars().count();
+    screen.text(clock_x, 0, &home.clock, Style::fg(color::MUTED));
+
+    // Row 1: watchlist (focused) + since you last looked (blurred).
+    screen.pane(
+        1,
+        1,
+        59,
+        content_bottom - 22,
+        true,
+        &[
+            ("watchlist ", Style::fg(color::BLUE).bold()),
+            ("· 1", Style::fg(color::MUTED).bold()),
+        ],
+        &pane_hints(&[("↑↓", "select"), ("enter", "open"), ("tab", "next box")]),
+    );
+    screen.pane(
+        60,
+        1,
+        w - 2,
+        content_bottom - 22,
+        false,
+        &[("since you last looked", Style::fg(color::BLUE).bold())],
+        &pane_hints(&[("3", "research")]),
+    );
+
+    // Watchlist table: muted header, selected row in $primary.
+    let header = " Symbol          close     chg%   age  40 closes";
+    screen.text(2, 2, header, Style::fg(color::MUTED));
+    let blue = Style::DEFAULT.bg(color::BLUE_BG);
+    screen.fill(2, 3, 59, 4, blue);
+    let white = Style::fg(color::WHITE).bg(color::BLUE_BG);
+    let white_bold = Style::fg(color::WHITE).bg(color::BLUE_BG).bold();
+    screen.put(2, 3, ' ', blue);
+    let mut x = screen.text(3, 3, &home.symbol, white_bold);
+    x = screen.text(x + 11, 3, &home.last, white);
+    screen.put(x, 3, ' ', blue);
+    x = screen.text(x + 1, 3, "▲ ", white);
+    x = screen.text(x, 3, &home.chg_label, white);
+    let _ = x;
+    screen.text(41, 3, &home.spark, white);
+    // Row 5: the spark legend.
+    screen.text(
+        3,
+        5,
+        "spark: 40 daily closes · chg%: move on the day",
+        Style::fg(color::MUTED),
+    );
+
+    // Since-you-last-looked: empty-run summary, stale warnings.
+    screen.text(
+        62,
+        2,
+        "nothing new since your last visit",
+        Style::fg(color::MUTED),
+    );
+    screen.text(102, 2, &home.since_stamp, Style::fg(color::MUTED));
+    screen.text(
+        62,
+        4,
+        "no activity in the last 30 days",
+        Style::fg(color::MUTED),
+    );
+    screen.text(62, 5, "newest   no articles yet", Style::fg(color::MUTED));
+    let warn = Style::fg(color::AMBER);
+    screen.text(62, 7, &format!("⚠ {} 1d old", home.symbol), warn);
+    screen.text(62, 8, "⚠ 2 evidence prompts · 3 evidence", warn);
+
+    // Middle row: upcoming + theses.
+    screen.pane(
+        1,
+        content_bottom - 21,
+        59,
+        content_bottom - 7,
+        false,
+        &[("upcoming", Style::fg(color::BLUE).bold())],
+        &pane_hints(&[("enter", "open evidence")]),
+    );
+    screen.pane(
+        60,
+        content_bottom - 21,
+        w - 2,
+        content_bottom - 7,
+        false,
+        &[("theses", Style::fg(color::BLUE).bold())],
+        &pane_hints(&[("enter", "open thesis"), ("4", "all")]),
+    );
+    screen.text(
+        3,
+        content_bottom - 20,
+        "nothing scheduled — press 3, then U to gather evidence",
+        Style::fg(color::MUTED),
+    );
+    screen.text(
+        3,
+        content_bottom - 19,
+        "calendar plugin: earnings & dividends only",
+        Style::fg(color::MUTED),
+    );
+    screen.text(
+        62,
+        content_bottom - 20,
+        "no theses yet",
+        Style::fg(color::MUTED),
+    );
+    screen.text(
+        62,
+        content_bottom - 18,
+        "4 opens the theses desk — n tracks a claim",
+        Style::fg(color::MUTED),
+    );
+
+    // Agenda: full width, jump keys with ✓/⚠ verdicts.
+    screen.pane(
+        1,
+        content_bottom - 6,
+        w - 2,
+        content_bottom,
+        false,
+        &[
+            ("needs you today ", Style::fg(color::BLUE).bold()),
+            ("· 1", Style::fg(color::MUTED).bold()),
+        ],
+        &pane_hints(&[("enter", "open"), ("tab", "next box")]),
+    );
+    let rows: [(&str, &str, &str, Style); 4] = [
+        (
+            "6",
+            "✓",
+            " no decision reviews due",
+            Style::fg(color::MUTED),
+        ),
+        ("4", "✓", " no falsifier hits", Style::fg(color::MUTED)),
+        (
+            "3",
+            "✓",
+            " no earnings in the next 7 days",
+            Style::fg(color::MUTED),
+        ),
+        ("2", "⚠", " 1 stale source", Style::fg(color::AMBER)),
+    ];
+    for (index, (key, glyph, message, style)) in rows.into_iter().enumerate() {
+        let y = content_bottom - 5 + index;
+        let mut x = 3;
+        x = screen.text(x, y, "▸", Style::fg(color::BLUE));
+        x += 1;
+        x = screen.text(x, y, key, Style::fg(color::BLUE).bold());
+        x += 2;
+        x = screen.text(x, y, glyph, style);
+        screen.text(x, y, message, style);
+    }
+
+    draw_status_bar_home(screen, screen.h - 1, w);
+}
+
+/// Status bar with the Home tab active (`1 Home`).
+fn draw_status_bar_home(screen: &mut Screen, y: usize, w: usize) {
+    let panel = Style::DEFAULT.bg(color::PANEL);
+    let muted = Style::fg(color::MUTED).bold().bg(color::PANEL);
+    let active_fg = Style::fg(color::WHITE).bold().bg(color::BLUE_BG);
+    let active = Style::DEFAULT.bg(color::BLUE_BG);
+    let plain = Style::fg(color::FG).bg(color::PANEL);
+    screen.fill(1, y, w, y + 1, panel);
+    screen.put(0, y, ' ', Style::DEFAULT.bg(color::BLACK));
+    screen.put(1, y, ' ', active);
+    screen.text(2, y, "1 Home", active_fg);
+    screen.put(8, y, ' ', active);
+    screen.put(9, y, ' ', panel);
+    screen.text(10, y, "2", muted);
+    for (i, key) in ["3", "4", "5", "6"].into_iter().enumerate() {
+        screen.text(13 + i * 3, y, key, muted);
+    }
+    let x = w - 1 - 57; // cluster width (57 cells) ends at w-2
+    screen.put(x, y, '●', Style::fg(color::AMBER).bg(color::PANEL));
+    let mut x = x + 1;
+    for (part, style) in [
+        ("  ", panel),
+        ("data 1d", plain),
+        ("  ", panel),
+        ("openrouter", plain),
+        ("  ", panel),
+        ("$0.00", plain),
+        ("  ", panel),
+        ("c", muted),
+        (" Settings", Style::fg(color::MUTED).bg(color::PANEL)),
+        ("  ", panel),
+        ("?", Style::fg(color::MUTED).bg(color::PANEL)),
+        (" help · g go", Style::fg(color::MUTED).bg(color::PANEL)),
+    ] {
+        x = screen.text(x, y, part, style);
+    }
+    screen.put(w - 2, y, ' ', panel);
+    screen.put(w - 1, y, ' ', Style::DEFAULT.bg(color::BLACK));
+}
+
 #[cfg(test)]
 mod wrap_tests {
     use super::wrap_words;

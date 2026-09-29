@@ -6,8 +6,8 @@ use std::path::PathBuf;
 
 use delta_tui::screen::Screen;
 use delta_tui::screens::{
-    draw_glossary_overlay, draw_watchlist, draw_watchlist_narrow, grouped, MetricsData,
-    WatchlistState,
+    draw_glossary_overlay, draw_home, draw_watchlist, draw_watchlist_narrow, grouped, HomeState,
+    MetricsData, WatchlistState,
 };
 
 fn golden_path(name: &str) -> PathBuf {
@@ -263,5 +263,68 @@ fn glossary_state_tier_b() {
         "glossary: {} text mismatches\n{}",
         char_diffs.len(),
         char_diffs.join("\n")
+    );
+}
+
+#[test]
+fn home_state_tier_a() {
+    let (_series, _times) = series();
+    let closes: Vec<f64> = (40..80)
+        .map(|i| {
+            let v = 200.0 + i as f64 * 0.4 + 6.0 * (i as f64 / 4.0).sin();
+            (v * 100.0).round() / 100.0
+        })
+        .collect();
+    let spark = delta_tui::braille::BrailleGraph::filled(closes.clone()).rows(17, 1)[0].clone();
+    let last = closes[closes.len() - 1];
+    let prev = closes[closes.len() - 2];
+    let chg_label = format!("{:+.2}%", (last / prev - 1.0) * 100.0);
+    let home = HomeState {
+        clock: "Monday 21 September 2026 · 09:30:00 UTC".to_string(),
+        symbol: "AAPL".to_string(),
+        last: grouped(last),
+        chg_label,
+        spark,
+        since_stamp: "since Mon 09:30".to_string(),
+    };
+    let mut screen = Screen::new(120, 40);
+    draw_home(&mut screen, &home);
+    let raw = std::fs::read_to_string(
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/golden_screens/home-120x40.json"),
+    )
+    .unwrap();
+    let value: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    let mut diffs = Vec::new();
+    for (y, row) in value["rows"].as_array().unwrap().iter().enumerate() {
+        for (x, cell) in row.as_array().unwrap().iter().enumerate() {
+            let mine = &screen.cells[y * screen.w + x];
+            let want = (
+                cell["ch"].as_str().unwrap().chars().next().unwrap(),
+                cell["fg"].as_str(),
+                cell["bg"].as_str(),
+                cell["attrs"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|a| a == "bold"),
+            );
+            let got = (mine.ch, mine.fg, mine.bg, mine.bold);
+            if got != want {
+                diffs.push(format!("row {y} col {x}: want {want:?} got {got:?}"));
+                if diffs.len() >= 40 {
+                    break;
+                }
+            }
+        }
+        if diffs.len() >= 40 {
+            break;
+        }
+    }
+    assert!(
+        diffs.is_empty(),
+        "home: {} Tier A mismatches\n{}",
+        diffs.len(),
+        diffs.join("\n")
     );
 }

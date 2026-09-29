@@ -32,10 +32,18 @@ cell-grid model in `crates/delta-tui/src/screen.rs` and the harness in
   cluster string is assembled per breakpoint), the chart reflows to 72x12 and
   the grid edges move (value col ends 41 excl, right pair 42..76).
 
+## Done since the glossary commit
+
+- **`home-120x40` (Tier A): zero mismatches** (`draw_home`): DELTA chip +
+  right-aligned clock, watchlist table with the filled braille spark and
+  cursor row, since-you-last-looked summary/stale warnings, upcoming/theses
+  panes, the agenda with jump keys, and the `1 Home` status-bar variant.
+  Exported via the new `home` scenario in `tests/export_golden.py`.
+
 ## Remaining R3 work
 
 | # | State | Tier | Notes |
 |---|---|---|---|
 | 6 | gap | `glossary-120x40` (Tier B) | Prose modal; Tier B diffs are logged as findings rather than failures. Needs the DeltaMarkdown-style text wrapping rules first |
-| 7 | gap | other screens | Home, Research, Theses, Ask, Decisions, Settings need their own exporter scenarios before they can be ported against goldens (extend `SCENARIOS` in `tests/export_golden.py`) |
+| 7 | gap | other screens | Research, Theses, Ask, Decisions, Settings need exporter scenarios before they can be ported against goldens (extend `SCENARIOS` in `tests/export_golden.py`; Home shows the pattern: add the scenario, regenerate, paint, iterate on the diff) |
 | 8 | simplify | `screens.rs` | The painter is layout-hardcoded to the captured geometry; as more states land, factor shared pieces (pane hints, hero row) behind the data they render. Deliberately not generalised ahead of the second screen |
