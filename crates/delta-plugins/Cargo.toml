@@ -1,0 +1,23 @@
+[package]
+name = "delta-plugins"
+description = "Data/market/target plugins for Delta: yahoo, rss, sec_edgar, asx, markets."
+edition.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+async-trait = "0.1"
+chrono = { version = "0.4", default-features = false, features = ["std", "clock", "serde"] }
+delta-core = { path = "../delta-core" }
+feed-rs = "2"
+futures = "0.3"
+regex = "1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "cookies"] }
+serde_json = "1"
+log = "0.4"
+thiserror = "2"
+tokio = { version = "1", features = ["rt", "macros", "time", "sync"] }
+
+[dev-dependencies]
+tempfile = "3"
+wiremock = "0.6"

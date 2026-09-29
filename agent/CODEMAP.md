@@ -10,6 +10,7 @@ Personal investment research assistant: data plugins gather evidence into SQLite
 | `delta/plugins/` | Discovered markets, data sources, watch-target kinds | `pyproject.toml` entry-points | `agent/codemap/delta/plugins.md` |
 | `delta/tui/` | Textual app, screens, widgets, charts, theme | `delta/tui/app.py` | `agent/codemap/delta/tui.md` |
 | `tests/` | Offline pytest suite, snapshot baselines, FakeLLM | `tests/conftest.py` | `agent/codemap/tests.md` |
+| `crates/` | Rust rewrite workspace (Rust rewrite plan, `docs/RUST_REWRITE_PLAN.md`) | `crates/delta-core/src/lib.rs` | `agent/codemap/rust.md` |
 | `docs/` | Design notes (UI audit, Rust rewrite plan) | — | — |
 
 ## Where to find X
@@ -20,6 +21,7 @@ Personal investment research assistant: data plugins gather evidence into SQLite
 - DB schema / migrations → `delta/core/db.py` (SQLModel tables, `_migrate`; no Alembic)
 - Theses + decisions tables → `delta/theses.py`, `delta/decisions.py` (own their SQLModel tables)
 - Domain models (Instrument, Bar, NewsItem, Event, Fundamental) → `delta/core/models.py`
+- Rust port of core (config, models, IDs, events, DB) → `crates/delta-core/` (`agent/codemap/rust.md`)
 - Config loading / `config.toml` / `.env` writes → `delta/core/config.py`
 - Stable IDs → `delta/core/ids.py` (`stable_id`, `make_instrument_id`)
 - Plugin protocols + discovery → `delta/core/plugin.py` (`DataPlugin`, `MarketPlugin`, `TargetPlugin`, `Scope`)

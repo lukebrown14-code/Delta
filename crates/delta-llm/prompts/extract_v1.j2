@@ -1,0 +1,31 @@
+You are extracting discrete, factual market events for {{ symbol }} ({{ instrument_id }}) from the news items below.
+
+Use only the information provided. Do not rely on prior knowledge of prices, news or events.
+
+## News items
+
+{% for item in items %}
+### Item {{ item.id }}
+- published: {{ item.published }}
+- source: {{ item.source }}
+- title: {{ item.title }}
+{% if item.body %}- body: {{ item.body }}
+{% endif %}
+{% endfor %}
+
+## Required output
+
+Return a JSON object with a single key "events" whose value is a list. Each event has exactly these fields:
+
+- kind: one of "earnings", "guidance", "dividend", "insider_trade", "m&a", "regulatory", "macro", "other"
+- summary: one sentence stating the fact, using only what the items say
+- sentiment: a number between -1 (clearly negative for the instrument) and 1 (clearly positive); 0 when neutral
+- evidence_ids: the ids of the items above that support this event (only ids listed above)
+
+Rules:
+
+- Report only discrete events that happened or were announced. Do not report opinions, speculation or general commentary.
+- Merge items describing the same event into one event with all supporting ids.
+- If none of the items describe a discrete event, return {"events": []}.
+
+Do not include any text outside the JSON object.
