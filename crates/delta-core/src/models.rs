@@ -12,6 +12,7 @@ use serde_json::Value;
 
 /// Asset class tag for an [`Instrument`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
 pub enum AssetClass {
     #[default]
     Equity,
@@ -115,11 +116,13 @@ pub struct NewsItem {
 
 /// Kind tag for an [`Event`]; strings match the Python `Literal` values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum EventKind {
     Earnings,
     Guidance,
     Dividend,
     InsiderTrade,
+    #[serde(rename = "m&a")]
     Ma,
     Regulatory,
     Macro,
