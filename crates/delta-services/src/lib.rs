@@ -3,6 +3,7 @@
 pub mod analytics;
 pub mod config_ops;
 pub mod error;
+pub mod fixture;
 pub mod pipeline;
 pub mod targets;
 

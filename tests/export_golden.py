@@ -108,13 +108,24 @@ class Scenario:
 
 
 #: Keys reach the Watchlist screen ("2", "enter") and then the state's own keys.
-SCENARIOS = (
-    Scenario("home", (120, 40), "A", ()),
-    Scenario("default", (120, 40), "A", ("2", "enter")),
-    Scenario("range-cycled", (120, 40), "A", ("2", "enter", "r")),
-    Scenario("glossary", (120, 40), "B", ("2", "enter", "i")),
-    Scenario("narrow", (80, 24), "A", ("2", "enter")),
+_STATES = (
+    ("home", (), "A"),
+    ("default", ("2", "enter"), "A"),
+    ("range-cycled", ("2", "enter", "r"), "A"),
+    ("glossary", ("2", "enter", "i"), "B"),
+    ("research", ("3",), "A"),
+    ("theses", ("4",), "A"),
+    ("ask", ("5",), "A"),
+    ("decisions", ("6",), "A"),
+    ("settings", ("c",), "A"),
 )
+
+#: The full three-size matrix (R4); `narrow` stays the 80x24 detail-open state.
+SCENARIOS = tuple(
+    Scenario(name, size, tier, keys)
+    for name, keys, tier in _STATES
+    for size in ((80, 24), (120, 40), (200, 50))
+) + (Scenario("narrow", (80, 24), "A", ("2", "enter")),)
 
 
 def _hex(color) -> str | None:

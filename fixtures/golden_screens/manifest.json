@@ -1,9 +1,171 @@
 {
   "scenarios": [
     {
+      "file": "home-80x24.json",
+      "size": "80x24",
+      "state": "home",
+      "tier": "A"
+    },
+    {
       "file": "home-120x40.json",
       "size": "120x40",
       "state": "home",
+      "tier": "A"
+    },
+    {
+      "file": "home-200x50.json",
+      "size": "200x50",
+      "state": "home",
+      "tier": "A"
+    },
+    {
+      "file": "default-80x24.json",
+      "size": "80x24",
+      "state": "default",
+      "tier": "A"
+    },
+    {
+      "file": "default-120x40.json",
+      "size": "120x40",
+      "state": "default",
+      "tier": "A"
+    },
+    {
+      "file": "default-200x50.json",
+      "size": "200x50",
+      "state": "default",
+      "tier": "A"
+    },
+    {
+      "file": "range-cycled-80x24.json",
+      "size": "80x24",
+      "state": "range-cycled",
+      "tier": "A"
+    },
+    {
+      "file": "range-cycled-120x40.json",
+      "size": "120x40",
+      "state": "range-cycled",
+      "tier": "A"
+    },
+    {
+      "file": "range-cycled-200x50.json",
+      "size": "200x50",
+      "state": "range-cycled",
+      "tier": "A"
+    },
+    {
+      "file": "glossary-80x24.json",
+      "size": "80x24",
+      "state": "glossary",
+      "tier": "B"
+    },
+    {
+      "file": "glossary-120x40.json",
+      "size": "120x40",
+      "state": "glossary",
+      "tier": "B"
+    },
+    {
+      "file": "glossary-200x50.json",
+      "size": "200x50",
+      "state": "glossary",
+      "tier": "B"
+    },
+    {
+      "file": "research-80x24.json",
+      "size": "80x24",
+      "state": "research",
+      "tier": "A"
+    },
+    {
+      "file": "research-120x40.json",
+      "size": "120x40",
+      "state": "research",
+      "tier": "A"
+    },
+    {
+      "file": "research-200x50.json",
+      "size": "200x50",
+      "state": "research",
+      "tier": "A"
+    },
+    {
+      "file": "theses-80x24.json",
+      "size": "80x24",
+      "state": "theses",
+      "tier": "A"
+    },
+    {
+      "file": "theses-120x40.json",
+      "size": "120x40",
+      "state": "theses",
+      "tier": "A"
+    },
+    {
+      "file": "theses-200x50.json",
+      "size": "200x50",
+      "state": "theses",
+      "tier": "A"
+    },
+    {
+      "file": "ask-80x24.json",
+      "size": "80x24",
+      "state": "ask",
+      "tier": "A"
+    },
+    {
+      "file": "ask-120x40.json",
+      "size": "120x40",
+      "state": "ask",
+      "tier": "A"
+    },
+    {
+      "file": "ask-200x50.json",
+      "size": "200x50",
+      "state": "ask",
+      "tier": "A"
+    },
+    {
+      "file": "decisions-80x24.json",
+      "size": "80x24",
+      "state": "decisions",
+      "tier": "A"
+    },
+    {
+      "file": "decisions-120x40.json",
+      "size": "120x40",
+      "state": "decisions",
+      "tier": "A"
+    },
+    {
+      "file": "decisions-200x50.json",
+      "size": "200x50",
+      "state": "decisions",
+      "tier": "A"
+    },
+    {
+      "file": "settings-80x24.json",
+      "size": "80x24",
+      "state": "settings",
+      "tier": "A"
+    },
+    {
+      "file": "settings-120x40.json",
+      "size": "120x40",
+      "state": "settings",
+      "tier": "A"
+    },
+    {
+      "file": "settings-200x50.json",
+      "size": "200x50",
+      "state": "settings",
+      "tier": "A"
+    },
+    {
+      "file": "narrow-80x24.json",
+      "size": "80x24",
+      "state": "narrow",
       "tier": "A"
     }
   ]

@@ -68,6 +68,11 @@ impl Component for App {
 }
 
 fn main() -> std::io::Result<()> {
+    // R4 benchmark entry: `delta --version` never touches the terminal.
+    if std::env::args().any(|a| a == "--version" || a == "-V") {
+        println!("delta {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
     let mut terminal = setup()?;
     let res = run(&mut terminal);
     teardown(&mut terminal)?;

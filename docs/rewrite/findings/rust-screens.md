@@ -45,5 +45,5 @@ cell-grid model in `crates/delta-tui/src/screen.rs` and the harness in
 | # | State | Tier | Notes |
 |---|---|---|---|
 | 6 | gap | `glossary-120x40` (Tier B) | Prose modal; Tier B diffs are logged as findings rather than failures. Needs the DeltaMarkdown-style text wrapping rules first |
-| 7 | gap | other screens | Research, Theses, Ask, Decisions, Settings need exporter scenarios before they can be ported against goldens (extend `SCENARIOS` in `tests/export_golden.py`; Home shows the pattern: add the scenario, regenerate, paint, iterate on the diff) |
+| 7 | gap | other screens | Research, Theses, Ask, Decisions, Settings: exporter scenarios + goldens now exist for all three sizes (R4 matrix), and `delta-services::fixture::seed_offline_desk` feeds the environment offline. The five screens' painters are the remaining R3 work — same loop as Home |
 | 8 | simplify | `screens.rs` | The painter is layout-hardcoded to the captured geometry; as more states land, factor shared pieces (pane hints, hero row) behind the data they render. Deliberately not generalised ahead of the second screen |
