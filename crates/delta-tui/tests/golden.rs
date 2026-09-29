@@ -5,7 +5,9 @@
 use std::path::PathBuf;
 
 use delta_tui::screen::Screen;
-use delta_tui::screens::{draw_watchlist, grouped, MetricsData, WatchlistState};
+use delta_tui::screens::{
+    draw_watchlist, draw_watchlist_narrow, grouped, MetricsData, WatchlistState,
+};
 
 fn golden_path(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -80,6 +82,12 @@ fn render(range: &'static str) -> Screen {
     screen
 }
 
+fn render_narrow(range: &'static str) -> Screen {
+    let mut screen = Screen::new(80, 24);
+    draw_watchlist_narrow(&mut screen, &state(range));
+    screen
+}
+
 fn diff_against(golden_name: &str, screen: &Screen) -> Vec<String> {
     let raw = std::fs::read_to_string(golden_path(golden_name)).unwrap();
     let value: serde_json::Value = serde_json::from_str(&raw).unwrap();
@@ -131,4 +139,48 @@ fn default_state_tier_a() {
 #[test]
 fn range_cycled_state_tier_a() {
     assert_golden("range-cycled", "6m");
+}
+
+#[test]
+fn narrow_state_tier_a() {
+    let screen = render_narrow("1m");
+    let raw = std::fs::read_to_string(
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/golden_screens/narrow-80x24.json"),
+    )
+    .unwrap();
+    let value: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    let mut diffs = Vec::new();
+    for (y, row) in value["rows"].as_array().unwrap().iter().enumerate() {
+        for (x, cell) in row.as_array().unwrap().iter().enumerate() {
+            let mine = &screen.cells[y * screen.w + x];
+            let want = (
+                cell["ch"].as_str().unwrap().chars().next().unwrap(),
+                cell["fg"].as_str(),
+                cell["bg"].as_str(),
+                cell["attrs"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|a| a == "bold"),
+            );
+            let got = (mine.ch, mine.fg, mine.bg, mine.bold);
+            if got != want {
+                diffs.push(format!("row {y} col {x}: want {want:?} got {got:?}"));
+                if diffs.len() >= 40 {
+                    diffs.push("... truncated".to_string());
+                    break;
+                }
+            }
+        }
+        if diffs.len() >= 40 {
+            break;
+        }
+    }
+    assert!(
+        diffs.is_empty(),
+        "narrow: {} mismatches\n{}",
+        diffs.len(),
+        diffs.join("\n")
+    );
 }

@@ -24,11 +24,18 @@ cell-grid model in `crates/delta-tui/src/screen.rs` and the harness in
 | 3 | parity | chart rule row | The rule row's trailing blank run is foreground-styled, the braille rows' gutter trailing spaces are `$text-disabled`; blank-braille cells are foreground, not the line colour (PriceChart's run kinds already encode this — the painter just maps them) |
 | 4 | parity | metrics grid | Rich's ratio-column widths were pinned from the golden (label col ends 84 excl, right pair 85..116); a general implementation of Rich's table algorithm is only needed when data with different label lengths ships |
 
+## Done since first commit
+
+- **`narrow-80x24` (Tier A): zero mismatches** (`draw_watchlist_narrow`). The
+  narrow frame is the metrics pane full-width with `esc back` added to the
+  pane hints; the status bar drops the provider name and help hint (the
+  cluster string is assembled per breakpoint), the chart reflows to 72x12 and
+  the grid edges move (value col ends 41 excl, right pair 42..76).
+
 ## Remaining R3 work
 
 | # | State | Tier | Notes |
 |---|---|---|---|
-| 5 | gap | `narrow-80x24` (Tier A) | Needs the `-narrow` breakpoint layout (list-only pane + detail-open flow). The list pane painter is shared; the narrow frame geometry still needs capturing from the golden |
 | 6 | gap | `glossary-120x40` (Tier B) | Prose modal; Tier B diffs are logged as findings rather than failures. Needs the DeltaMarkdown-style text wrapping rules first |
 | 7 | gap | other screens | Home, Research, Theses, Ask, Decisions, Settings need their own exporter scenarios before they can be ported against goldens (extend `SCENARIOS` in `tests/export_golden.py`) |
 | 8 | simplify | `screens.rs` | The painter is layout-hardcoded to the captured geometry; as more states land, factor shared pieces (pane hints, hero row) behind the data they render. Deliberately not generalised ahead of the second screen |
