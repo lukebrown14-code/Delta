@@ -27,6 +27,7 @@ pub struct Style {
     pub fg: Option<&'static str>,
     pub bg: Option<&'static str>,
     pub bold: bool,
+    pub reverse: bool,
 }
 
 impl Style {
@@ -34,12 +35,14 @@ impl Style {
         fg: None,
         bg: None,
         bold: false,
+        reverse: false,
     };
     pub const fn fg(color: &'static str) -> Style {
         Style {
             fg: Some(color),
             bg: None,
             bold: false,
+            reverse: false,
         }
     }
     pub const fn bold(mut self) -> Style {
@@ -48,6 +51,10 @@ impl Style {
     }
     pub const fn bg(mut self, color: &'static str) -> Style {
         self.bg = Some(color);
+        self
+    }
+    pub const fn attrs_reverse(mut self) -> Style {
+        self.reverse = true;
         self
     }
 }

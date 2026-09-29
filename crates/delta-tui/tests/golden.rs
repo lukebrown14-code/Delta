@@ -6,8 +6,9 @@ use std::path::PathBuf;
 
 use delta_tui::screen::Screen;
 use delta_tui::screens::{
-    draw_glossary_overlay, draw_home, draw_watchlist, draw_watchlist_narrow, grouped, HomeState,
-    MetricsData, WatchlistState,
+    draw_ask, draw_decisions, draw_glossary_overlay, draw_home, draw_research, draw_settings,
+    draw_theses, draw_watchlist, draw_watchlist_narrow, grouped, HomeState, MetricsData,
+    WatchlistState,
 };
 
 fn golden_path(name: &str) -> PathBuf {
@@ -327,4 +328,128 @@ fn home_state_tier_a() {
         diffs.len(),
         diffs.join("\n")
     );
+}
+
+#[test]
+fn research_state_tier_a() {
+    let mut screen = Screen::new(120, 40);
+    draw_research(&mut screen);
+    let raw = std::fs::read_to_string(
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/golden_screens/research-120x40.json"),
+    )
+    .unwrap();
+    let value: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    let mut diffs = Vec::new();
+    for (y, row) in value["rows"].as_array().unwrap().iter().enumerate() {
+        for (x, cell) in row.as_array().unwrap().iter().enumerate() {
+            let mine = &screen.cells[y * screen.w + x];
+            let want = (
+                cell["ch"].as_str().unwrap().chars().next().unwrap(),
+                cell["fg"].as_str(),
+                cell["bg"].as_str(),
+                cell["attrs"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|a| a == "bold"),
+            );
+            let got = (mine.ch, mine.fg, mine.bg, mine.bold);
+            if got != want {
+                diffs.push(format!("row {y} col {x}: want {want:?} got {got:?}"));
+                if diffs.len() >= 30 {
+                    break;
+                }
+            }
+        }
+        if diffs.len() >= 30 {
+            break;
+        }
+    }
+    assert!(
+        diffs.is_empty(),
+        "research: {} mismatches\n{}",
+        diffs.len(),
+        diffs.join("\n")
+    );
+}
+
+fn golden_diff(screen: &Screen, name: &str) -> Vec<String> {
+    let raw = std::fs::read_to_string(
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join(format!("../../fixtures/golden_screens/{name}-120x40.json")),
+    )
+    .unwrap();
+    let value: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    let mut diffs = Vec::new();
+    for (y, row) in value["rows"].as_array().unwrap().iter().enumerate() {
+        for (x, cell) in row.as_array().unwrap().iter().enumerate() {
+            let mine = &screen.cells[y * screen.w + x];
+            let want = (
+                cell["ch"].as_str().unwrap().chars().next().unwrap(),
+                cell["fg"].as_str(),
+                cell["bg"].as_str(),
+                cell["attrs"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|a| a == "bold"),
+            );
+            let got = (mine.ch, mine.fg, mine.bg, mine.bold);
+            if got != want {
+                diffs.push(format!("row {y} col {x}: want {want:?} got {got:?}"));
+                if diffs.len() >= 30 {
+                    break;
+                }
+            }
+        }
+        if diffs.len() >= 30 {
+            break;
+        }
+    }
+    diffs
+}
+
+#[test]
+fn theses_state_tier_a() {
+    let mut screen = Screen::new(120, 40);
+    draw_theses(&mut screen);
+    let diffs = golden_diff(&screen, "theses");
+    for d in &diffs {
+        println!("{d}");
+    }
+    assert!(diffs.is_empty(), "theses: {} mismatches", diffs.len());
+}
+
+#[test]
+fn ask_state_tier_a() {
+    let mut screen = Screen::new(120, 40);
+    draw_ask(&mut screen);
+    let diffs = golden_diff(&screen, "ask");
+    for d in &diffs {
+        println!("{d}");
+    }
+    assert!(diffs.is_empty(), "ask: {} mismatches", diffs.len());
+}
+
+#[test]
+fn decisions_state_tier_a() {
+    let mut screen = Screen::new(120, 40);
+    draw_decisions(&mut screen);
+    let diffs = golden_diff(&screen, "decisions");
+    for d in &diffs {
+        println!("{d}");
+    }
+    assert!(diffs.is_empty(), "decisions: {} mismatches", diffs.len());
+}
+
+#[test]
+fn settings_state_tier_a() {
+    let mut screen = Screen::new(120, 40);
+    draw_settings(&mut screen);
+    let diffs = golden_diff(&screen, "settings");
+    for d in &diffs {
+        println!("{d}");
+    }
+    assert!(diffs.is_empty(), "settings: {} mismatches", diffs.len());
 }
