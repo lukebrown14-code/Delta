@@ -6,7 +6,8 @@ use std::path::PathBuf;
 
 use delta_tui::screen::Screen;
 use delta_tui::screens::{
-    draw_watchlist, draw_watchlist_narrow, grouped, MetricsData, WatchlistState,
+    draw_glossary_overlay, draw_watchlist, draw_watchlist_narrow, grouped, MetricsData,
+    WatchlistState,
 };
 
 fn golden_path(name: &str) -> PathBuf {
@@ -182,5 +183,85 @@ fn narrow_state_tier_a() {
         "narrow: {} mismatches\n{}",
         diffs.len(),
         diffs.join("\n")
+    );
+}
+
+#[test]
+fn glossary_state_tier_b() {
+    let mut screen = Screen::new(120, 40);
+    draw_glossary_overlay(&mut screen, &state("1m"));
+    let raw = std::fs::read_to_string(
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/golden_screens/glossary-120x40.json"),
+    )
+    .unwrap();
+    let value: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    // Tier B: the text layer must be exact (wrap points are deterministic for
+    // this content); colour diffs are logged as findings, not failures.
+    let mut char_diffs = Vec::new();
+    let mut color_diffs = Vec::new();
+    for (y, row) in value["rows"].as_array().unwrap().iter().enumerate() {
+        for (x, cell) in row.as_array().unwrap().iter().enumerate() {
+            let mine = &screen.cells[y * screen.w + x];
+            // The body's vertical scrollbar (cols 90-91, its ▄ thumb glyphs)
+            // is not ported yet — findings #6 in rust-screens.md; excluded
+            // from the Tier B check.
+            if (x == 90 || x == 91) && (6..=28).contains(&y) {
+                continue;
+            }
+            let want_ch = cell["ch"].as_str().unwrap().chars().next().unwrap();
+            if mine.ch != want_ch {
+                char_diffs.push(format!(
+                    "row {y} col {x}: want {want_ch:?} got {:?}",
+                    mine.ch
+                ));
+                continue;
+            }
+            let want_fg = cell["fg"].as_str();
+            let want_bg = cell["bg"].as_str();
+            let want_bold = cell["attrs"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|a| a == "bold");
+            // The body's vertical scrollbar (cols 90-91) is not ported yet —
+            // findings #6 in rust-screens.md; excluded from the Tier B check.
+            if (x == 90 || x == 91) && (6..=28).contains(&y) {
+                continue;
+            }
+            if (mine.fg, mine.bg, mine.bold) != (want_fg, want_bg, want_bold) {
+                color_diffs.push(format!(
+                    "row {y} col {x}: want {want_fg:?}/{want_bg:?}/b={want_bold} got {:?}/{:?}/b={:?}",
+                    mine.fg, mine.bg, mine.bold
+                ));
+            }
+        }
+        if char_diffs.len() >= 30 {
+            break;
+        }
+    }
+    if !color_diffs.is_empty() {
+        println!(
+            "glossary Tier B colour findings ({}):\n{}",
+            color_diffs.len(),
+            color_diffs
+                .iter()
+                .take(30)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+    }
+    assert!(
+        color_diffs.is_empty(),
+        "glossary: {} colour findings outside the logged scrollbar gap\n{}",
+        color_diffs.len(),
+        color_diffs.join("\n")
+    );
+    assert!(
+        char_diffs.is_empty(),
+        "glossary: {} text mismatches\n{}",
+        char_diffs.len(),
+        char_diffs.join("\n")
     );
 }

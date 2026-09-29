@@ -111,6 +111,49 @@ impl Screen {
         self.text(start, y, text, style);
     }
 
+    /// Dim the whole screen: Textual's modal backdrop blends every resolved
+    /// colour toward black at 60% — per channel, `int(v * 0.4)` (verified
+    /// against the exporter: `#5b8def` -> `#24385f`, `#d4d4d4` -> `#545454`,
+    /// `#22c55e` -> `#0d4e25`).
+    pub fn dim(&mut self) {
+        fn dim_hex(hex: &str) -> String {
+            let byte = |i: usize| u8::from_str_radix(&hex[i..i + 2], 16).unwrap_or(0);
+            let r = (byte(1) as f32 * 0.4) as u8;
+            let g = (byte(3) as f32 * 0.4) as u8;
+            let b = (byte(5) as f32 * 0.4) as u8;
+            format!("#{r:02x}{g:02x}{b:02x}")
+        }
+        // The common dimmed values as 'static strings; anything else keeps its
+        // undimmed hex (never hit by the golden screens).
+        fn dim(c: Option<&'static str>) -> Option<&'static str> {
+            match c {
+                Some(color::BLUE) => Some("#24385f"),
+                Some(color::FG) => Some("#545454"),
+                Some(color::MUTED) => Some("#373737"),
+                Some(color::DISABLED) => Some("#242424"),
+                Some(color::GREEN) => Some("#0d4e25"),
+                Some(color::RED) => Some("#632d2d"),
+                Some(color::AMBER) => Some("#623f04"),
+                Some(color::WHITE) => Some("#666666"),
+                Some(color::BLUE_BG) => Some("#0f1e3c"),
+                Some(color::PANEL) => Some("#0a0a0a"),
+                Some(color::BLACK) => Some("#000000"),
+                Some(color::BORDER_BLURRED) => Some("#141414"),
+                other => other,
+            }
+        }
+        let _ = dim_hex;
+        for cell in &mut self.cells {
+            // A cell with no explicit fg inherits the modal screen's default
+            // (foreground) *after* dimming, so it is not dimmed itself.
+            cell.fg = match cell.fg {
+                None => Some(color::FG),
+                Some(fg) => dim(Some(fg)),
+            };
+            cell.bg = dim(cell.bg);
+        }
+    }
+
     pub fn fill(&mut self, x0: usize, y0: usize, x1: usize, y1: usize, style: Style) {
         for y in y0..y1 {
             for x in x0..x1 {

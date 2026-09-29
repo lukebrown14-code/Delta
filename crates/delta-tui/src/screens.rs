@@ -541,3 +541,174 @@ pub fn draw_watchlist_narrow(screen: &mut Screen, state: &WatchlistState) {
 
     draw_status_bar(screen, screen.h - 1, w, true);
 }
+
+/// The equity glossary help entries: (label, help) per group, from
+/// `delta/metrics.toml` `[help]` and the equity group table, in card order.
+pub const GLOSSARY_EQUITY: &[(&str, &[(&str, &str)])] = &[
+    (
+        "Profitability",
+        &[
+            (
+                "Revenue growth",
+                "How fast sales grew in the most recent year.",
+            ),
+            (
+                "EPS growth",
+                "How fast profit per share grew in the most recent year.",
+            ),
+            (
+                "Gross margin",
+                "Profit left after making the product, per dollar of sales.",
+            ),
+            (
+                "Operating margin",
+                "Profit from core operations, per dollar of sales.",
+            ),
+            (
+                "Net margin",
+                "Final profit after every expense, per dollar of sales.",
+            ),
+            (
+                "EBITDA margin",
+                "Operating profit before accounting charges, per dollar of sales.",
+            ),
+            ("ROIC", "Profit made per dollar invested into the business."),
+            ("ROE", "Profit made per dollar of shareholders' money."),
+        ],
+    ),
+    (
+        "Balance Sheet",
+        &[
+            (
+                "Free cash flow",
+                "Cash left after running and growing the business.",
+            ),
+            (
+                "Operating cash flow",
+                "Cash the business generated from operations.",
+            ),
+            ("Total cash", "Cash and short-term investments held."),
+            ("Total debt", "All money owed."),
+            (
+                "Debt / EBITDA",
+                "Years of operating profit needed to repay all debt.",
+            ),
+            (
+                "Interest coverage",
+                "How easily profit covers interest payments.",
+            ),
+            ("Current ratio", "Ability to pay bills due within a year."),
+            (
+                "Quick ratio",
+                "Ability to pay bills due within a year, excluding inventory.",
+            ),
+            (
+                "Debt / Equity",
+                "How much of the company is funded by borrowing.",
+            ),
+        ],
+    ),
+];
+
+/// Greedy word wrap at `width` (Rich's rule for these prose lines).
+fn wrap_words(text: &str, width: usize) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut line = String::new();
+    for word in text.split_whitespace() {
+        if line.is_empty() {
+            line = word.to_string();
+        } else if line.chars().count() + 1 + word.chars().count() <= width {
+            line.push(' ');
+            line.push_str(word);
+        } else {
+            lines.push(std::mem::take(&mut line));
+            line = word.to_string();
+        }
+    }
+    if !line.is_empty() {
+        lines.push(line);
+    }
+    lines
+}
+
+/// The metric glossary modal (`MetricHelpModal`): a blurred-border dialog over
+/// the dimmed base screen. The body is a 22-line scroll window starting at the
+/// top of the content; the footer hint sits under it. Tier B.
+pub fn draw_glossary_overlay(screen: &mut Screen, state: &WatchlistState) {
+    draw_watchlist(screen, state);
+    screen.dim();
+
+    let (x0, y0, x1, y1) = (24usize, 2usize, 95usize, 37usize);
+    let surface = Style::DEFAULT.bg("#0d0d0d");
+    screen.fill(x0, y0, x1 + 1, y1 + 1, surface);
+    let border = Style::fg(color::BORDER_BLURRED).bg("#0d0d0d");
+    screen.put(x0, y0, '┌', border);
+    screen.put(x1, y0, '┐', border);
+    screen.put(x0, y1, '└', border);
+    screen.put(x1, y1, '┘', border);
+    for x in x0 + 1..x1 {
+        screen.put(x, y0, '─', border);
+        screen.put(x, y1, '─', border);
+    }
+    for y in y0 + 1..y1 {
+        screen.put(x0, y, '│', border);
+        screen.put(x1, y, '│', border);
+    }
+
+    // Title, centred: 23 left / 24 right pad in bold blue.
+    let title = "what these metrics mean";
+    screen.text(27, 4, &" ".repeat(21), Style::fg(color::BLUE).bold());
+    screen.text(48, 4, title, Style::fg(color::BLUE).bold());
+    screen.text(71, 4, &" ".repeat(22), Style::fg(color::BLUE).bold());
+
+    // Body: 22 visible lines from the top. Group lines indent 3 (blue bold,
+    // title casefolded); entries indent 4, wrapped at 63, muted bold.
+    let mut lines: Vec<(usize, String, Style)> = Vec::new();
+    for (group_index, (group, entries)) in GLOSSARY_EQUITY.iter().enumerate() {
+        // `.glossary-group { margin-top: 1 }` — a blank line before each
+        // group after the first.
+        if group_index > 0 {
+            lines.push((0, String::new(), Style::DEFAULT.bg("#0d0d0d")));
+        }
+        lines.push((3, group.to_lowercase(), Style::fg(color::BLUE).bold()));
+        for (label, help) in *entries {
+            let text = format!("{label} — {help}");
+            // Wrap width 62: the entry component's text width (Rich wraps the
+            // label+help text; the 4-space indent is outside that).
+            for line in wrap_words(&text, 61) {
+                lines.push((4, line, Style::fg(color::MUTED).bold()));
+            }
+        }
+    }
+    for (index, (indent, text, style)) in lines.iter().take(21).enumerate() {
+        // The indent spaces carry the widget's default style, not the run's.
+        screen.text(
+            25,
+            7 + index,
+            &" ".repeat(*indent),
+            Style::DEFAULT.bg("#0d0d0d"),
+        );
+        screen.text(25 + indent, 7 + index, text, *style);
+    }
+
+    // Footer hint, centred: " esc close " with the key bold blue.
+    screen.text(27, 29, &" ".repeat(28), Style::fg(color::MUTED));
+    let mut x = screen.text(55, 29, "esc", Style::fg(color::BLUE).bold());
+    x = screen.text(x, 29, " close", Style::fg(color::MUTED));
+    screen.text(x, 29, &" ".repeat(29), Style::fg(color::MUTED));
+}
+
+#[cfg(test)]
+mod wrap_tests {
+    use super::wrap_words;
+    #[test]
+    fn eps_wrap() {
+        let lines = wrap_words(
+            "EPS growth — How fast profit per share grew in the most recent year.",
+            62,
+        );
+        for l in &lines {
+            println!("{:?} ({})", l, l.chars().count());
+        }
+    }
+}
