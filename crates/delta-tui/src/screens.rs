@@ -1663,6 +1663,231 @@ fn status_bar_tabs(
     screen.put(w - 1, y, ' ', Style::DEFAULT.bg(color::BLACK));
 }
 
+/// The Watchlist screen at the 200x50 matrix size: same content, inspector
+/// pane stretched, chart 146 wide, grid columns at the captured Rich ratio
+/// positions, and the wide status bar with full tab labels.
+pub fn draw_watchlist_wide(screen: &mut Screen, state: &WatchlistState) {
+    let w = screen.w;
+    let content_bottom = screen.h - 3; // 47 at h=50
+
+    screen.pane(
+        1,
+        0,
+        46,
+        content_bottom,
+        true,
+        &[
+            ("watchlist ", Style::fg(color::BLUE).bold()),
+            ("· ○ idle · 1", Style::fg(color::MUTED).bold()),
+        ],
+        &pane_hints(&[
+            ("a", "add"),
+            ("d", "remove"),
+            ("/", "filter"),
+            ("space", "fold"),
+        ]),
+    );
+    screen.pane(
+        47,
+        0,
+        w - 2,
+        content_bottom,
+        false,
+        &[
+            ("metrics", Style::fg(color::BLUE).bold()),
+            // No count suffix here; the title pad runs to the border.
+        ],
+        &pane_hints(&[
+            ("enter", "refresh"),
+            ("r/R", &format!("range: {}", range_label(state.range))),
+            ("i", "glossary"),
+        ]),
+    );
+
+    // Left pane: identical rows to the 120 layout.
+    draw_list_pane(screen, content_bottom);
+
+    // Inspector.
+    let cx = 48usize;
+    let right_edge = 196usize;
+    let Some(metric) = &state.metric else { return };
+
+    let mut x = cx + 1;
+    x = screen.text(x, 1, &metric.symbol, Style::fg(color::FG).bold());
+    let meta = format!(
+        "  {} · {} · {}",
+        metric.market.to_uppercase(),
+        metric.asset_class,
+        metric.currency
+    );
+    screen.text(x, 1, &meta, Style::fg(color::MUTED).bold());
+
+    let mut x = cx + 1;
+    x = screen.text(x, 2, &metric.current, Style::fg(color::FG).bold());
+    x = screen.text(
+        x,
+        2,
+        &format!(" {}", metric.currency),
+        Style::fg(color::MUTED),
+    );
+    x = screen.text(x, 2, "   ", Style::fg(color::FG));
+    let closed = metric
+        .history_end
+        .as_deref()
+        .map(friendly_date)
+        .map(|d| format!("closed · last {d}"))
+        .unwrap_or_else(|| "— today".to_string());
+    x = screen.text(x, 2, &closed, Style::fg(color::MUTED));
+    screen.text(x, 2, "   ", Style::fg(color::FG));
+
+    let mut x = cx + 1;
+    for label in RANGES {
+        let active = label == state.range;
+        x = screen.text(
+            x,
+            3,
+            range_label(label),
+            if active {
+                Style::fg(color::BLUE).bold()
+            } else {
+                Style::fg(color::MUTED)
+            },
+        );
+        x = screen.text(x, 3, "  ", Style::fg(color::MUTED));
+    }
+    x = screen.text(x, 3, &" ".repeat(87), Style::fg(color::MUTED));
+    if let Some(label) = &metric.change_label {
+        let (arrow, style) = if label.starts_with('+') {
+            ("▲", Style::fg(color::GREEN))
+        } else if label.starts_with('-') {
+            ("▼", Style::fg(color::RED))
+        } else {
+            ("─", Style::fg(color::MUTED))
+        };
+        x = screen.text(x, 3, &format!("{arrow} {label}"), style);
+        if let (Some(hi), Some(lo)) = (metric.period_high, metric.period_low) {
+            x = screen.text(x, 3, "   ", Style::fg(color::MUTED));
+            x = screen.text(
+                x,
+                3,
+                &format!("hi {}", grouped(hi)),
+                Style::fg(color::MUTED),
+            );
+            x = screen.text(x, 3, "   ", Style::fg(color::MUTED));
+            screen.text(
+                x,
+                3,
+                &format!("lo {}", grouped(lo)),
+                Style::fg(color::MUTED),
+            );
+        }
+    }
+
+    let (window, window_times) = chart_window(
+        &metric.series,
+        range_window(state.range),
+        &metric.series_times,
+    );
+    let mut chart = PriceChart::new(window);
+    chart.times = window_times;
+    let line = match metric.change_label.as_deref().unwrap_or("") {
+        l if l.starts_with('-') => color::RED,
+        l if l.starts_with('+') => color::GREEN,
+        _ => color::BLUE,
+    };
+    screen.price_chart(cx + 2, 4, &chart, 146, 16, line);
+
+    // Metric grid at the captured 200-wide ratio positions.
+    screen.text(
+        cx + 1,
+        20,
+        "Available Metrics",
+        Style::fg(color::MUTED).bold(),
+    );
+    screen.text(66, 20, &" ".repeat(51), Style::fg(color::MUTED).bold());
+    screen.fill(cx + 69, 20, right_edge + 1, 21, Style::fg(color::FG));
+    screen.fill(cx + 1, 21, right_edge + 1, 23, Style::fg(color::FG));
+    let mut gy = 21usize;
+    let mut index = 0usize;
+    while index < metric.values.len() {
+        let (label, value) = &metric.values[index];
+        screen.text(cx + 1, gy, label, Style::fg(color::FG));
+        screen.text_right(cx + 76, gy, value, Style::fg(color::FG));
+        if index + 1 < metric.values.len() {
+            let (rlabel, rvalue) = &metric.values[index + 1];
+            screen.text(cx + 77, gy, rlabel, Style::fg(color::FG));
+            screen.text_right(right_edge + 1, gy, rvalue, Style::fg(color::FG));
+        }
+        index += 2;
+        gy += 1;
+    }
+
+    let source_y = gy + 1;
+    let history = friendly_date_range(metric.history_start.as_ref(), metric.history_end.as_ref());
+    screen.text(
+        cx + 1,
+        source_y,
+        &format!("{} · live — · history {}", metric.source, history),
+        Style::fg(color::MUTED),
+    );
+
+    draw_status_bar_wide(screen, screen.h - 1, w, "2 Watchlist");
+}
+
+/// Wide status bar: every tab shows its label; `active` gets the chip.
+fn draw_status_bar_wide(screen: &mut Screen, y: usize, w: usize, active: &str) {
+    let panel = Style::DEFAULT.bg(color::PANEL);
+    let muted = Style::fg(color::MUTED).bold().bg(color::PANEL);
+    let muted_plain = Style::fg(color::MUTED).bg(color::PANEL);
+    let plain = Style::fg(color::FG).bg(color::PANEL);
+    screen.fill(1, y, w, y + 1, panel);
+    screen.put(0, y, ' ', Style::DEFAULT.bg(color::BLACK));
+    // Captured positions: keys expand to "n Label" wide; active is the chip.
+    screen.put(2, y, '1', muted);
+    screen.text(3, y, " Home", muted_plain);
+    if active == "2 Watchlist" {
+        screen.fill(9, y, 22, y + 1, Style::DEFAULT.bg(color::BLUE_BG));
+        screen.text(
+            10,
+            y,
+            active,
+            Style::fg(color::WHITE).bold().bg(color::BLUE_BG),
+        );
+    } else {
+        screen.text(10, y, "2 Watchlist", muted_plain);
+    }
+    screen.put(23, y, '3', muted);
+    screen.text(24, y, " Research", muted_plain);
+    screen.put(35, y, '4', muted);
+    screen.text(36, y, " Theses", muted_plain);
+    screen.put(45, y, '5', muted);
+    screen.text(46, y, " Ask", muted_plain);
+    screen.put(52, y, '6', muted);
+    screen.text(53, y, " Decisions", muted_plain);
+    let cluster = "●  data 1d  openrouter  $0.00  c Settings  ? help · g go ";
+    let mut cx = w - 1 - cluster.chars().count();
+    screen.put(cx, y, '●', Style::fg(color::AMBER).bg(color::PANEL));
+    cx += 1;
+    for (part, style) in [
+        ("  ", panel),
+        ("data 1d", plain),
+        ("  ", panel),
+        ("openrouter", plain),
+        ("  ", panel),
+        ("$0.00", plain),
+        ("  ", panel),
+        ("c", muted),
+        (" Settings", Style::fg(color::MUTED).bg(color::PANEL)),
+        ("  ", panel),
+        ("?", Style::fg(color::MUTED).bg(color::PANEL)),
+        (" help · g go", Style::fg(color::MUTED).bg(color::PANEL)),
+    ] {
+        cx = screen.text(cx, y, part, style);
+    }
+    screen.put(w - 2, y, ' ', panel);
+    screen.put(w - 1, y, ' ', Style::DEFAULT.bg(color::BLACK));
+}
+
 #[cfg(test)]
 mod wrap_tests {
     use super::wrap_words;
