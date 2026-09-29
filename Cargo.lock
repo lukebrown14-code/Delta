@@ -412,6 +412,7 @@ dependencies = [
  "crossterm",
  "delta-core",
  "ratatui",
+ "serde_json",
 ]
 
 [[package]]

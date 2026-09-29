@@ -5,6 +5,8 @@ pub mod braille;
 pub mod chart;
 pub mod components;
 pub mod dialog;
+pub mod screen;
+pub mod screens;
 pub mod table;
 pub mod theme;
 
