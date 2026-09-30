@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use delta_core::models::Instrument;
-use delta_plugins::{yf_symbol, DataPlugin, YahooClient};
+use delta_plugins::{decode_stream_frame, DataPlugin, YahooQuotes};
 use tokio::sync::mpsc;
 
 use crate::desk::now_naive;
@@ -23,58 +23,76 @@ pub fn spawn(
     quotes_enabled: bool,
 ) -> mpsc::UnboundedSender<()> {
     if quotes_enabled {
-        tokio::spawn(quotes_worker(bus.clone(), universe.clone()));
+        tokio::spawn(stream_quotes_worker(bus.clone(), universe.clone()));
     }
     let (gather_tx, gather_rx) = mpsc::unbounded_channel::<()>();
     tokio::spawn(gather_worker(bus.clone(), universe, db_path, gather_rx));
     gather_tx
 }
 
-/// Poll batched Yahoo quotes every `QUOTES_INTERVAL`, reporting live prices.
-const QUOTES_INTERVAL: Duration = Duration::from_secs(30);
+/// Stream Yahoo quotes over the websocket: connect, decode each text frame
+/// with [`delta_plugins::decode_stream_frame`] into the
+/// [`delta_plugins::YahooQuotes`] state machine, and report the latest
+/// prices on the bus. Reconnects with the state machine's exponential
+/// backoff (1s doubling, capped at 30s).
+const STREAM_URL: &str = "wss://streamer.finance.yahoo.com/?version=2";
 
-async fn quotes_worker(bus: mpsc::UnboundedSender<Action>, universe: Vec<Instrument>) {
+async fn stream_quotes_worker(bus: mpsc::UnboundedSender<Action>, universe: Vec<Instrument>) {
+    use futures::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+
     if universe.is_empty() {
         return;
     }
-    let client = YahooClient::default();
-    let symbols: Vec<String> = universe
-        .iter()
-        .map(|inst| yf_symbol(inst, &client.suffixes))
-        .collect();
-    let ids: BTreeMap<String, String> = universe
-        .iter()
-        .map(|inst| (yf_symbol(inst, &client.suffixes), inst.id.clone()))
-        .collect();
+    let suffixes = delta_plugins::yahoo::default_suffixes();
+    let mut quotes = YahooQuotes::new(&universe, &suffixes);
+    let mut delay = YahooQuotes::initial_delay();
     loop {
-        match client.quotes(&symbols).await {
-            Ok(payload) => {
-                let mut prices = BTreeMap::new();
-                if let Some(rows) = payload
-                    .get("quote")
-                    .and_then(|q| q.get("result"))
-                    .and_then(|r| r.as_array())
-                {
-                    for row in rows {
-                        if let (Some(sym), Some(px)) = (
-                            row.get("symbol").and_then(|s| s.as_str()),
-                            row.get("regularMarketPrice").and_then(|p| p.as_f64()),
-                        ) {
-                            if let Some(id) = ids.get(sym) {
-                                prices.insert(id.clone(), px);
+        match tokio_tungstenite::connect_async(STREAM_URL).await {
+            Ok((ws, _)) => {
+                delay = YahooQuotes::initial_delay();
+                let _ = bus.send(Action::Status("live: streaming quotes".to_string()));
+                let (mut sink, mut stream) = ws.split();
+                // Yahoo requires a subscription stanza per symbol.
+                let sub =
+                    serde_json::json!({ "subscribe": quotes.symbols.keys().collect::<Vec<_>>() });
+                if let Err(e) = sink.send(Message::text(sub.to_string())).await {
+                    let _ = bus.send(Action::Status(format!("stream subscribe failed: {e}")));
+                }
+                loop {
+                    match stream.next().await {
+                        Some(Ok(Message::Text(text))) => {
+                            if let Some(value) = decode_stream_frame(&text) {
+                                quotes.receive(&value);
+                                let prices: BTreeMap<String, f64> = quotes
+                                    .quotes
+                                    .iter()
+                                    .map(|(id, q)| (id.clone(), q.price))
+                                    .collect();
+                                if !prices.is_empty() {
+                                    let _ = bus.send(Action::Quotes(prices));
+                                }
                             }
                         }
+                        Some(Ok(Message::Ping(p))) => {
+                            let _ = sink.send(Message::Pong(p)).await;
+                        }
+                        Some(Ok(_)) => {}
+                        Some(Err(e)) => {
+                            let _ = bus.send(Action::Status(format!("stream error: {e}")));
+                            break;
+                        }
+                        None => break,
                     }
-                }
-                if !prices.is_empty() {
-                    let _ = bus.send(Action::Quotes(prices));
                 }
             }
             Err(e) => {
-                let _ = bus.send(Action::Status(format!("quotes error: {e}")));
+                let _ = bus.send(Action::Status(format!("stream connect failed: {e}")));
             }
         }
-        tokio::time::sleep(QUOTES_INTERVAL).await;
+        let wait = YahooQuotes::reconnect_delay(delay);
+        delay = wait;
+        tokio::time::sleep(Duration::from_secs(wait)).await;
     }
 }
 

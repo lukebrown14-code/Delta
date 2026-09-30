@@ -9,3 +9,10 @@ version = "0.1.0"
 
 [profile.release]
 # Defaults; no overrides yet.
+
+# cargo-dist packaging (R4): `cargo dist build` produces the release
+# archives; the GitHub workflow builds them on tag push.
+[workspace.metadata.dist]
+# The binary crate.
+targets = ["aarch64-apple-darwin", "x86_64-unknown-linux-gnu"]
+include = ["crates/delta-tui"]

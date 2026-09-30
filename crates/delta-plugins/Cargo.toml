@@ -7,6 +7,7 @@ version.workspace = true
 
 [dependencies]
 async-trait = "0.1"
+base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["std", "clock", "serde"] }
 delta-core = { path = "../delta-core" }
 feed-rs = "2"
@@ -17,6 +18,7 @@ serde_json = "1"
 log = "0.4"
 thiserror = "2"
 tokio = { version = "1", features = ["rt", "macros", "time", "sync"] }
+tokio-tungstenite = { version = "0.24", default-features = false, features = ["rustls-tls-webpki-roots", "connect"] }
 
 [dev-dependencies]
 tempfile = "3"

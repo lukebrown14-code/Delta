@@ -646,3 +646,175 @@ mod tests {
         assert_eq!(YahooQuotes::reconnect_delay(30), 30);
     }
 }
+
+/// Decode one Yahoo streamer text frame into the JSON shape
+/// [`YahooQuotes::receive`] and [`parse_quote`] expect: the frame is
+/// base64-encoded protobuf (`PricingData`: `id` = field 1 (string),
+/// `price` = field 2 (float32), `time` = field 3 (int64 ms),
+/// `changePercent` = field 6 (float32)). Non-base64 frames (heartbeats)
+/// return `None`.
+pub fn decode_stream_frame(text: &str) -> Option<serde_json::Value> {
+    use base64::Engine;
+    let raw = base64::engine::general_purpose::STANDARD
+        .decode(text.trim())
+        .ok()?;
+    let mut out = serde_json::Map::new();
+    let mut rest = raw.as_slice();
+    while !rest.is_empty() {
+        // Tag varint: (field << 3) | wire_type.
+        let (tag, consumed) = read_varint(rest)?;
+        rest = &rest[consumed..];
+        let field = tag >> 3;
+        let wire = tag & 0b111;
+        match (field, wire) {
+            (1, 2) => {
+                let (len, c) = read_varint(rest)?;
+                rest = &rest[c..];
+                let len = usize::try_from(len).ok()?;
+                if rest.len() < len {
+                    return None;
+                }
+                out.insert(
+                    "id".to_string(),
+                    serde_json::Value::String(String::from_utf8_lossy(&rest[..len]).to_string()),
+                );
+                rest = &rest[len..];
+            }
+            (2, 5) => {
+                if rest.len() < 4 {
+                    return None;
+                }
+                let v = f32::from_le_bytes(rest[..4].try_into().ok()?);
+                out.insert("price".to_string(), serde_json::Value::from(v as f64));
+                rest = &rest[4..];
+            }
+            (3, 0) => {
+                let (v, c) = read_varint(rest)?;
+                rest = &rest[c..];
+                // yfinance's `time` is already ms.
+                out.insert("time".to_string(), serde_json::Value::from(v as f64));
+            }
+            (6, 5) => {
+                if rest.len() < 4 {
+                    return None;
+                }
+                let v = f32::from_le_bytes(rest[..4].try_into().ok()?);
+                out.insert(
+                    "change_percent".to_string(),
+                    serde_json::Value::from(v as f64),
+                );
+                rest = &rest[4..];
+            }
+            (_, 0) => {
+                let (_, c) = read_varint(rest)?;
+                rest = &rest[c..];
+            }
+            (_, 1) => {
+                if rest.len() < 8 {
+                    return None;
+                }
+                rest = &rest[8..];
+            }
+            (_, 2) => {
+                let (len, c) = read_varint(rest)?;
+                rest = &rest[c..];
+                let len = usize::try_from(len).ok()?;
+                if rest.len() < len {
+                    return None;
+                }
+                rest = &rest[len..];
+            }
+            (_, 5) => {
+                if rest.len() < 4 {
+                    return None;
+                }
+                rest = &rest[4..];
+            }
+            _ => return None,
+        }
+    }
+    if out.contains_key("id") {
+        Some(serde_json::Value::Object(out))
+    } else {
+        None
+    }
+}
+
+/// A LEB128 varint; returns `(value, bytes_consumed)`.
+fn read_varint(bytes: &[u8]) -> Option<(u64, usize)> {
+    let mut value = 0u64;
+    let mut shift = 0;
+    for (i, b) in bytes.iter().enumerate() {
+        value |= u64::from(b & 0x7f) << shift;
+        if b & 0x80 == 0 {
+            return Some((value, i + 1));
+        }
+        shift += 7;
+        if shift > 63 {
+            return None;
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod stream_tests {
+    use super::*;
+    use base64::Engine;
+
+    fn varint(v: u64) -> Vec<u8> {
+        let mut out = Vec::new();
+        let mut v = v;
+        loop {
+            let b = (v & 0x7f) as u8;
+            v >>= 7;
+            if v == 0 {
+                out.push(b);
+                break;
+            }
+            out.push(b | 0x80);
+        }
+        out
+    }
+
+    fn tagged(field: u64, wire: u64) -> Vec<u8> {
+        varint((field << 3) | wire)
+    }
+
+    #[test]
+    fn decodes_a_pricing_data_frame() {
+        let mut body = Vec::new();
+        // id = "AAPL"
+        body.extend(tagged(1, 2));
+        body.push(4);
+        body.extend(b"AAPL");
+        // price = 250.5 (float32)
+        body.extend(tagged(2, 5));
+        body.extend(250.5f32.to_le_bytes());
+        // time = 1_700_000_000_000 ms
+        body.extend(tagged(3, 0));
+        body.extend(varint(1_700_000_000_000));
+        // changePercent = -0.25 (float32)
+        body.extend(tagged(6, 5));
+        body.extend((-0.25f32).to_le_bytes());
+        let frame = base64::engine::general_purpose::STANDARD.encode(&body);
+        let value = decode_stream_frame(&frame).expect("decodes");
+        assert_eq!(value["id"], "AAPL");
+        assert!((value["price"].as_f64().unwrap() - 250.5).abs() < 1e-3);
+        assert_eq!(value["time"].as_f64().unwrap(), 1_700_000_000_000.0);
+        assert!((value["change_percent"].as_f64().unwrap() + 0.25).abs() < 1e-4);
+    }
+
+    #[test]
+    fn heartbeats_and_garbage_return_none() {
+        assert!(decode_stream_frame("Pong").is_none());
+        assert!(decode_stream_frame("!!!not base64!!!").is_none());
+        // base64 of a body with an id-less field layout.
+        let body = tagged(2, 5)
+            .into_iter()
+            .chain(1.0f32.to_le_bytes())
+            .collect::<Vec<u8>>();
+        let frame = base64::engine::general_purpose::STANDARD.encode(&body);
+        assert!(decode_stream_frame(&frame).is_none());
+    }
+}

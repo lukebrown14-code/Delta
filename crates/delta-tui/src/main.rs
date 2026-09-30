@@ -198,8 +198,17 @@ impl Component for App {
             Action::Quit => self.quit = true,
             Action::Quotes(prices) => self.desk.live = prices,
             Action::Ingested(counts) => {
-                let total: usize = counts.values().sum();
-                self.status = format!("ingested {total} rows");
+                // Per-source counts, RSS/SEC/bars each visible.
+                let parts: Vec<String> = counts
+                    .iter()
+                    .filter(|(_, n)| **n > 0)
+                    .map(|(source, n)| format!("{source} {n}"))
+                    .collect();
+                self.status = if parts.is_empty() {
+                    "ingest: nothing new".to_string()
+                } else {
+                    format!("ingest: {}", parts.join(" · "))
+                };
                 self.desk.last_ingest = Some(counts);
                 if let delta_tui::desk::Source::Real(db) = &self.desk.source {
                     let db = db.clone();
@@ -453,7 +462,7 @@ mod tests {
         let mut counts = BTreeMap::new();
         counts.insert("bar".to_string(), 5);
         a.update(Action::Ingested(counts));
-        assert!(a.status.contains("ingested 5"));
+        assert_eq!(a.status, "ingest: bar 5");
     }
 
     #[test]
