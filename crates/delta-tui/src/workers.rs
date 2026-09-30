@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use delta_core::models::Instrument;
-use delta_plugins::{decode_stream_frame, DataPlugin, YahooQuotes};
+use delta_plugins::{decode_stream_frame, yf_symbol, DataPlugin, YahooClient, YahooQuotes};
 use tokio::sync::mpsc;
 
 use crate::desk::now_naive;
@@ -24,6 +24,7 @@ pub fn spawn(
 ) -> mpsc::UnboundedSender<()> {
     if quotes_enabled {
         tokio::spawn(stream_quotes_worker(bus.clone(), universe.clone()));
+        tokio::spawn(metrics_worker(bus.clone(), universe.clone()));
     }
     let (gather_tx, gather_rx) = mpsc::unbounded_channel::<()>();
     tokio::spawn(gather_worker(bus.clone(), universe, db_path, gather_rx));
@@ -93,6 +94,34 @@ async fn stream_quotes_worker(bus: mpsc::UnboundedSender<Action>, universe: Vec<
         let wait = YahooQuotes::reconnect_delay(delay);
         delay = wait;
         tokio::time::sleep(Duration::from_secs(wait)).await;
+    }
+}
+
+/// Refresh the inspector metrics (`quoteSummary`) every `METRICS_INTERVAL`.
+const METRICS_INTERVAL: Duration = Duration::from_secs(60);
+const METRICS_MODULES: &str = "price,summaryDetail,defaultKeyStatistics,financialData,assetProfile";
+
+async fn metrics_worker(bus: mpsc::UnboundedSender<Action>, universe: Vec<Instrument>) {
+    let client = YahooClient::default();
+    loop {
+        for inst in &universe {
+            let symbol = yf_symbol(inst, &client.suffixes);
+            match client.quote_summary(&symbol, METRICS_MODULES).await {
+                Ok(payload) => {
+                    if let Some(info) = delta_plugins::merge_quote_summary(&payload) {
+                        let rows = delta_plugins::headline_values(&info);
+                        let _ = bus.send(Action::Metrics {
+                            instrument: inst.id.clone(),
+                            rows,
+                        });
+                    }
+                }
+                Err(e) => {
+                    let _ = bus.send(Action::Status(format!("metrics error: {e}")));
+                }
+            }
+        }
+        tokio::time::sleep(METRICS_INTERVAL).await;
     }
 }
 

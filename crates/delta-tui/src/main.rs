@@ -197,6 +197,9 @@ impl Component for App {
         match action {
             Action::Quit => self.quit = true,
             Action::Quotes(prices) => self.desk.live = prices,
+            Action::Metrics { instrument, rows } => {
+                self.desk.metrics.insert(instrument, rows);
+            }
             Action::Ingested(counts) => {
                 // Per-source counts, RSS/SEC/bars each visible.
                 let parts: Vec<String> = counts
@@ -463,6 +466,16 @@ mod tests {
         counts.insert("bar".to_string(), 5);
         a.update(Action::Ingested(counts));
         assert_eq!(a.status, "ingest: bar 5");
+        // Metrics flow into the desk and out through the watch state.
+        a.update(Action::Metrics {
+            instrument: "US:AAPL".to_string(),
+            rows: vec![("Market cap".to_string(), "$3.40T".to_string())],
+        });
+        let metric = a.desk.watch_state().metric.unwrap();
+        assert!(metric
+            .values
+            .iter()
+            .any(|(l, v)| l == "Market cap" && v == "$3.40T"));
     }
 
     #[test]
@@ -497,6 +510,40 @@ mod tests {
                 let mut terminal = Terminal::new(backend).unwrap();
                 terminal.draw(|frame| a.draw(frame, frame.area())).unwrap();
             }
+        }
+    }
+
+    #[test]
+    fn metrics_rows_render_on_the_watchlist_screen() {
+        let mut a = app();
+        let rows = vec![
+            ("Market cap".to_string(), "$4.86T".to_string()),
+            ("P/E".to_string(), "31.2x".to_string()),
+            ("Gross margin".to_string(), "48.7%".to_string()),
+            ("Free cash flow".to_string(), "$107.72B".to_string()),
+            ("Dividend yield".to_string(), "0.3%".to_string()),
+        ];
+        let mut metrics = BTreeMap::new();
+        metrics.insert("US:AAPL".to_string(), rows);
+        a.desk.metrics = metrics;
+        let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        terminal.draw(|f| a.draw(f, f.area())).unwrap();
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(ratatui::buffer::Cell::symbol)
+            .collect();
+        for probe in [
+            "Market cap",
+            "$4.86T",
+            "P/E",
+            "Gross margin",
+            "Free cash flow",
+            "Dividend yield",
+        ] {
+            assert!(text.contains(probe), "missing {probe} on screen");
         }
     }
 }

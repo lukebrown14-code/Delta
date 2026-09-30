@@ -93,6 +93,8 @@ pub struct Desk {
     pub range_index: usize,
     /// Live quotes keyed by instrument id (`regularMarketPrice`).
     pub live: BTreeMap<String, f64>,
+    /// Inspector metric rows keyed by instrument id (metrics worker).
+    pub metrics: BTreeMap<String, Vec<(String, String)>>,
     pub source: Source,
     /// Last ingest counts, when a gather has run this session.
     pub last_ingest: Option<BTreeMap<String, usize>>,
@@ -114,6 +116,7 @@ impl Desk {
                 selected: 0,
                 range_index: 2, // "1m"
                 live: BTreeMap::new(),
+                metrics: BTreeMap::new(),
                 source: Source::Real(db_path),
                 last_ingest: None,
             },
@@ -154,6 +157,7 @@ impl Desk {
             selected: 0,
             range_index: 2, // "1m"
             live: BTreeMap::new(),
+            metrics: BTreeMap::new(),
             source: Source::Offline,
             last_ingest: None,
         }
@@ -214,6 +218,11 @@ impl Desk {
         let mut values = vec![("Current price".to_string(), grouped(last))];
         if live.is_some() {
             values.push(("Source".to_string(), "live quote".to_string()));
+        }
+        // Provider metrics in table order; capped to the two-column grid's
+        // visible rows so the source line never scrolls out of the pane.
+        if let Some(rows) = self.metrics.get(&cur.instrument.id) {
+            values.extend(rows.iter().take(24).cloned());
         }
         WatchlistState {
             range,

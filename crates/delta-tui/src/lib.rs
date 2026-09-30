@@ -36,6 +36,11 @@ pub enum Action {
     Goto(&'static str),
     /// Live quote prices keyed by instrument id (from the quotes worker).
     Quotes(BTreeMap<String, f64>),
+    /// Inspector metric rows (label, formatted value) for one instrument.
+    Metrics {
+        instrument: String,
+        rows: Vec<(String, String)>,
+    },
     /// Ingest finished; carries per-source row counts.
     Ingested(BTreeMap<String, usize>),
     /// Request a gather run (UI -> ingest worker).
