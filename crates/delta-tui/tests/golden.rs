@@ -6,9 +6,11 @@ use std::path::PathBuf;
 
 use delta_tui::screen::Screen;
 use delta_tui::screens::{
-    draw_ask, draw_decisions, draw_glossary_overlay, draw_home, draw_research, draw_settings,
-    draw_theses, draw_watchlist, draw_watchlist_narrow, draw_watchlist_wide, grouped, HomeState,
-    MetricsData, WatchlistState,
+    draw_ask, draw_ask_narrow, draw_ask_wide, draw_decisions, draw_decisions_narrow,
+    draw_decisions_wide, draw_glossary_overlay, draw_home, draw_home_narrow, draw_home_wide,
+    draw_research, draw_research_narrow, draw_research_wide, draw_settings, draw_settings_narrow,
+    draw_settings_wide, draw_theses, draw_theses_narrow, draw_theses_wide, draw_watchlist,
+    draw_watchlist_narrow, draw_watchlist_wide, grouped, HomeState, MetricsData, WatchlistState,
 };
 
 fn golden_path(name: &str) -> PathBuf {
@@ -133,6 +135,83 @@ fn assert_golden(name: &str, range: &'static str) {
     );
 }
 
+/// Render `draw` at each size and require zero Tier A mismatches against the
+/// exporter's golden for that size (the full R4 3-size matrix rule).
+fn assert_sized_tier_a(name: &str, sizes: &[(usize, usize)], draw: impl Fn(&mut Screen)) {
+    for &(w, h) in sizes {
+        let mut screen = Screen::new(w, h);
+        draw(&mut screen);
+        let diffs = golden_diff_sized(&screen, &format!("{name}-{w}x{h}"));
+        for d in &diffs {
+            println!("{d}");
+        }
+        assert!(
+            diffs.is_empty(),
+            "{name} at {w}x{h}: {} Tier A mismatches\n{}",
+            diffs.len(),
+            diffs.join("\n")
+        );
+    }
+}
+
+/// Tier B rule for the glossary overlay: the text layer must be exact at
+/// every size; colour differences are logged as findings, not failures.
+fn assert_glossary_sized_tier_b(w: usize, h: usize) {
+    let mut screen = Screen::new(w, h);
+    draw_glossary_overlay(&mut screen, &state("1m"));
+    let raw = std::fs::read_to_string(std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(
+        format!("../../fixtures/golden_screens/glossary-{w}x{h}.json"),
+    ))
+    .unwrap();
+    let value: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    let mut char_diffs = Vec::new();
+    let mut color_diffs = Vec::new();
+    for (y, row) in value["rows"].as_array().unwrap().iter().enumerate() {
+        for (x, cell) in row.as_array().unwrap().iter().enumerate() {
+            let mine = &screen.cells[y * screen.w + x];
+            let want_ch = cell["ch"].as_str().unwrap().chars().next().unwrap();
+            if mine.ch != want_ch {
+                char_diffs.push(format!(
+                    "row {y} col {x}: want {want_ch:?} got {:?}",
+                    mine.ch
+                ));
+                continue;
+            }
+            let want_fg = cell["fg"].as_str();
+            let want_bg = cell["bg"].as_str();
+            let want_bold = cell["attrs"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|a| a == "bold");
+            if (mine.fg, mine.bg, mine.bold) != (want_fg, want_bg, want_bold) {
+                color_diffs.push(format!(
+                    "row {y} col {x}: want {want_fg:?}/{want_bg:?}/b={want_bold} got {:?}/{:?}/b={:?}",
+                    mine.fg, mine.bg, mine.bold
+                ));
+            }
+        }
+    }
+    if !color_diffs.is_empty() {
+        println!(
+            "glossary at {w}x{h}: {} colour findings (Tier B, logged):\n{}",
+            color_diffs.len(),
+            color_diffs
+                .iter()
+                .take(30)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+    }
+    assert!(
+        char_diffs.is_empty(),
+        "glossary at {w}x{h}: {} text mismatches\n{}",
+        char_diffs.len(),
+        char_diffs.join("\n")
+    );
+}
+
 #[test]
 fn default_state_tier_a() {
     assert_golden("default", "1m");
@@ -188,87 +267,19 @@ fn narrow_state_tier_a() {
 }
 
 #[test]
-fn glossary_state_tier_b() {
+fn glossary_state_tier_a() {
+    // The VerticalScroll scrollbar (cols 90-91) is ported, so the glossary
+    // now gates at Tier A like every other screen.
     let mut screen = Screen::new(120, 40);
     draw_glossary_overlay(&mut screen, &state("1m"));
-    let raw = std::fs::read_to_string(
-        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../fixtures/golden_screens/glossary-120x40.json"),
-    )
-    .unwrap();
-    let value: serde_json::Value = serde_json::from_str(&raw).unwrap();
-    // Tier B: the text layer must be exact (wrap points are deterministic for
-    // this content); colour diffs are logged as findings, not failures.
-    let mut char_diffs = Vec::new();
-    let mut color_diffs = Vec::new();
-    for (y, row) in value["rows"].as_array().unwrap().iter().enumerate() {
-        for (x, cell) in row.as_array().unwrap().iter().enumerate() {
-            let mine = &screen.cells[y * screen.w + x];
-            // The body's vertical scrollbar (cols 90-91, its ▄ thumb glyphs)
-            // is not ported yet — findings #6 in rust-screens.md; excluded
-            // from the Tier B check.
-            if (x == 90 || x == 91) && (6..=28).contains(&y) {
-                continue;
-            }
-            let want_ch = cell["ch"].as_str().unwrap().chars().next().unwrap();
-            if mine.ch != want_ch {
-                char_diffs.push(format!(
-                    "row {y} col {x}: want {want_ch:?} got {:?}",
-                    mine.ch
-                ));
-                continue;
-            }
-            let want_fg = cell["fg"].as_str();
-            let want_bg = cell["bg"].as_str();
-            let want_bold = cell["attrs"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|a| a == "bold");
-            // The body's vertical scrollbar (cols 90-91) is not ported yet —
-            // findings #6 in rust-screens.md; excluded from the Tier B check.
-            if (x == 90 || x == 91) && (6..=28).contains(&y) {
-                continue;
-            }
-            if (mine.fg, mine.bg, mine.bold) != (want_fg, want_bg, want_bold) {
-                color_diffs.push(format!(
-                    "row {y} col {x}: want {want_fg:?}/{want_bg:?}/b={want_bold} got {:?}/{:?}/b={:?}",
-                    mine.fg, mine.bg, mine.bold
-                ));
-            }
-        }
-        if char_diffs.len() >= 30 {
-            break;
-        }
+    let diffs = golden_diff_sized(&screen, "glossary-120x40");
+    for d in &diffs {
+        println!("{d}");
     }
-    if !color_diffs.is_empty() {
-        println!(
-            "glossary Tier B colour findings ({}):\n{}",
-            color_diffs.len(),
-            color_diffs
-                .iter()
-                .take(30)
-                .cloned()
-                .collect::<Vec<_>>()
-                .join("\n")
-        );
-    }
-    assert!(
-        color_diffs.is_empty(),
-        "glossary: {} colour findings outside the logged scrollbar gap\n{}",
-        color_diffs.len(),
-        color_diffs.join("\n")
-    );
-    assert!(
-        char_diffs.is_empty(),
-        "glossary: {} text mismatches\n{}",
-        char_diffs.len(),
-        char_diffs.join("\n")
-    );
+    assert!(diffs.is_empty(), "glossary: {} mismatches", diffs.len());
 }
 
-#[test]
-fn home_state_tier_a() {
+fn home_state() -> HomeState {
     let (_series, _times) = series();
     let closes: Vec<f64> = (40..80)
         .map(|i| {
@@ -280,16 +291,21 @@ fn home_state_tier_a() {
     let last = closes[closes.len() - 1];
     let prev = closes[closes.len() - 2];
     let chg_label = format!("{:+.2}%", (last / prev - 1.0) * 100.0);
-    let home = HomeState {
+    HomeState {
         clock: "Monday 21 September 2026 · 09:30:00 UTC".to_string(),
         symbol: "AAPL".to_string(),
         last: grouped(last),
         chg_label,
         spark,
         since_stamp: "since Mon 09:30".to_string(),
-    };
+        closes,
+    }
+}
+
+#[test]
+fn home_state_tier_a() {
     let mut screen = Screen::new(120, 40);
-    draw_home(&mut screen, &home);
+    draw_home(&mut screen, &home_state());
     let raw = std::fs::read_to_string(
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../fixtures/golden_screens/home-120x40.json"),
@@ -511,3 +527,69 @@ fn range_cycled_200x50_matrix() {
     }
     assert!(diffs.is_empty(), "{} mismatches", diffs.len());
 }
+
+// ---- R4: the full 3-size golden matrix (80x24, 120x40, 200x50) ----
+
+/// At 80x24 the watchlist inspector is the narrow breakpoint layout.
+#[test]
+fn watchlist_80x24_matrix() {
+    for (name, range) in [("default", "1m"), ("range-cycled", "6m")] {
+        let mut screen = Screen::new(80, 24);
+        draw_watchlist_narrow(&mut screen, &state(range));
+        let diffs = golden_diff_sized(&screen, &format!("{name}-80x24"));
+        for d in &diffs {
+            println!("{d}");
+        }
+        assert!(
+            diffs.is_empty(),
+            "{name} at 80x24: {} mismatches\n{}",
+            diffs.len(),
+            diffs.join("\n")
+        );
+    }
+}
+
+#[test]
+fn home_matrix_tier_a() {
+    assert_sized_tier_a("home", &[(80, 24)], |s| draw_home_narrow(s, &home_state()));
+    assert_sized_tier_a("home", &[(200, 50)], |s| draw_home_wide(s, &home_state()));
+}
+
+#[test]
+fn research_matrix_tier_a() {
+    assert_sized_tier_a("research", &[(80, 24)], draw_research_narrow);
+    assert_sized_tier_a("research", &[(200, 50)], draw_research_wide);
+}
+
+#[test]
+fn theses_matrix_tier_a() {
+    assert_sized_tier_a("theses", &[(80, 24)], draw_theses_narrow);
+    assert_sized_tier_a("theses", &[(200, 50)], draw_theses_wide);
+}
+
+#[test]
+fn ask_matrix_tier_a() {
+    assert_sized_tier_a("ask", &[(80, 24)], draw_ask_narrow);
+    assert_sized_tier_a("ask", &[(200, 50)], draw_ask_wide);
+}
+
+#[test]
+fn decisions_matrix_tier_a() {
+    assert_sized_tier_a("decisions", &[(80, 24)], draw_decisions_narrow);
+    assert_sized_tier_a("decisions", &[(200, 50)], draw_decisions_wide);
+}
+
+#[test]
+fn settings_matrix_tier_a() {
+    assert_sized_tier_a("settings", &[(80, 24)], draw_settings_narrow);
+    assert_sized_tier_a("settings", &[(200, 50)], draw_settings_wide);
+}
+
+#[test]
+fn glossary_matrix_tier_b() {
+    // 120x40 is gated Tier A by glossary_state_tier_a; the other two sizes
+    // are Tier B: text exact, colour findings logged for triage.
+    assert_glossary_sized_tier_b(80, 24);
+    assert_glossary_sized_tier_b(200, 50);
+}
+// (dbg helper removed)

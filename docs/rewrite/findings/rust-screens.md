@@ -44,6 +44,6 @@ cell-grid model in `crates/delta-tui/src/screen.rs` and the harness in
 
 | # | State | Tier | Notes |
 |---|---|---|---|
-| 6 | gap | `glossary-120x40` (Tier B) | Prose modal; Tier B diffs are logged as findings rather than failures. Needs the DeltaMarkdown-style text wrapping rules first |
-| 7 | gap | other screens | Research, Theses, Ask, Decisions, Settings: exporter scenarios + goldens now exist for all three sizes (R4 matrix), and `delta-services::fixture::seed_offline_desk` feeds the environment offline. The five screens' painters are the remaining R3 work — same loop as Home |
+| 6 | closed | `glossary-120x40` | The VerticalScroll scrollbar is ported (track, half-block cap, proportional thumb); the glossary now gates Tier A at 120x40 and Tier B (text exact) at 80x24/200x50 |
+| 7 | closed | other screens | All screens now have narrow (80x24) and wide (200x50) painters; the full 3-size golden matrix is Tier A green (glossary Tier B: text exact, colour findings logged) |
 | 8 | simplify | `screens.rs` | The painter is layout-hardcoded to the captured geometry; as more states land, factor shared pieces (pane hints, hero row) behind the data they render. Deliberately not generalised ahead of the second screen |
