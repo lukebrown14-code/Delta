@@ -4,6 +4,7 @@ pub mod axes;
 pub mod braille;
 pub mod chart;
 pub mod components;
+pub mod desk;
 pub mod dialog;
 pub mod screen;
 pub mod screens;
