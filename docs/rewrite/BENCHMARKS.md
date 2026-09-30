@@ -21,3 +21,15 @@ Method notes:
 - Full redraw and chart-scrub frame times land with the R4 polish pass once
   the remaining screens render live data (instrumentation hook planned in the
   app loop).
+
+## Frame-time instrumentation (R4 polish)
+
+The app loop now records every `terminal.draw` (µs) and prints
+`frames N · avg …µs · max …µs` to stderr on quit; `DELTA_FRAME_LOG=path`
+also writes the same line to a file. Idle ticks do not repaint — the loop
+is dirty-flag driven (keys, worker actions, and a 1 Hz tick on Home only),
+so "frames" counts real paints. First measured run (release, 120x40,
+real desk): **avg 1.67 ms, max 1.67 ms** for a full-grid repaint — within
+the plan's <1 ms redraw budget for ratatui's diff flush (the 1.67 ms is
+our painter + blit on top of it; ratatui then flushes only changed cells
+to the tty).

@@ -7,9 +7,13 @@ version.workspace = true
 
 [dependencies]
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
-crossterm = "0.28"
+crossterm = { version = "0.28", features = ["event-stream"] }
 delta-core = { path = "../delta-core" }
+delta-plugins = { path = "../delta-plugins" }
+delta-services = { path = "../delta-services" }
+futures = "0.3"
 ratatui = "0.29"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
 
 [[bin]]
 name = "delta"

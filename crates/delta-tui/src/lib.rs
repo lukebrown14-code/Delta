@@ -10,16 +10,19 @@ pub mod screen;
 pub mod screens;
 pub mod table;
 pub mod theme;
+pub mod workers;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Rect;
 use ratatui::Frame;
 
+use std::collections::BTreeMap;
+
 /// Shared breakpoint carried over from `delta/tui/shell.py` (`NARROW_WIDTH`).
 pub const NARROW_WIDTH: u16 = 100;
 
 /// A discrete app-level event flowing through the action bus.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Action {
     /// No state change.
     Noop,
@@ -31,6 +34,14 @@ pub enum Action {
     CloseDialog,
     /// Navigate to a screen by name.
     Goto(&'static str),
+    /// Live quote prices keyed by instrument id (from the quotes worker).
+    Quotes(BTreeMap<String, f64>),
+    /// Ingest finished; carries per-source row counts.
+    Ingested(BTreeMap<String, usize>),
+    /// Request a gather run (UI -> ingest worker).
+    Gather,
+    /// One-line worker status for the status overlay.
+    Status(String),
 }
 
 /// Ratatui component template (see `docs/RUST_REWRITE_PLAN.md`).

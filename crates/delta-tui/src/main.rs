@@ -1,20 +1,23 @@
-//! Delta TUI binary: the real screens over the terminal, offline desk data.
-//! The app library lives in `delta_tui` (see `lib.rs`).
+//! Delta TUI binary: the real screens over the terminal, desk data from
+//! `config.toml` + the configured DB, background quote/ingest workers over
+//! the action bus. The app library lives in `delta_tui` (see `lib.rs`).
 
 use std::io::Stdout;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use crossterm::event::{Event, KeyCode, KeyEvent};
+use crossterm::event::{Event, EventStream, KeyCode, KeyEvent};
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
 use crossterm::{execute, queue};
+use futures::StreamExt;
 use ratatui::backend::CrosstermBackend;
 use ratatui::style::{Color, Modifier, Style as RStyle};
 use ratatui::{Frame, Terminal};
+use tokio::sync::mpsc;
 
 use delta_tui::desk::Desk;
-use delta_tui::screen::Screen;
+use delta_tui::screen::{color, Screen, Style};
 use delta_tui::screens::{
     draw_ask, draw_ask_narrow, draw_ask_wide, draw_decisions, draw_decisions_narrow,
     draw_decisions_wide, draw_glossary_overlay, draw_home, draw_home_narrow, draw_home_wide,
@@ -22,7 +25,7 @@ use delta_tui::screens::{
     draw_settings_wide, draw_theses, draw_theses_narrow, draw_theses_wide, draw_watchlist,
     draw_watchlist_narrow, draw_watchlist_wide,
 };
-use delta_tui::{is_quit_key, Action, Component};
+use delta_tui::{is_quit_key, workers, Action, Component};
 
 /// The seven panes: 1-6 plus `c`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,52 +39,124 @@ enum Tab {
     Settings,
 }
 
+/// Frame-time counters, printed on exit (R4 instrumentation hook).
+#[derive(Debug, Default)]
+struct FrameStats {
+    count: u64,
+    total_us: u128,
+    max_us: u128,
+}
+
+impl FrameStats {
+    fn record(&mut self, us: u128) {
+        self.count += 1;
+        self.total_us += us;
+        self.max_us = self.max_us.max(us);
+    }
+
+    fn report(&self) -> String {
+        let avg = if self.count > 0 {
+            self.total_us / self.count as u128
+        } else {
+            0
+        };
+        format!(
+            "frames {} · avg {avg:.0}µs · max {}µs",
+            self.count, self.max_us
+        )
+    }
+}
+
 /// The app: desk data + active pane, painting through the golden `Screen`
 /// model so the live frame is cell-for-cell what the goldens capture.
 struct App {
     desk: Desk,
     tab: Tab,
     glossary: bool,
+    status: String,
+    frame_stats: FrameStats,
     quit: bool,
 }
 
 impl App {
-    fn paint(&self, screen: &mut Screen) {
+    fn paint(&mut self, screen: &mut Screen) {
         let w = screen.w;
-        if w >= 160 {
-            match self.tab {
-                Tab::Home => draw_home_wide(screen, &self.desk.home_state()),
-                Tab::Watchlist => draw_watchlist_wide(screen, &self.desk.watch_state()),
-                Tab::Research => draw_research_wide(screen),
-                Tab::Theses => draw_theses_wide(screen),
-                Tab::Ask => draw_ask_wide(screen),
-                Tab::Decisions => draw_decisions_wide(screen),
-                Tab::Settings => draw_settings_wide(screen),
-            }
-        } else if w < delta_tui::NARROW_WIDTH as usize {
-            match self.tab {
-                Tab::Home => draw_home_narrow(screen, &self.desk.home_state()),
-                Tab::Watchlist => draw_watchlist_narrow(screen, &self.desk.watch_state()),
-                Tab::Research => draw_research_narrow(screen),
-                Tab::Theses => draw_theses_narrow(screen),
-                Tab::Ask => draw_ask_narrow(screen),
-                Tab::Decisions => draw_decisions_narrow(screen),
-                Tab::Settings => draw_settings_narrow(screen),
-            }
-        } else {
-            match self.tab {
-                Tab::Home => draw_home(screen, &self.desk.home_state()),
-                Tab::Watchlist => draw_watchlist(screen, &self.desk.watch_state()),
-                Tab::Research => draw_research(screen),
-                Tab::Theses => draw_theses(screen),
-                Tab::Ask => draw_ask(screen),
-                Tab::Decisions => draw_decisions(screen),
-                Tab::Settings => draw_settings(screen),
-            }
+        let wide = w >= 160;
+        let narrow = w < delta_tui::NARROW_WIDTH as usize;
+        macro_rules! route {
+            ($wide:expr, $normal:expr, $narrow:expr) => {
+                if wide {
+                    $wide
+                } else if narrow {
+                    $narrow
+                } else {
+                    $normal
+                }
+            };
+        }
+        match self.tab {
+            Tab::Home => route!(
+                draw_home_wide(screen, &self.desk.home_state()),
+                draw_home(screen, &self.desk.home_state()),
+                draw_home_narrow(screen, &self.desk.home_state())
+            ),
+            Tab::Watchlist => route!(
+                draw_watchlist_wide(screen, &self.desk.watch_state()),
+                draw_watchlist(screen, &self.desk.watch_state()),
+                draw_watchlist_narrow(screen, &self.desk.watch_state())
+            ),
+            Tab::Research => route!(
+                draw_research_wide(screen),
+                draw_research(screen),
+                draw_research_narrow(screen)
+            ),
+            Tab::Theses => route!(
+                draw_theses_wide(screen),
+                draw_theses(screen),
+                draw_theses_narrow(screen)
+            ),
+            Tab::Ask => route!(
+                draw_ask_wide(screen),
+                draw_ask(screen),
+                draw_ask_narrow(screen)
+            ),
+            Tab::Decisions => route!(
+                draw_decisions_wide(screen),
+                draw_decisions(screen),
+                draw_decisions_narrow(screen)
+            ),
+            Tab::Settings => route!(
+                draw_settings_wide(screen),
+                draw_settings(screen),
+                draw_settings_narrow(screen)
+            ),
         }
         if self.glossary && self.tab == Tab::Watchlist {
             draw_glossary_overlay(screen, &self.desk.watch_state());
         }
+        self.paint_status_overlay(screen);
+    }
+
+    /// A right-aligned live badge on the last row: quotes, gather status and
+    /// the data source. Painted after the status bar, so it wins the cells.
+    fn paint_status_overlay(&mut self, screen: &mut Screen) {
+        let y = screen.h.saturating_sub(1);
+        let mut label = String::new();
+        if !self.desk.live.is_empty() {
+            label.push_str(&format!("● live {}  ", self.desk.live.len()));
+        }
+        match &self.desk.source {
+            delta_tui::desk::Source::Real(db) => {
+                label.push_str(&format!("db {}", db.display()));
+            }
+            delta_tui::desk::Source::Offline => label.push_str("offline seed"),
+        }
+        if !self.status.is_empty() {
+            label.push_str(&format!("  ·  {}", self.status));
+        }
+        let style = Style::fg(color::GREEN);
+        let start = screen.w.saturating_sub(label.chars().count());
+        screen.text(start, y, &label, style);
     }
 }
 
@@ -101,23 +176,45 @@ impl Component for App {
             KeyCode::Char('c') => self.tab = Tab::Settings,
             KeyCode::Char('g') if self.tab == Tab::Watchlist => self.glossary = !self.glossary,
             KeyCode::Char('h') | KeyCode::Left if self.tab == Tab::Watchlist => {
-                self.desk.cycle_range(-1)
+                self.desk.cycle_range(-1);
             }
             KeyCode::Char('l') | KeyCode::Right if self.tab == Tab::Watchlist => {
-                self.desk.cycle_range(1)
+                self.desk.cycle_range(1);
             }
+            KeyCode::Char(',') if !self.desk.instruments.is_empty() => {
+                self.desk.cycle_instrument(-1);
+            }
+            KeyCode::Char('.') if !self.desk.instruments.is_empty() => {
+                self.desk.cycle_instrument(1);
+            }
+            KeyCode::Char('U') => return Some(Action::Gather),
             _ => {}
         }
         None
     }
 
     fn update(&mut self, action: Action) {
-        if action == Action::Quit {
-            self.quit = true;
+        match action {
+            Action::Quit => self.quit = true,
+            Action::Quotes(prices) => self.desk.live = prices,
+            Action::Ingested(counts) => {
+                let total: usize = counts.values().sum();
+                self.status = format!("ingested {total} rows");
+                self.desk.last_ingest = Some(counts);
+                if let delta_tui::desk::Source::Real(db) = &self.desk.source {
+                    let db = db.clone();
+                    self.desk.reload_from(&db);
+                }
+            }
+            Action::Status(msg) => self.status = msg,
+            _ => {}
         }
     }
 
     fn draw(&mut self, frame: &mut Frame, area: ratatui::layout::Rect) {
+        if area.width < 4 || area.height < 4 {
+            return; // degenerate terminal; the painters assume a status bar
+        }
         let mut screen = Screen::new(area.width as usize, area.height as usize);
         self.paint(&mut screen);
         blit(frame, &screen, area);
@@ -162,31 +259,101 @@ fn main() -> std::io::Result<()> {
         return Ok(());
     }
     let mut terminal = setup()?;
-    let res = run(&mut terminal);
+    let runtime = tokio::runtime::Runtime::new()?;
+    let res = runtime.block_on(run(&mut terminal));
     teardown(&mut terminal)?;
     res
 }
 
-fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> std::io::Result<()> {
+async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> std::io::Result<()> {
+    let (bus_tx, mut bus_rx) = mpsc::unbounded_channel::<Action>();
+    let desk = Desk::open();
+    let universe: Vec<delta_core::models::Instrument> = desk
+        .instruments
+        .iter()
+        .map(|d| d.instrument.clone())
+        .collect();
+    let db_path = match &desk.source {
+        delta_tui::desk::Source::Real(db) => Some(db.clone()),
+        delta_tui::desk::Source::Offline => None,
+    };
+    // Quotes hit the network; opt in with DELTA_QUOTES=1.
+    let quotes_enabled = std::env::var("DELTA_QUOTES").as_deref() == Ok("1");
+    let gather_tx = workers::spawn(bus_tx.clone(), universe, db_path, quotes_enabled);
+
     let mut app = App {
-        desk: Desk::offline(),
+        desk,
         tab: Tab::Watchlist,
         glossary: false,
+        status: String::new(),
+        frame_stats: FrameStats::default(),
         quit: false,
     };
+
+    let mut events = EventStream::new();
+    let mut tick = tokio::time::interval(Duration::from_millis(50));
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut clock = tokio::time::interval(Duration::from_secs(1)); // the home clock
+    let mut dirty = true; // first frame
     loop {
-        terminal.draw(|frame| app.draw(frame, frame.area()))?;
-        if !crossterm::event::poll(Duration::from_millis(100))? {
-            continue;
+        if dirty {
+            let started = Instant::now();
+            let size = terminal.size()?;
+            let area = ratatui::layout::Rect::new(0, 0, size.width, size.height);
+            app.draw_frame(terminal, area)?;
+            app.frame_stats.record(started.elapsed().as_micros());
+            dirty = false;
         }
-        if let Event::Key(key) = crossterm::event::read()? {
-            if let Some(action) = app.handle_key(key) {
+        tokio::select! {
+            maybe_event = events.next() => {
+                match maybe_event {
+                    Some(Ok(Event::Key(key))) => {
+                        dirty = true;
+                        if let Some(action) = app.handle_key(key) {
+                            if action == Action::Gather {
+                                let _ = gather_tx.send(());
+                            } else {
+                                app.update(action);
+                            }
+                        }
+                    }
+                    Some(Ok(_)) => {
+                        dirty = true;
+                    }
+                    Some(Err(e)) => return Err(std::io::Error::other(e.to_string())),
+                    None => {}
+                }
+            }
+            Some(action) = bus_rx.recv() => {
+                dirty = true;
                 app.update(action);
             }
+            _ = clock.tick() => {
+                // The home clock reads the wall clock; repaint once a second.
+                if app.tab == Tab::Home {
+                    dirty = true;
+                }
+            }
+            _ = tick.tick() => {}
         }
         if app.quit {
+            eprintln!("{}", app.frame_stats.report());
+            if let Ok(path) = std::env::var("DELTA_FRAME_LOG") {
+                let _ = std::fs::write(path, app.frame_stats.report());
+            }
             return Ok(());
         }
+    }
+}
+
+impl App {
+    fn draw_frame(
+        &mut self,
+        terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+        area: ratatui::layout::Rect,
+    ) -> std::io::Result<()> {
+        terminal.draw(|frame| self.draw(frame, area))?;
+        Ok(())
     }
 }
 
@@ -207,6 +374,8 @@ fn teardown(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> std::io::Resul
 mod tests {
     use super::*;
     use crossterm::event::KeyModifiers;
+    use std::collections::BTreeMap;
+
     use ratatui::backend::TestBackend;
 
     fn app() -> App {
@@ -214,6 +383,8 @@ mod tests {
             desk: Desk::offline(),
             tab: Tab::Watchlist,
             glossary: false,
+            status: String::new(),
+            frame_stats: FrameStats::default(),
             quit: false,
         }
     }
@@ -270,6 +441,33 @@ mod tests {
             a.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
             Some(Action::Quit)
         );
+    }
+
+    #[test]
+    fn gather_is_requested_and_statuses_update() {
+        let mut a = app();
+        assert_eq!(
+            a.handle_key(KeyEvent::new(KeyCode::Char('U'), KeyModifiers::NONE)),
+            Some(Action::Gather)
+        );
+        let mut counts = BTreeMap::new();
+        counts.insert("bar".to_string(), 5);
+        a.update(Action::Ingested(counts));
+        assert!(a.status.contains("ingested 5"));
+    }
+
+    #[test]
+    fn live_quotes_flow_into_the_desk() {
+        let mut a = app();
+        let mut prices = BTreeMap::new();
+        prices.insert("US:AAPL".to_string(), 250.0);
+        a.update(Action::Quotes(prices));
+        assert_eq!(a.desk.live_price(), Some(250.0));
+        // And the watchlist paints with the live price as the current value.
+        let state = a.desk.watch_state();
+        let metric = state.metric.unwrap();
+        assert_eq!(metric.current, "250.00");
+        assert_eq!(metric.source, "live quote");
     }
 
     #[test]
