@@ -374,10 +374,8 @@ fn ordered(mut items: Vec<EvidenceItem>) -> Vec<EvidenceItem> {
 }
 
 fn in_clause(ids: &[String]) -> String {
-    ids.iter()
-        .map(|id| format!("'{}'", id.replace('\'', "''")))
-        .collect::<Vec<_>>()
-        .join(", ")
+    // Parameter placeholders, never interpolated values (SQL safety).
+    ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ")
 }
 
 fn query_bars(db: &Db, ids: &[String]) -> Result<Vec<EvidenceItem>, delta_core::db::DbError> {
@@ -386,7 +384,7 @@ fn query_bars(db: &Db, ids: &[String]) -> Result<Vec<EvidenceItem>, delta_core::
         in_clause(ids)
     );
     let mut stmt = db.conn().prepare(&sql)?;
-    let rows = stmt.query_map([], |row| {
+    let rows = stmt.query_map(rusqlite::params_from_iter(ids), |row| {
         let instrument_id: String = row.get(1)?;
         let close: f64 = row.get(3)?;
         Ok(EvidenceItem {
@@ -410,7 +408,7 @@ fn query_news(db: &Db, ids: &[String]) -> Result<Vec<EvidenceItem>, delta_core::
         in_clause(ids)
     );
     let mut stmt = db.conn().prepare(&sql)?;
-    let rows = stmt.query_map([], |row| {
+    let rows = stmt.query_map(rusqlite::params_from_iter(ids), |row| {
         let source: String = row.get(5)?;
         let kind = if crate::brief::PRIMARY_FILING_SOURCES.contains(&source.as_str()) {
             "filing"
@@ -438,7 +436,7 @@ fn query_events(db: &Db, ids: &[String]) -> Result<Vec<EvidenceItem>, delta_core
         in_clause(ids)
     );
     let mut stmt = db.conn().prepare(&sql)?;
-    let rows = stmt.query_map([], |row| {
+    let rows = stmt.query_map(rusqlite::params_from_iter(ids), |row| {
         let kind: String = row.get(3)?;
         let summary: String = row.get(4)?;
         Ok(EvidenceItem {
@@ -465,7 +463,7 @@ fn query_fundamentals(
         in_clause(ids)
     );
     let mut stmt = db.conn().prepare(&sql)?;
-    let rows = stmt.query_map([], |row| {
+    let rows = stmt.query_map(rusqlite::params_from_iter(ids), |row| {
         let as_of: String = row.get(2)?;
         let metric: String = row.get(3)?;
         let value: f64 = row.get(4)?;

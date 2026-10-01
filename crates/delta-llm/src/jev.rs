@@ -258,7 +258,9 @@ impl JevClient {
     fn lookup(&self, db: &mut Db, task: &str, phash: &str) -> Option<Decision> {
         let row = db.llm_lookup(phash).ok()??;
         let data: Value = serde_json::from_str(row.response.as_deref().unwrap_or("{}")).ok()?;
-        db.llm_store_call(&LlmCall {
+        // The cached decision is valid even if the replay row fails to log;
+        // accounting is best-effort.
+        let _ = db.llm_store_call(&LlmCall {
             id: Uuid::new_v4().simple().to_string(),
             ts: Utc::now().naive_utc(),
             task: task.to_string(),
@@ -271,8 +273,7 @@ impl JevClient {
             latency_ms: 0,
             cached: true,
             response: row.response.clone(),
-        })
-        .ok()?;
+        });
         Some(Decision {
             model: data["model"].as_str().unwrap_or(&row.model).to_string(),
             answers: data["answers"].as_object().cloned().unwrap_or_default(),

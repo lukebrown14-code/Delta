@@ -13,6 +13,7 @@ delta-plugins = { path = "../delta-plugins" }
 delta-services = { path = "../delta-services" }
 futures = "0.3"
 serde_json = "1"
+unicode-width = "0.2"
 ratatui = "0.29"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
 tokio-tungstenite = { version = "0.24", default-features = false, features = ["rustls-tls-webpki-roots", "connect"] }

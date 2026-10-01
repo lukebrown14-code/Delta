@@ -63,39 +63,23 @@ pub const EQUITY_KEYS: &[(&str, &str, &str)] = &[
     ("Ex-dividend", "exDividendDate", "date"),
 ];
 
-/// `,2f`: two decimals with comma-grouped thousands (Python's `,.2f`).
-fn grouped2(value: f64) -> String {
-    let text = format!("{value:.2}");
-    let (int_part, frac) = match text.split_once('.') {
-        Some((a, b)) => (a, b),
-        None => (text.as_str(), ""),
-    };
-    let negative = int_part.starts_with('-');
-    let digits = int_part.trim_start_matches('-');
-    let mut grouped = String::new();
-    for (i, ch) in digits.chars().enumerate() {
-        if i > 0 && (digits.len() - i) % 3 == 0 {
-            grouped.push(',');
-        }
-        grouped.push(ch);
-    }
-    let sign = if negative { "-" } else { "" };
-    if frac.is_empty() {
-        format!("{sign}{grouped}")
-    } else {
-        format!("{sign}{grouped}.{frac}")
-    }
-}
-
-/// K/M/B/T compaction (`_compact`): two decimals, comma grouped.
+/// K/M/B/T compaction (`_compact`): two decimals, comma grouped; plain
+/// integers render with no decimals (`{:,0f}`).
 fn compact(value: f64) -> String {
     let magnitude = value.abs();
     for (threshold, suffix) in [(1e12, "T"), (1e9, "B"), (1e6, "M"), (1e3, "K")] {
         if magnitude >= threshold {
-            return format!("{}{suffix}", grouped2(value / threshold));
+            return format!(
+                "{}{suffix}",
+                delta_core::format::grouped(value / threshold, 2)
+            );
         }
     }
-    grouped2(value)
+    if value.fract() == 0.0 {
+        delta_core::format::grouped(value, 0)
+    } else {
+        delta_core::format::grouped(value, 2)
+    }
 }
 
 fn money(value: f64) -> String {
@@ -148,12 +132,12 @@ pub fn format_metric(value: &Value, fmt: &str) -> Option<String> {
         "fx" => Some(format!("{:.4}", number)),
         "price" => {
             if number.abs() >= 10.0 {
-                Some(grouped2(number))
+                Some(delta_core::format::grouped(number, 2))
             } else {
                 Some(format!("{number:.4}"))
             }
         }
-        _ => Some(grouped2(number)),
+        _ => Some(delta_core::format::grouped(number, 2)),
     }
 }
 

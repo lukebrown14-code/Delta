@@ -220,7 +220,7 @@ fn draw_list_pane(screen: &mut Screen, content_bottom: usize) {
 
 fn draw_inspector(screen: &mut Screen, state: &WatchlistState, metric: &MetricsData) {
     let cx = 48usize; // right pane inner left edge
-    let right_edge = 117usize; // last content col before the blurred border
+    let right_edge = screen.w - 3; // 117 at w=120
 
     // Row 1: name (bold) + "US · equity · USD" (muted bold).
     let mut x = cx + 1;
@@ -326,7 +326,7 @@ fn draw_inspector(screen: &mut Screen, state: &WatchlistState, metric: &MetricsD
         if index + 1 < metric.values.len() {
             let (rlabel, rvalue) = &metric.values[index + 1];
             screen.text(85, gy, rlabel, Style::fg(color::FG));
-            screen.text_right(117, gy, rvalue, Style::fg(color::FG));
+            screen.text_right(right_edge, gy, rvalue, Style::fg(color::FG));
         }
         index += 2;
         gy += 1;
@@ -763,33 +763,51 @@ pub fn draw_glossary_overlay(screen: &mut Screen, state: &WatchlistState) {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct HomeFeed {
     /// "nothing new since your last visit" / "3 new items since …".
-    pub since_line: String,
+    pub since_line: Option<String>,
     /// "no activity in the last 30 days" / "7 items in the last 30 days …".
-    pub activity_line: String,
+    pub activity_line: Option<String>,
     /// "newest   no articles yet" / "newest   <title>".
-    pub newest_line: String,
+    pub newest_line: Option<String>,
     /// Bar staleness after "⚠ {symbol} ": "1d old".
-    pub stale_age: String,
+    pub stale_age: Option<String>,
     /// First upcoming-pane row (seed: "nothing scheduled — press 3, …").
-    pub upcoming_line: String,
+    pub upcoming_line: Option<String>,
     /// The narrow breakpoint's "next  {brief}" value.
-    pub upcoming_brief: String,
+    pub upcoming_brief: Option<String>,
     /// The narrow breakpoint's since-summary value ("nothing new").
-    pub since_brief: String,
+    pub since_brief: Option<String>,
+}
+
+/// The seeded golden scenario's text for each feed slot; a `None` slot (the
+/// analytics query failed or found nothing) falls back to it, so the live
+/// desk never shows stale seed values as if they were fresh data.
+pub mod feed_seed {
+    pub const SINCE_LINE: &str = "nothing new since your last visit";
+    pub const ACTIVITY_LINE: &str = "no activity in the last 30 days";
+    pub const NEWEST_LINE: &str = "newest   no articles yet";
+    pub const STALE_AGE: &str = "1d old";
+    pub const UPCOMING_LINE: &str = "nothing scheduled — press 3, then U to gather evidence";
+    pub const UPCOMING_BRIEF: &str = "nothing scheduled";
+    pub const SINCE_BRIEF: &str = "nothing new";
 }
 
 impl HomeFeed {
-    /// The seeded golden scenario's values.
+    /// The seeded golden scenario's values (offline desk and goldens).
     pub fn seed() -> Self {
         Self {
-            since_line: "nothing new since your last visit".to_string(),
-            activity_line: "no activity in the last 30 days".to_string(),
-            newest_line: "newest   no articles yet".to_string(),
-            stale_age: "1d old".to_string(),
-            upcoming_line: "nothing scheduled — press 3, then U to gather evidence".to_string(),
-            upcoming_brief: "nothing scheduled".to_string(),
-            since_brief: "nothing new".to_string(),
+            since_line: Some(feed_seed::SINCE_LINE.to_string()),
+            activity_line: Some(feed_seed::ACTIVITY_LINE.to_string()),
+            newest_line: Some(feed_seed::NEWEST_LINE.to_string()),
+            stale_age: Some(feed_seed::STALE_AGE.to_string()),
+            upcoming_line: Some(feed_seed::UPCOMING_LINE.to_string()),
+            upcoming_brief: Some(feed_seed::UPCOMING_BRIEF.to_string()),
+            since_brief: Some(feed_seed::SINCE_BRIEF.to_string()),
         }
+    }
+
+    /// The slot's text or the golden seed when the slot is unset.
+    pub fn text<'a>(slot: &'a Option<String>, seed: &'a str) -> &'a str {
+        slot.as_deref().unwrap_or(seed)
     }
 }
 
@@ -871,15 +889,34 @@ pub fn draw_home(screen: &mut Screen, home: &HomeState) {
     );
 
     // Since-you-last-looked: empty-run summary, stale warnings.
-    screen.text(62, 2, &home.feed.since_line, Style::fg(color::MUTED));
+    screen.text(
+        62,
+        2,
+        HomeFeed::text(&home.feed.since_line, feed_seed::SINCE_LINE),
+        Style::fg(color::MUTED),
+    );
     screen.text(102, 2, &home.since_stamp, Style::fg(color::MUTED));
-    screen.text(62, 4, &home.feed.activity_line, Style::fg(color::MUTED));
-    screen.text(62, 5, &home.feed.newest_line, Style::fg(color::MUTED));
+    screen.text(
+        62,
+        4,
+        HomeFeed::text(&home.feed.activity_line, feed_seed::ACTIVITY_LINE),
+        Style::fg(color::MUTED),
+    );
+    screen.text(
+        62,
+        5,
+        HomeFeed::text(&home.feed.newest_line, feed_seed::NEWEST_LINE),
+        Style::fg(color::MUTED),
+    );
     let warn = Style::fg(color::AMBER);
     screen.text(
         62,
         7,
-        &format!("⚠ {} {}", home.symbol, home.feed.stale_age),
+        &format!(
+            "⚠ {} {}",
+            home.symbol,
+            HomeFeed::text(&home.feed.stale_age, feed_seed::STALE_AGE)
+        ),
         warn,
     );
     screen.text(62, 8, "⚠ 2 evidence prompts · 3 evidence", warn);
@@ -906,7 +943,7 @@ pub fn draw_home(screen: &mut Screen, home: &HomeState) {
     screen.text(
         3,
         content_bottom - 20,
-        &home.feed.upcoming_line,
+        HomeFeed::text(&home.feed.upcoming_line, feed_seed::UPCOMING_LINE),
         Style::fg(color::MUTED),
     );
     screen.text(
@@ -1018,12 +1055,13 @@ pub fn draw_research(screen: &mut Screen) {
     let surface_fg_none = Style::DEFAULT.bg("#0d0d0d");
     let surface = Style::fg(color::FG).bg("#0d0d0d");
     let muted = Style::fg(color::MUTED);
+    let content_bottom = screen.h - 3; // 37 at h=40
 
     screen.pane(
         1,
         0,
         36,
-        37,
+        content_bottom,
         true,
         &[
             ("t ", Style::fg(color::BLUE).bold()),
@@ -1036,7 +1074,7 @@ pub fn draw_research(screen: &mut Screen) {
         37,
         0,
         78,
-        37,
+        content_bottom,
         false,
         &[
             ("r ", Style::fg(color::BLUE).bold()),
@@ -1049,7 +1087,7 @@ pub fn draw_research(screen: &mut Screen) {
         79,
         0,
         118,
-        37,
+        content_bottom,
         false,
         &[
             ("e ", Style::fg(color::BLUE).bold()),
@@ -1087,8 +1125,8 @@ pub fn draw_research(screen: &mut Screen) {
     }
     // Each hint row's surface strip is exactly its text width plus one cell.
     for (y, key, rest, strip_end) in [
-        (35usize, "u", " gather company", 21usize),
-        (36, "U", " gather all", 17),
+        (content_bottom - 2, "u", " gather company", 21usize),
+        (content_bottom - 1, "U", " gather all", 17),
     ] {
         screen.fill(
             3,
@@ -1244,11 +1282,12 @@ fn active_chip() -> Style {
 /// The Theses screen: fleet list, thesis detail, evidence table (all empty
 /// states; port of `delta/tui/screens/theses.py`, seeded golden layout).
 pub fn draw_theses(screen: &mut Screen) {
+    let content_bottom = screen.h - 3; // 37 at h=40
     screen.pane(
         1,
         0,
         36,
-        37,
+        content_bottom,
         true,
         &[
             ("theses ", Style::fg(color::BLUE).bold()),
@@ -1260,7 +1299,7 @@ pub fn draw_theses(screen: &mut Screen) {
         37,
         0,
         78,
-        37,
+        content_bottom,
         false,
         &[
             ("t ", Style::fg(color::BLUE).bold()),
@@ -1272,7 +1311,7 @@ pub fn draw_theses(screen: &mut Screen) {
         79,
         0,
         118,
-        37,
+        content_bottom,
         false,
         &[
             ("e ", Style::fg(color::BLUE).bold()),
@@ -1282,7 +1321,7 @@ pub fn draw_theses(screen: &mut Screen) {
         &pane_hints(&[("f", "find")]),
     );
 
-    screen.fill(2, 1, 36, 36, Style::fg(color::FG));
+    screen.fill(2, 1, 36, content_bottom - 1, Style::fg(color::FG));
     screen.text(
         39,
         1,
@@ -1330,11 +1369,12 @@ fn draw_status_bar_theses(screen: &mut Screen, y: usize, w: usize) {
 /// The Ask screen: chat transcript pane + targets / citations side panes
 /// (port of `delta/tui/screens/chat.py`, seeded golden layout).
 pub fn draw_ask(screen: &mut Screen) {
+    let content_bottom = screen.h - 3; // 37 at h=40
     screen.pane(
         1,
         0,
         82,
-        37,
+        content_bottom,
         true,
         &[
             ("5 ", Style::fg(color::BLUE).bold()),
@@ -1360,7 +1400,7 @@ pub fn draw_ask(screen: &mut Screen) {
         83,
         19,
         118,
-        37,
+        content_bottom,
         false,
         &[
             ("o ", Style::fg(color::BLUE).bold()),
@@ -1454,11 +1494,12 @@ fn draw_status_bar_ask(screen: &mut Screen, y: usize, w: usize) {
 /// The Decisions screen: ledger + timeline (empty states; port of
 /// `delta/tui/screens/decisions.py`, seeded golden layout).
 pub fn draw_decisions(screen: &mut Screen) {
+    let content_bottom = screen.h - 3; // 37 at h=40
     screen.pane(
         1,
         0,
         47,
-        37,
+        content_bottom,
         true,
         &[
             ("decisions ", Style::fg(color::BLUE).bold()),
@@ -1475,7 +1516,7 @@ pub fn draw_decisions(screen: &mut Screen) {
         48,
         0,
         118,
-        37,
+        content_bottom,
         false,
         &[("timeline", Style::fg(color::BLUE).bold())],
         &pane_hints(&[("r", "review"), ("o", "research"), ("↑↓", "scroll")]),
@@ -1489,10 +1530,27 @@ pub fn draw_decisions(screen: &mut Screen) {
         " status      review      instrument      rati",
         Style::fg(color::FG).bold().bg("#232323"),
     );
-    screen.fill(2, 2, 47, 36, Style::fg(color::FG));
-    screen.fill(2, 36, 41, 37, Style::fg("#3a3a3a"));
-    screen.put(41, 36, '▊', Style::fg("#3a3a3a").bg("#0d0d0d"));
-    screen.fill(42, 36, 47, 37, Style::fg(color::FG).bg("#0d0d0d"));
+    screen.fill(2, 2, 47, content_bottom - 1, Style::fg(color::FG));
+    screen.fill(
+        2,
+        content_bottom - 1,
+        41,
+        content_bottom,
+        Style::fg("#3a3a3a"),
+    );
+    screen.put(
+        41,
+        content_bottom - 1,
+        '▊',
+        Style::fg("#3a3a3a").bg("#0d0d0d"),
+    );
+    screen.fill(
+        42,
+        content_bottom - 1,
+        47,
+        content_bottom,
+        Style::fg(color::FG).bg("#0d0d0d"),
+    );
 
     // Timeline empty state (wrapped).
     let timeline_hint = Style::fg(color::MUTED);
@@ -1697,6 +1755,8 @@ pub fn draw_settings(screen: &mut Screen) {
 
 /// Home at 200x50: the 120 layout with the split at half width.
 pub fn draw_home_wide(screen: &mut Screen, home: &HomeState) {
+    let content_bottom = screen.h - 3; // 47 at h=50
+    let mid_bottom = screen.h - 10; // 40 at h=50
     let w = screen.w;
     let s = w / 2; // pane split (100 at w=200)
     let lx1 = s - 1;
@@ -1763,14 +1823,33 @@ pub fn draw_home_wide(screen: &mut Screen, home: &HomeState) {
 
     let muted = Style::fg(color::MUTED);
     let warn = Style::fg(color::AMBER);
-    screen.text(inner, 2, &home.feed.since_line, muted);
+    screen.text(
+        inner,
+        2,
+        HomeFeed::text(&home.feed.since_line, feed_seed::SINCE_LINE),
+        muted,
+    );
     screen.text_right(rx1 - 1, 2, &home.since_stamp, muted);
-    screen.text(inner, 4, &home.feed.activity_line, muted);
-    screen.text(inner, 5, &home.feed.newest_line, muted);
+    screen.text(
+        inner,
+        4,
+        HomeFeed::text(&home.feed.activity_line, feed_seed::ACTIVITY_LINE),
+        muted,
+    );
+    screen.text(
+        inner,
+        5,
+        HomeFeed::text(&home.feed.newest_line, feed_seed::NEWEST_LINE),
+        muted,
+    );
     screen.text(
         inner,
         7,
-        &format!("⚠ {} {}", home.symbol, home.feed.stale_age),
+        &format!(
+            "⚠ {} {}",
+            home.symbol,
+            HomeFeed::text(&home.feed.stale_age, feed_seed::STALE_AGE)
+        ),
         warn,
     );
     screen.text(inner, 8, "⚠ 2 evidence prompts · 3 evidence", warn);
@@ -1780,7 +1859,7 @@ pub fn draw_home_wide(screen: &mut Screen, home: &HomeState) {
         1,
         21,
         lx1,
-        40,
+        mid_bottom,
         false,
         &[("upcoming", Style::fg(color::BLUE).bold())],
         &pane_hints(&[("enter", "open evidence")]),
@@ -1789,12 +1868,17 @@ pub fn draw_home_wide(screen: &mut Screen, home: &HomeState) {
         rx0,
         21,
         rx1,
-        40,
+        mid_bottom,
         false,
         &[("theses", Style::fg(color::BLUE).bold())],
         &pane_hints(&[("enter", "open thesis"), ("4", "all")]),
     );
-    screen.text(3, 22, &home.feed.upcoming_line, muted);
+    screen.text(
+        3,
+        22,
+        HomeFeed::text(&home.feed.upcoming_line, feed_seed::UPCOMING_LINE),
+        muted,
+    );
     screen.text(3, 23, "calendar plugin: earnings & dividends only", muted);
     screen.text(inner, 22, "no theses yet", muted);
     screen.text(
@@ -1807,9 +1891,9 @@ pub fn draw_home_wide(screen: &mut Screen, home: &HomeState) {
     // Agenda.
     screen.pane(
         1,
-        41,
+        mid_bottom + 1,
         rx1,
-        47,
+        content_bottom,
         false,
         &[
             ("needs you today ", Style::fg(color::BLUE).bold()),
@@ -1824,7 +1908,10 @@ pub fn draw_home_wide(screen: &mut Screen, home: &HomeState) {
         ("2", "⚠", " 1 stale source", warn),
     ];
     for (index, (key, glyph, message, style)) in rows.into_iter().enumerate() {
-        let y = 42 + index;
+        let y = mid_bottom + 2 + index;
+        if y > content_bottom - 1 {
+            break; // keep agenda text inside the shrunken pane
+        }
         screen.text(3, y, "▸", Style::fg(color::BLUE));
         screen.text(5, y, key, Style::fg(color::BLUE).bold());
         screen.text(8, y, glyph, style);
@@ -1836,11 +1923,12 @@ pub fn draw_home_wide(screen: &mut Screen, home: &HomeState) {
 
 /// Research at 200x50: company list, report pane, evidence desk.
 pub fn draw_research_wide(screen: &mut Screen) {
+    let content_bottom = screen.h - 3; // 47 at h=50
     screen.pane(
         1,
         0,
         36,
-        47,
+        content_bottom,
         true,
         &[
             ("t ", Style::fg(color::BLUE).bold()),
@@ -1853,7 +1941,7 @@ pub fn draw_research_wide(screen: &mut Screen) {
         37,
         0,
         158,
-        47,
+        content_bottom,
         false,
         &[
             ("r ", Style::fg(color::BLUE).bold()),
@@ -1866,7 +1954,7 @@ pub fn draw_research_wide(screen: &mut Screen) {
         159,
         0,
         198,
-        47,
+        content_bottom,
         false,
         &[
             ("e ", Style::fg(color::BLUE).bold()),
@@ -1979,11 +2067,13 @@ pub fn draw_research_wide(screen: &mut Screen) {
 
 /// Theses at 200x50: thesis list, detail, evidence panes.
 pub fn draw_theses_wide(screen: &mut Screen) {
+    let content_bottom = screen.h - 3; // 47 at h=50
+    let mid_bottom = screen.h - 10; // 40 at h=50
     screen.pane(
         1,
         0,
         36,
-        47,
+        content_bottom,
         true,
         &[
             ("theses ", Style::fg(color::BLUE).bold()),
@@ -1995,7 +2085,7 @@ pub fn draw_theses_wide(screen: &mut Screen) {
         37,
         0,
         158,
-        47,
+        content_bottom,
         false,
         &[("t thesis", Style::fg(color::BLUE).bold())],
         &pane_hints(&[("s", "summarise"), ("d", "edit"), ("↑↓", "scroll")]),
@@ -2004,7 +2094,7 @@ pub fn draw_theses_wide(screen: &mut Screen) {
         159,
         0,
         198,
-        47,
+        content_bottom,
         false,
         &[
             ("e ", Style::fg(color::BLUE).bold()),
@@ -2013,7 +2103,7 @@ pub fn draw_theses_wide(screen: &mut Screen) {
         ],
         &pane_hints(&[("f", "find")]),
     );
-    screen.fill(2, 1, 36, 46, Style::fg(color::FG));
+    screen.fill(2, 1, 36, content_bottom - 1, Style::fg(color::FG));
     screen.text(
         39,
         1,
@@ -2023,25 +2113,26 @@ pub fn draw_theses_wide(screen: &mut Screen) {
     screen.text(161, 1, "no evidence yet", Style::fg(color::FG));
     let header_style = Style::fg(color::FG).bold().bg(color::PANEL);
     screen.fill(160, 2, 198, 3, header_style);
-    screen.fill(160, 3, 198, 40, Style::fg(color::FG));
+    screen.fill(160, 3, 198, mid_bottom, Style::fg(color::FG));
     screen.text(160, 2, "    ±  age   note", header_style);
     // Input separator above the evidence prompt line.
     for x in 160..198 {
-        screen.put(x, 39, '─', Style::fg("#333333"));
+        screen.put(x, mid_bottom - 1, '─', Style::fg("#333333"));
     }
     let fg = Style::fg(color::FG);
-    screen.text(161, 40, "no evidence yet — press f to find", fg);
-    screen.text(161, 41, "candidates", fg);
+    screen.text(161, mid_bottom, "no evidence yet — press f to find", fg);
+    screen.text(161, mid_bottom + 1, "candidates", fg);
     draw_status_bar_wide(screen, screen.h - 1, screen.w, "4 Theses");
 }
 
 /// Ask at 200x50: conversation pane + targets pane.
 pub fn draw_ask_wide(screen: &mut Screen) {
+    let content_bottom = screen.h - 3; // 47 at h=50
     screen.pane(
         1,
         0,
         162,
-        47,
+        content_bottom,
         true,
         &[("5 ask", Style::fg(color::BLUE).bold())],
         &pane_hints(&[("i", "ask"), ("↑↓", "scroll"), ("z", "zoom")]),
@@ -2063,7 +2154,7 @@ pub fn draw_ask_wide(screen: &mut Screen) {
         163,
         24,
         198,
-        47,
+        content_bottom,
         false,
         &[
             ("o ", Style::fg(color::BLUE).bold()),
@@ -2079,18 +2170,24 @@ pub fn draw_ask_wide(screen: &mut Screen) {
         "no messages yet — press t to pick targets, then i to ask",
         muted,
     );
-    // Input separator and prompt line.
+    // Input separator and prompt line (bottom-anchored).
     for x in 2..162 {
-        screen.put(x, 45, '─', Style::fg(color::PANEL));
+        screen.put(x, content_bottom - 2, '─', Style::fg(color::PANEL));
     }
-    screen.text(3, 46, ">", Style::fg(color::BLUE));
+    screen.text(3, content_bottom - 1, ">", Style::fg(color::BLUE));
     screen.text(
         5,
-        46,
+        content_bottom - 1,
         "ask about the targets in scope…",
         Style::fg(color::DISABLED),
     );
-    screen.fill(36, 46, 162, 47, Style::fg(color::FG));
+    screen.fill(
+        36,
+        content_bottom - 1,
+        162,
+        content_bottom,
+        Style::fg(color::FG),
+    );
     // Targets table: header strip and the single selected row.
     let header_style = Style::fg(color::FG).bold().bg(color::PANEL);
     screen.fill(164, 1, 198, 2, header_style);
@@ -2108,10 +2205,10 @@ pub fn draw_ask_wide(screen: &mut Screen) {
     let header_style = Style::fg(color::FG).bold().bg(color::PANEL);
     screen.fill(164, 25, 198, 26, header_style);
     screen.text(164, 25, " #    Evidence  Kind", header_style);
-    screen.fill(164, 26, 198, 46, Style::fg(color::FG));
+    screen.fill(164, 26, 198, content_bottom - 1, Style::fg(color::FG));
     screen.text(
         165,
-        46,
+        content_bottom - 1,
         "this session: 0 answers · $0.000",
         Style::fg(color::MUTED),
     );
@@ -2120,11 +2217,12 @@ pub fn draw_ask_wide(screen: &mut Screen) {
 
 /// Decisions at 200x50: journal table + timeline.
 pub fn draw_decisions_wide(screen: &mut Screen) {
+    let content_bottom = screen.h - 3; // 47 at h=50
     screen.pane(
         1,
         0,
         79,
-        47,
+        content_bottom,
         true,
         &[
             ("decisions ", Style::fg(color::BLUE).bold()),
@@ -2141,7 +2239,7 @@ pub fn draw_decisions_wide(screen: &mut Screen) {
         80,
         0,
         198,
-        47,
+        content_bottom,
         false,
         &[("timeline", Style::fg(color::BLUE).bold())],
         &pane_hints(&[("r", "review"), ("o", "research"), ("↑↓", "scroll")]),
@@ -2154,7 +2252,7 @@ pub fn draw_decisions_wide(screen: &mut Screen) {
         " status      review      instrument      rationale",
         header_style,
     );
-    screen.fill(2, 2, 79, 47, Style::fg(color::FG));
+    screen.fill(2, 2, 79, content_bottom, Style::fg(color::FG));
     let muted = Style::fg(color::MUTED);
     screen.text(82, 1, "no decisions yet — press ", muted);
     screen.put(107, 1, 'n', Style::fg(color::BLUE).bold());
@@ -2226,7 +2324,7 @@ pub fn draw_settings_wide(screen: &mut Screen) {
         63,
         0,
         198,
-        47,
+        screen.h - 3,
         false,
         &[
             ("diagnostics ", Style::fg(color::BLUE).bold()),
@@ -2449,23 +2547,40 @@ pub fn draw_home_narrow(screen: &mut Screen, home: &HomeState) {
     screen.text(
         3,
         5,
-        &format!("{}  {}   ", home.since_stamp, home.feed.since_brief),
+        &format!(
+            "{}  {}   ",
+            home.since_stamp,
+            HomeFeed::text(&home.feed.since_brief, feed_seed::SINCE_BRIEF)
+        ),
         muted,
     );
     screen.text(
         34,
         5,
-        &format!("⚠ {} {}", home.symbol, home.feed.stale_age),
+        &format!(
+            "⚠ {} {}",
+            home.symbol,
+            HomeFeed::text(&home.feed.stale_age, feed_seed::STALE_AGE)
+        ),
         Style::fg(color::AMBER),
     );
-    screen.text(3, 6, &format!("next  {}", home.feed.upcoming_brief), muted);
+    screen.text(
+        3,
+        6,
+        &format!(
+            "next  {}",
+            HomeFeed::text(&home.feed.upcoming_brief, feed_seed::UPCOMING_BRIEF)
+        ),
+        muted,
+    );
 
-    // Agenda: full width, jump keys with verdicts.
+    // Agenda: full width, jump keys with verdicts (bottom-anchored).
+    let agenda_bottom = screen.h - 3; // 21 at h=24
     screen.pane(
         1,
         15,
         x1,
-        21,
+        agenda_bottom,
         false,
         &[
             ("needs you today ", Style::fg(color::BLUE).bold()),
@@ -2481,6 +2596,9 @@ pub fn draw_home_narrow(screen: &mut Screen, home: &HomeState) {
     ];
     for (index, (key, glyph, message, style)) in rows.into_iter().enumerate() {
         let y = 16 + index;
+        if y > screen.h - 4 {
+            break; // keep agenda text inside the shrunken pane
+        }
         screen.text(3, y, "▸", Style::fg(color::BLUE));
         screen.text(5, y, key, Style::fg(color::BLUE).bold());
         screen.text(8, y, glyph, style);
@@ -2493,11 +2611,12 @@ pub fn draw_home_narrow(screen: &mut Screen, home: &HomeState) {
 /// Research (evidence desk) at 80x24: one full-width pane.
 pub fn draw_research_narrow(screen: &mut Screen) {
     let x1 = screen.w - 2;
+    let bottom = screen.h - 3; // 21 at h=24
     screen.pane(
         1,
         0,
         x1,
-        21,
+        bottom,
         false,
         &[
             ("e ", Style::fg(color::BLUE).bold()),
@@ -2533,10 +2652,10 @@ pub fn draw_research_narrow(screen: &mut Screen) {
     screen.text(67, 2, "Date", header_style);
 
     // Empty rows carry the foreground default.
-    screen.fill(2, 3, x1, 20, Style::fg(color::FG));
+    screen.fill(2, 3, x1, bottom - 1, Style::fg(color::FG));
     screen.text(
         3,
-        20,
+        bottom - 1,
         "no companies yet — press 1 to add a target",
         Style::fg(color::MUTED),
     );
@@ -2547,11 +2666,12 @@ pub fn draw_research_narrow(screen: &mut Screen) {
 /// Theses at 80x24: one focused full-width pane.
 pub fn draw_theses_narrow(screen: &mut Screen) {
     let x1 = screen.w - 2;
+    let bottom = screen.h - 3; // 21 at h=24
     screen.pane(
         1,
         0,
         x1,
-        21,
+        bottom,
         true,
         &[
             ("theses ", Style::fg(color::BLUE).bold()),
@@ -2572,10 +2692,10 @@ pub fn draw_theses_narrow(screen: &mut Screen) {
     screen.text(62, 1, "Tilt", header_style);
     screen.text(72, 1, "Queue", header_style);
     // The focused table's empty rows still carry the foreground default.
-    screen.fill(2, 2, x1, 20, Style::fg(color::FG));
+    screen.fill(2, 2, x1, bottom - 1, Style::fg(color::FG));
     screen.text(
         3,
-        20,
+        bottom - 1,
         "no theses yet — press n to create one",
         Style::fg(color::MUTED),
     );
@@ -2586,11 +2706,12 @@ pub fn draw_theses_narrow(screen: &mut Screen) {
 /// bottom.
 pub fn draw_ask_narrow(screen: &mut Screen) {
     let x1 = screen.w - 2;
+    let bottom = screen.h - 3; // 21 at h=24
     screen.pane(
         1,
         0,
         x1,
-        21,
+        bottom,
         true,
         &[("5 ask", Style::fg(color::BLUE).bold())],
         &pane_hints(&[("i", "ask"), ("t", "targets"), ("z", "zoom")]),
@@ -2603,29 +2724,30 @@ pub fn draw_ask_narrow(screen: &mut Screen) {
         "no messages yet — press t to pick targets, then i to ask",
         muted,
     );
-    // Input separator and prompt line.
+    // Input separator and prompt line (bottom-anchored).
     for x in 2..x1 {
-        screen.put(x, 19, '─', Style::fg(color::PANEL));
+        screen.put(x, bottom - 2, '─', Style::fg(color::PANEL));
     }
-    screen.text(3, 20, ">", Style::fg(color::BLUE));
+    screen.text(3, bottom - 1, ">", Style::fg(color::BLUE));
     screen.text(
         5,
-        20,
+        bottom - 1,
         "ask about the targets in scope…",
         Style::fg(color::DISABLED),
     );
-    screen.fill(36, 20, x1, 21, Style::fg(color::FG));
+    screen.fill(36, bottom - 1, x1, bottom, Style::fg(color::FG));
     status_bar_narrow(screen, NarrowTab::Ask);
 }
 
 /// Decisions at 80x24: journal (focused) + timeline panes side by side.
 pub fn draw_decisions_narrow(screen: &mut Screen) {
-    // Left: the decision journal table.
+    let bottom = screen.h - 3; // 21 at h=24
+                               // Left: the decision journal table.
     screen.pane(
         1,
         0,
         32,
-        21,
+        bottom,
         true,
         &[
             ("decisions ", Style::fg(color::BLUE).bold()),
@@ -2650,18 +2772,24 @@ pub fn draw_decisions_narrow(screen: &mut Screen) {
     screen.fill(2, 1, 32, 2, header_style);
     screen.text(2, 1, " status      review      instr", header_style);
     // The focused table's empty rows still carry the foreground default.
-    screen.fill(2, 2, 32, 20, Style::fg(color::FG));
+    screen.fill(2, 2, 32, bottom - 1, Style::fg(color::FG));
     // Bottom horizontal scrollbar: track, anchor, thumb to the edge.
-    screen.fill(2, 20, 19, 21, Style::fg("#3a3a3a"));
-    screen.put(19, 20, '▊', Style::fg("#3a3a3a").bg("#0d0d0d"));
-    screen.fill(20, 20, 32, 21, Style::fg(color::FG).bg("#0d0d0d"));
+    screen.fill(2, bottom - 1, 19, bottom, Style::fg("#3a3a3a"));
+    screen.put(19, bottom - 1, '▊', Style::fg("#3a3a3a").bg("#0d0d0d"));
+    screen.fill(
+        20,
+        bottom - 1,
+        32,
+        bottom,
+        Style::fg(color::FG).bg("#0d0d0d"),
+    );
 
     // Right: the timeline.
     screen.pane(
         33,
         0,
         screen.w - 2,
-        21,
+        bottom,
         false,
         &[("timeline", Style::fg(color::BLUE).bold())],
         &pane_hints(&[("r", "review"), ("o", "research"), ("↑↓", "scroll")]),
@@ -2868,7 +2996,7 @@ pub fn draw_watchlist_wide(screen: &mut Screen, state: &WatchlistState) {
 
     // Inspector.
     let cx = 48usize;
-    let right_edge = 196usize;
+    let right_edge = screen.w - 4; // 196 at w=200
     let Some(metric) = &state.metric else { return };
 
     let mut x = cx + 1;

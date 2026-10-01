@@ -306,20 +306,14 @@ pub mod test_hooks {
         since: Option<NaiveDateTime>,
         decisions_url: &str,
     ) -> Result<Vec<SentimentRow>, ServiceError> {
-        classify_impl(
+        classify_with_base(
             db,
             cfg,
             openrouter_api_key,
             universe,
             since,
+            decisions_url,
             None,
-            Some(
-                decisions_url
-                    .rsplit_once("/api/alpha/decisions")
-                    .unwrap()
-                    .0
-                    .to_string(),
-            ),
         )
         .await
     }
@@ -333,20 +327,14 @@ pub mod test_hooks {
         decisions_url: &str,
         log: Option<&dyn Fn(&str)>,
     ) -> Result<(usize, usize), ServiceError> {
-        let rows = classify_impl(
+        let rows = classify_with_base(
             db,
             cfg,
             openrouter_api_key,
             universe,
             since,
+            decisions_url,
             log,
-            Some(
-                decisions_url
-                    .rsplit_once("/api/alpha/decisions")
-                    .unwrap()
-                    .0
-                    .to_string(),
-            ),
         )
         .await?;
         let instruments = rows
@@ -356,6 +344,36 @@ pub mod test_hooks {
             .len();
         Ok((rows.len(), instruments))
     }
+}
+
+/// Strip the Decisions path off a test server URL and classify against it.
+async fn classify_with_base(
+    db: &mut Db,
+    cfg: &AppConfig,
+    openrouter_api_key: &str,
+    universe: &[Instrument],
+    since: Option<NaiveDateTime>,
+    decisions_url: &str,
+    log: Option<&dyn Fn(&str)>,
+) -> Result<Vec<SentimentRow>, ServiceError> {
+    let base = decisions_url
+        .rsplit_once("/api/alpha/decisions")
+        .map(|(base, _)| base.to_string())
+        .ok_or_else(|| {
+            ServiceError::invalid(format!(
+                "test url must end in /api/alpha/decisions: {decisions_url}"
+            ))
+        })?;
+    classify_impl(
+        db,
+        cfg,
+        openrouter_api_key,
+        universe,
+        since,
+        log,
+        Some(base),
+    )
+    .await
 }
 
 /// Weighted stance summary over the last `days` days; `None` with no rows

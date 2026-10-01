@@ -179,26 +179,51 @@ fn prices(db: &Db, inst: &Instrument, as_of: NaiveDateTime) -> Option<Section> {
 
 fn news(db: &Db, inst: &Instrument, as_of: NaiveDateTime) -> Section {
     let since = as_of - Duration::days(NEWS_WINDOW_DAYS);
-    let mut rows = db.news().unwrap_or_default();
-    rows.retain(|r| r.published >= since && r.published <= as_of);
-    rows.sort_by(|a, b| b.published.cmp(&a.published));
+    // Window filter in SQL; instrument membership (a JSON array column) and
+    // the newest-first + limit stay in Rust.
+    let mut stmt = match db.conn().prepare(
+        "SELECT id, instrument_ids, published, title, source FROM newsitem \
+         WHERE published >= ?1 AND published <= ?2 ORDER BY published DESC",
+    ) {
+        Ok(stmt) => stmt,
+        Err(_) => return Section::titled("News"),
+    };
+    let rows: Vec<(String, String, NaiveDateTime, String, String)> = match stmt.query_map(
+        rusqlite::params![
+            since.format("%Y-%m-%d %H:%M:%S%.6f").to_string(),
+            as_of.format("%Y-%m-%d %H:%M:%S%.6f").to_string(),
+        ],
+        |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                delta_core::db::decode_ts(&row.get::<_, String>(2)?).unwrap_or_default(),
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+            ))
+        },
+    ) {
+        Ok(mapped) => mapped.filter_map(|r| r.ok()).collect(),
+        Err(_) => Vec::new(),
+    };
     let mut section = Section::titled("News");
-    for r in rows {
-        if !r.instrument_ids.iter().any(|id| id == &inst.id) {
+    for (id, instrument_ids, published, title, source) in rows {
+        let ids: Vec<String> = delta_core::json::from_json(Some(&instrument_ids));
+        if !ids.iter().any(|id| id == &inst.id) {
             continue;
         }
         section.lines.push(format!(
             "{} [{}] {}",
-            r.published.format("%Y-%m-%d"),
-            r.source,
-            r.title
+            published.format("%Y-%m-%d"),
+            source,
+            title
         ));
-        let kind = if PRIMARY_FILING_SOURCES.contains(&r.source.as_str()) {
+        let kind = if PRIMARY_FILING_SOURCES.contains(&source.as_str()) {
             "filing"
         } else {
             "news"
         };
-        section.evidence_ids.push(format!("{kind}:{}", r.id));
+        section.evidence_ids.push(format!("{kind}:{id}"));
         if section.lines.len() >= NEWS_LIMIT {
             break;
         }
@@ -206,21 +231,54 @@ fn news(db: &Db, inst: &Instrument, as_of: NaiveDateTime) -> Section {
     section
 }
 
+fn event_rows(
+    db: &Db,
+    inst: &Instrument,
+    from: NaiveDateTime,
+    to: NaiveDateTime,
+    newest_first: bool,
+) -> Vec<(String, NaiveDateTime, String, String, f64)> {
+    let order = if newest_first { "DESC" } else { "ASC" };
+    let Ok(mut stmt) = db.conn().prepare(&format!(
+        "SELECT id, ts, kind, summary, sentiment FROM event \
+         WHERE instrument_id = ?1 AND ts >= ?2 AND ts <= ?3 ORDER BY ts {order}",
+    )) else {
+        return Vec::new();
+    };
+    let rows = match stmt.query_map(
+        rusqlite::params![
+            inst.id,
+            from.format("%Y-%m-%d %H:%M:%S%.6f").to_string(),
+            to.format("%Y-%m-%d %H:%M:%S%.6f").to_string(),
+        ],
+        |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                delta_core::db::decode_ts(&row.get::<_, String>(1)?).unwrap_or_default(),
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, f64>(4)?,
+            ))
+        },
+    ) {
+        Ok(mapped) => mapped.filter_map(|r| r.ok()).collect::<Vec<_>>(),
+        Err(_) => Vec::new(),
+    };
+    rows
+}
+
 fn events(db: &Db, inst: &Instrument, as_of: NaiveDateTime) -> Section {
     let since = as_of - Duration::days(EVENT_WINDOW_DAYS);
-    let mut rows = db.events(&inst.id).unwrap_or_default();
-    rows.retain(|r| r.ts >= since && r.ts <= as_of);
-    rows.sort_by(|a, b| b.ts.cmp(&a.ts));
     let mut section = Section::titled("Events");
-    for r in rows {
+    for (id, ts, kind, summary, sentiment) in event_rows(db, inst, since, as_of, true) {
         section.lines.push(format!(
             "{} {}: {} (sentiment {:+.1})",
-            r.ts.format("%Y-%m-%d"),
-            r.kind.as_str(),
-            r.summary,
-            r.sentiment
+            ts.format("%Y-%m-%d"),
+            kind,
+            summary,
+            sentiment
         ));
-        section.evidence_ids.push(format!("event:{}", r.id));
+        section.evidence_ids.push(format!("event:{id}"));
     }
     section
 }
@@ -267,18 +325,13 @@ fn fundamentals(db: &Db, inst: &Instrument, as_of: NaiveDateTime) -> Section {
 }
 
 fn calendar(db: &Db, inst: &Instrument, as_of: NaiveDateTime) -> Section {
-    let mut rows = db.events(&inst.id).unwrap_or_default();
-    rows.retain(|r| r.ts > as_of);
-    rows.sort_by(|a, b| a.ts.cmp(&b.ts));
+    let far_future = as_of + Duration::days(3650);
     let mut section = Section::titled("Upcoming events");
-    for r in rows {
-        section.lines.push(format!(
-            "{} {}: {}",
-            r.ts.format("%Y-%m-%d"),
-            r.kind.as_str(),
-            r.summary
-        ));
-        section.evidence_ids.push(format!("event:{}", r.id));
+    for (id, ts, kind, summary, _sentiment) in event_rows(db, inst, as_of, far_future, false) {
+        section
+            .lines
+            .push(format!("{} {}: {}", ts.format("%Y-%m-%d"), kind, summary));
+        section.evidence_ids.push(format!("event:{id}"));
     }
     section
 }
@@ -289,35 +342,14 @@ pub fn fmt_value(value: f64) -> String {
     let magnitude = value.abs();
     for (threshold, suffix) in [(1e12, "T"), (1e9, "B"), (1e6, "M")] {
         if magnitude >= threshold {
-            return format!("{}{}", grouped(value / threshold, 2), suffix);
+            return format!(
+                "{}{}",
+                delta_core::format::grouped(value / threshold, 2),
+                suffix
+            );
         }
     }
-    grouped(value, 2)
-}
-
-/// `{:,.2f}` for non-negative magnitudes: 265.6 -> "265.60", 12345.678 ->
-/// "12,345.68". Groups only the integer part with commas.
-fn grouped(value: f64, decimals: usize) -> String {
-    let fixed = format!("{:.*}", decimals, value);
-    let (int_part, rest) = fixed.split_once('.').unwrap_or((fixed.as_str(), ""));
-    let negative = int_part.starts_with('-');
-    let digits = int_part.trim_start_matches('-');
-    let mut grouped_int = String::new();
-    for (i, c) in digits.chars().enumerate() {
-        if i > 0 && (digits.len() - i) % 3 == 0 {
-            grouped_int.push(',');
-        }
-        grouped_int.push(c);
-    }
-    format!(
-        "{}{grouped_int}{rest}",
-        if negative { "-" } else { "" },
-        rest = if rest.is_empty() {
-            "".to_string()
-        } else {
-            format!(".{rest}")
-        }
-    )
+    delta_core::format::grouped(value, 2)
 }
 
 /// `services.brief_for`: the rendered brief for one universe instrument.

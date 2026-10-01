@@ -6,6 +6,7 @@
 pub mod config;
 pub mod db;
 pub mod events;
+pub mod format;
 pub mod ids;
 pub mod json;
 pub mod models;

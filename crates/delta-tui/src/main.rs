@@ -519,6 +519,63 @@ mod tests {
     }
 
     #[test]
+    fn every_tab_fits_non_canonical_terminal_sizes() {
+        // The painters must adapt to any terminal, not just the three
+        // canonical matrix sizes: the status bar stays on the last row and
+        // pane bottoms land on the content row, never past it.
+        let sizes = [
+            (70u16, 20u16),
+            (80, 24),
+            (90, 28),
+            (100, 30),
+            (120, 40),
+            (140, 35),
+            (159, 45),
+            (160, 40),
+            (180, 35),
+            (200, 50),
+            (200, 38),
+        ];
+        for &(w, h) in &sizes {
+            for tab in [
+                Tab::Home,
+                Tab::Watchlist,
+                Tab::Research,
+                Tab::Theses,
+                Tab::Ask,
+                Tab::Decisions,
+                Tab::Settings,
+            ] {
+                let mut a = app();
+                a.tab = tab;
+                let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
+                terminal.draw(|f| a.draw(f, f.area())).unwrap();
+                let buf = terminal.backend().buffer();
+                let row_text = |y: u16| -> String {
+                    (0..w)
+                        .map(|x| buf[(x, y)].symbol())
+                        .collect::<String>()
+                        .trim_end()
+                        .to_string()
+                };
+                let status = row_text(h - 1);
+                assert!(
+                    status.contains("offline seed"),
+                    "status bar missing at {w}x{h} tab {tab:?}: {status:?}"
+                );
+                // The watchlist panes bottom out on the content row.
+                if tab == Tab::Watchlist {
+                    let content = row_text(h - 3);
+                    assert!(
+                        content.contains('\u{2500}') || content.contains('\u{2504}'),
+                        "watchlist pane bottom missing at {w}x{h}: {content:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn metrics_rows_render_on_the_watchlist_screen() {
         let mut a = app();
         let rows = vec![
@@ -567,28 +624,34 @@ mod home_feed_tests {
         assert_eq!(a.desk.home_state().feed, HomeFeed::seed());
         // …then the refresh worker's analytics output lands on the bus.
         let mut feed = HomeFeed::seed();
-        feed.since_line = "3 new items since your last visit".to_string();
-        feed.since_brief = "3 new".to_string();
-        feed.newest_line = "newest   Apple announces new chip".to_string();
-        feed.stale_age = "0d old".to_string();
+        feed.since_line = Some("3 new items since your last visit".to_string());
+        feed.since_brief = Some("3 new".to_string());
+        feed.newest_line = Some("newest   Apple announces new chip".to_string());
+        feed.stale_age = Some("0d old".to_string());
         a.update(Action::HomeRefresh(feed));
         let state = a.desk.home_state();
-        assert_eq!(state.feed.since_line, "3 new items since your last visit");
-        assert_eq!(state.feed.since_brief, "3 new");
-        assert_eq!(state.feed.newest_line, "newest   Apple announces new chip");
-        assert_eq!(state.feed.stale_age, "0d old");
+        assert_eq!(
+            state.feed.since_line.as_deref(),
+            Some("3 new items since your last visit")
+        );
+        assert_eq!(state.feed.since_brief.as_deref(), Some("3 new"));
+        assert_eq!(
+            state.feed.newest_line.as_deref(),
+            Some("newest   Apple announces new chip")
+        );
+        assert_eq!(state.feed.stale_age.as_deref(), Some("0d old"));
     }
 
     #[test]
     fn live_feed_values_render_on_the_home_screen() {
         let mut a = app();
         let mut feed = HomeFeed::seed();
-        feed.since_line = "3 new items since your last visit".to_string();
-        feed.since_brief = "3 new".to_string();
-        feed.newest_line = "newest   Apple announces new chip".to_string();
-        feed.stale_age = "0d old".to_string();
-        feed.upcoming_line = "Thu 01 Jan  earnings · Q4 results".to_string();
-        feed.upcoming_brief = "Thu 01 Jan earnings".to_string();
+        feed.since_line = Some("3 new items since your last visit".to_string());
+        feed.since_brief = Some("3 new".to_string());
+        feed.newest_line = Some("newest   Apple announces new chip".to_string());
+        feed.stale_age = Some("0d old".to_string());
+        feed.upcoming_line = Some("Thu 01 Jan  earnings · Q4 results".to_string());
+        feed.upcoming_brief = Some("Thu 01 Jan earnings".to_string());
         a.update(Action::HomeRefresh(feed));
         a.tab = Tab::Home;
         // The narrow breakpoint folds the since pane into briefs, not lines.

@@ -315,51 +315,69 @@ impl Desk {
 /// The seeded values stay wherever a query fails or finds nothing.
 pub fn load_feed(db: &Db, instrument_ids: &[String]) -> HomeFeed {
     let now = now_naive();
-    let mut feed = HomeFeed::seed();
+    // Slots stay unset (and the painters fall back to the golden seed text)
+    // unless the query succeeded and found something — a failed query must
+    // not present stale seed strings as fresh data.
+    let mut feed = HomeFeed::default();
     if let Ok(health) = analytics::data_health(db) {
         if let Some(newest) = health.latest_bar.values().max() {
             let age = (now - *newest).num_days().max(0);
-            feed.stale_age = format!("{age}d old");
+            feed.stale_age = Some(format!("{age}d old"));
         } else {
-            feed.stale_age = "no bars".to_string();
+            feed.stale_age = Some("no bars".to_string());
         }
     }
     if let Ok(pulse) = analytics::pulse(db, instrument_ids, now - Duration::days(1), 30, now) {
         let new_items = pulse.total();
         if new_items > 0 {
-            feed.since_line = truncate(&format!("{new_items} new items since your last visit"), 54);
-            feed.since_brief = format!("{new_items} new");
+            feed.since_line = Some(truncate(
+                &format!("{new_items} new items since your last visit"),
+                54,
+            ));
+            feed.since_brief = Some(format!("{new_items} new"));
         }
         let window_total: usize = pulse.daily.iter().sum();
         if window_total > 0 {
-            let spend = analytics::total_spend(db, Some(now - Duration::days(30))) + 0.0; // normalise -0.0
-            feed.activity_line = truncate(
+            let spend = analytics::total_spend(db, Some(now - Duration::days(30))).max(0.0);
+            feed.activity_line = Some(truncate(
                 &format!("{window_total} items in the last 30 days · ${spend:.2} LLM spend"),
                 54,
-            );
+            ));
         }
     }
     if let Ok(Some(headline)) = analytics::latest_headline(db, instrument_ids, 50) {
-        feed.newest_line = format!("newest   {}", truncate(&headline.title, 45));
+        feed.newest_line = Some(format!("newest   {}", truncate(&headline.title, 45)));
     }
     if let Ok(events) = analytics::upcoming_events(db, instrument_ids, 1, now) {
         if let Some(event) = events.first() {
             let when = event.ts.format("%a %d %b").to_string();
-            feed.upcoming_line =
-                truncate(&format!("{when}  {} · {}", event.kind, event.summary), 54);
-            feed.upcoming_brief = truncate(&format!("{when} {}", event.kind), 20);
+            feed.upcoming_line = Some(truncate(
+                &format!("{when}  {} · {}", event.kind, event.summary),
+                54,
+            ));
+            feed.upcoming_brief = Some(truncate(&format!("{when} {}", event.kind), 20));
         }
     }
     feed
 }
 
-/// Clip `text` to at most `max` chars, marking a cut with an ellipsis.
+/// Clip `text` to at most `max` display columns (unicode width, so CJK and
+/// emoji count double), marking a cut with an ellipsis.
 fn truncate(text: &str, max: usize) -> String {
-    if text.chars().count() <= max {
+    use unicode_width::UnicodeWidthStr;
+    if text.width() <= max {
         return text.to_string();
     }
-    let mut cut: String = text.chars().take(max - 1).collect();
-    cut.push('…');
+    let mut cut = String::new();
+    for ch in text.chars() {
+        let mut buf = [0u8; 4];
+        let w = ch.encode_utf8(&mut buf).width();
+        if cut.width() + w > max - 1 {
+            break;
+        }
+        cut.push(ch);
+    }
+    cut.push('\u{2026}');
     cut
 }
 
@@ -423,18 +441,25 @@ mod tests {
         db.store_items(&items).unwrap();
 
         let feed = load_feed(&db, &["US:AAPL".to_string()]);
-        assert_eq!(feed.stale_age, "3d old");
-        assert_eq!(feed.since_line, "1 new items since your last visit");
-        assert_eq!(feed.since_brief, "1 new");
+        assert_eq!(feed.stale_age.as_deref(), Some("3d old"));
         assert_eq!(
-            feed.activity_line,
-            "1 items in the last 30 days · $0.00 LLM spend"
+            feed.since_line.as_deref(),
+            Some("1 new items since your last visit")
         );
-        assert_eq!(feed.newest_line, "newest   Apple announces new chip");
+        assert_eq!(feed.since_brief.as_deref(), Some("1 new"));
+        assert_eq!(
+            feed.activity_line.as_deref(),
+            Some("1 items in the last 30 days · $0.00 LLM spend")
+        );
+        assert_eq!(
+            feed.newest_line.as_deref(),
+            Some("newest   Apple announces new chip")
+        );
         assert!(feed
             .upcoming_line
-            .starts_with("Thu 01 Jan  earnings · Q4 earnings"));
-        assert_eq!(feed.upcoming_brief, "Thu 01 Jan earnings");
+            .as_deref()
+            .is_some_and(|l| l.starts_with("Thu 01 Jan  earnings · Q4 earnings")));
+        assert_eq!(feed.upcoming_brief.as_deref(), Some("Thu 01 Jan earnings"));
     }
 
     #[test]
@@ -454,8 +479,9 @@ mod tests {
             .unwrap();
         let feed = load_feed(&db, &["US:AAPL".to_string()]);
         // "newest   " + 44 X's + the ellipsis = exactly the pane's 54 cells.
-        assert_eq!(feed.newest_line.chars().count(), 54);
-        assert!(feed.newest_line.ends_with('…'));
+        let newest = feed.newest_line.as_deref().unwrap_or_default();
+        assert_eq!(newest.chars().count(), 54);
+        assert!(newest.ends_with('\u{2026}'));
     }
 
     #[test]
