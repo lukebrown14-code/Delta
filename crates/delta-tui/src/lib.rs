@@ -43,6 +43,8 @@ pub enum Action {
     },
     /// Ingest finished; carries per-source row counts.
     Ingested(BTreeMap<String, usize>),
+    /// Refreshed Home overview values (headline, pulse, upcoming, health).
+    HomeRefresh(crate::screens::HomeFeed),
     /// Request a gather run (UI -> ingest worker).
     Gather,
     /// One-line worker status for the status overlay.

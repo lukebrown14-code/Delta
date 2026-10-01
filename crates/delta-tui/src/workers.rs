@@ -26,9 +26,35 @@ pub fn spawn(
         tokio::spawn(stream_quotes_worker(bus.clone(), universe.clone()));
         tokio::spawn(metrics_worker(bus.clone(), universe.clone()));
     }
+    let ids: Vec<String> = universe.iter().map(|i| i.id.clone()).collect();
     let (gather_tx, gather_rx) = mpsc::unbounded_channel::<()>();
-    tokio::spawn(gather_worker(bus.clone(), universe, db_path, gather_rx));
+    tokio::spawn(gather_worker(
+        bus.clone(),
+        universe,
+        db_path.clone(),
+        gather_rx,
+    ));
+    if let Some(db_path) = db_path {
+        tokio::spawn(home_refresh_worker(bus, db_path, ids));
+    }
     gather_tx
+}
+
+/// Re-run the Home analytics queries and push them to the bus, low-frequency
+/// local SQL on the same cadence as the metrics worker — no new pollers.
+const HOME_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
+
+async fn home_refresh_worker(
+    bus: mpsc::UnboundedSender<Action>,
+    db_path: PathBuf,
+    ids: Vec<String>,
+) {
+    loop {
+        tokio::time::sleep(HOME_REFRESH_INTERVAL).await;
+        if let Ok(db) = delta_core::db::Db::open(&db_path) {
+            let _ = bus.send(Action::HomeRefresh(crate::desk::load_feed(&db, &ids)));
+        }
+    }
 }
 
 /// Stream Yahoo quotes over the websocket: connect, decode each text frame

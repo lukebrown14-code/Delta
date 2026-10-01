@@ -756,6 +756,43 @@ pub fn draw_glossary_overlay(screen: &mut Screen, state: &WatchlistState) {
     screen.text(x, fy, &" ".repeat(29), Style::fg(color::MUTED));
 }
 
+/// Live Home overview values, formatted by the desk from the analytics
+/// queries (headline, pulse, upcoming events, bar staleness, spend).
+/// [`HomeFeed::seed`] reproduces the golden scenario's strings, so painters
+/// that render these fields stay byte-identical under the goldens.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct HomeFeed {
+    /// "nothing new since your last visit" / "3 new items since …".
+    pub since_line: String,
+    /// "no activity in the last 30 days" / "7 items in the last 30 days …".
+    pub activity_line: String,
+    /// "newest   no articles yet" / "newest   <title>".
+    pub newest_line: String,
+    /// Bar staleness after "⚠ {symbol} ": "1d old".
+    pub stale_age: String,
+    /// First upcoming-pane row (seed: "nothing scheduled — press 3, …").
+    pub upcoming_line: String,
+    /// The narrow breakpoint's "next  {brief}" value.
+    pub upcoming_brief: String,
+    /// The narrow breakpoint's since-summary value ("nothing new").
+    pub since_brief: String,
+}
+
+impl HomeFeed {
+    /// The seeded golden scenario's values.
+    pub fn seed() -> Self {
+        Self {
+            since_line: "nothing new since your last visit".to_string(),
+            activity_line: "no activity in the last 30 days".to_string(),
+            newest_line: "newest   no articles yet".to_string(),
+            stale_age: "1d old".to_string(),
+            upcoming_line: "nothing scheduled — press 3, then U to gather evidence".to_string(),
+            upcoming_brief: "nothing scheduled".to_string(),
+            since_brief: "nothing new".to_string(),
+        }
+    }
+}
+
 /// Home state the painter renders (the seeded golden scenario's values).
 pub struct HomeState {
     pub clock: String,
@@ -766,6 +803,8 @@ pub struct HomeState {
     pub since_stamp: String,
     /// Raw closes so the narrow breakpoint can resize the sparkline.
     pub closes: Vec<f64>,
+    /// Live overview values (seeded when offline).
+    pub feed: HomeFeed,
 }
 
 /// The Home screen: header chip + clock, watchlist / since-you-last-looked,
@@ -832,22 +871,17 @@ pub fn draw_home(screen: &mut Screen, home: &HomeState) {
     );
 
     // Since-you-last-looked: empty-run summary, stale warnings.
-    screen.text(
-        62,
-        2,
-        "nothing new since your last visit",
-        Style::fg(color::MUTED),
-    );
+    screen.text(62, 2, &home.feed.since_line, Style::fg(color::MUTED));
     screen.text(102, 2, &home.since_stamp, Style::fg(color::MUTED));
+    screen.text(62, 4, &home.feed.activity_line, Style::fg(color::MUTED));
+    screen.text(62, 5, &home.feed.newest_line, Style::fg(color::MUTED));
+    let warn = Style::fg(color::AMBER);
     screen.text(
         62,
-        4,
-        "no activity in the last 30 days",
-        Style::fg(color::MUTED),
+        7,
+        &format!("⚠ {} {}", home.symbol, home.feed.stale_age),
+        warn,
     );
-    screen.text(62, 5, "newest   no articles yet", Style::fg(color::MUTED));
-    let warn = Style::fg(color::AMBER);
-    screen.text(62, 7, &format!("⚠ {} 1d old", home.symbol), warn);
     screen.text(62, 8, "⚠ 2 evidence prompts · 3 evidence", warn);
 
     // Middle row: upcoming + theses.
@@ -872,7 +906,7 @@ pub fn draw_home(screen: &mut Screen, home: &HomeState) {
     screen.text(
         3,
         content_bottom - 20,
-        "nothing scheduled — press 3, then U to gather evidence",
+        &home.feed.upcoming_line,
         Style::fg(color::MUTED),
     );
     screen.text(
@@ -1729,11 +1763,16 @@ pub fn draw_home_wide(screen: &mut Screen, home: &HomeState) {
 
     let muted = Style::fg(color::MUTED);
     let warn = Style::fg(color::AMBER);
-    screen.text(inner, 2, "nothing new since your last visit", muted);
+    screen.text(inner, 2, &home.feed.since_line, muted);
     screen.text_right(rx1 - 1, 2, &home.since_stamp, muted);
-    screen.text(inner, 4, "no activity in the last 30 days", muted);
-    screen.text(inner, 5, "newest   no articles yet", muted);
-    screen.text(inner, 7, &format!("⚠ {} 1d old", home.symbol), warn);
+    screen.text(inner, 4, &home.feed.activity_line, muted);
+    screen.text(inner, 5, &home.feed.newest_line, muted);
+    screen.text(
+        inner,
+        7,
+        &format!("⚠ {} {}", home.symbol, home.feed.stale_age),
+        warn,
+    );
     screen.text(inner, 8, "⚠ 2 evidence prompts · 3 evidence", warn);
 
     // Upcoming + theses.
@@ -1755,12 +1794,7 @@ pub fn draw_home_wide(screen: &mut Screen, home: &HomeState) {
         &[("theses", Style::fg(color::BLUE).bold())],
         &pane_hints(&[("enter", "open thesis"), ("4", "all")]),
     );
-    screen.text(
-        3,
-        22,
-        "nothing scheduled — press 3, then U to gather evidence",
-        muted,
-    );
+    screen.text(3, 22, &home.feed.upcoming_line, muted);
     screen.text(3, 23, "calendar plugin: earnings & dividends only", muted);
     screen.text(inner, 22, "no theses yet", muted);
     screen.text(
@@ -2412,14 +2446,19 @@ pub fn draw_home_narrow(screen: &mut Screen, home: &HomeState) {
 
     // Since-you-last-looked, folded into the pane.
     let muted = Style::fg(color::MUTED);
-    screen.text(3, 5, "since Mon 09:30  nothing new   ", muted);
+    screen.text(
+        3,
+        5,
+        &format!("{}  {}   ", home.since_stamp, home.feed.since_brief),
+        muted,
+    );
     screen.text(
         34,
         5,
-        &format!("⚠ {} 1d old", home.symbol),
+        &format!("⚠ {} {}", home.symbol, home.feed.stale_age),
         Style::fg(color::AMBER),
     );
-    screen.text(3, 6, "next  nothing scheduled", muted);
+    screen.text(3, 6, &format!("next  {}", home.feed.upcoming_brief), muted);
 
     // Agenda: full width, jump keys with verdicts.
     screen.pane(
