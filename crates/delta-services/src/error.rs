@@ -6,6 +6,8 @@ pub enum ServiceError {
     Db(#[from] delta_core::db::DbError),
     #[error("http error: {0}")]
     Http(#[from] reqwest::Error),
+    #[error("jev error: {0}")]
+    Jev(#[from] delta_llm::jev::JevError),
     #[error("{message}")]
     Invalid { message: String },
     #[error("plugin {plugin}: {message}")]
