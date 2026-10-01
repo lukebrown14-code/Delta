@@ -9,9 +9,10 @@ use chrono::{Duration, NaiveDateTime, Utc};
 use delta_core::config::load_config;
 use delta_core::db::Db;
 use delta_core::models::{AssetClass, Bar, Instrument};
+use delta_services::analytics;
 
 use crate::braille::BrailleGraph;
-use crate::screens::{grouped, HomeState, MetricsData, WatchlistState};
+use crate::screens::{grouped, HomeFeed, HomeState, MetricsData, WatchlistState};
 
 /// Golden-exporter constants: 80 seeded bars.
 pub const BAR_COUNT: usize = 80;
@@ -98,6 +99,8 @@ pub struct Desk {
     pub source: Source,
     /// Last ingest counts, when a gather has run this session.
     pub last_ingest: Option<BTreeMap<String, usize>>,
+    /// Live Home overview values (headline, pulse, upcoming, staleness).
+    pub feed: HomeFeed,
 }
 
 impl Default for Desk {
@@ -111,7 +114,7 @@ impl Desk {
     /// offline seed when either is missing or empty.
     pub fn open() -> Desk {
         match Self::try_real() {
-            Some((instruments, db_path)) => Desk {
+            Some((instruments, db_path, feed)) => Desk {
                 instruments,
                 selected: 0,
                 range_index: 2, // "1m"
@@ -119,12 +122,13 @@ impl Desk {
                 metrics: BTreeMap::new(),
                 source: Source::Real(db_path),
                 last_ingest: None,
+                feed,
             },
             None => Self::offline(),
         }
     }
 
-    fn try_real() -> Option<(Vec<InstrumentDesk>, PathBuf)> {
+    fn try_real() -> Option<(Vec<InstrumentDesk>, PathBuf, HomeFeed)> {
         let config_path = PathBuf::from("config.toml");
         if !config_path.exists() {
             return None;
@@ -147,7 +151,12 @@ impl Desk {
         if instruments.is_empty() {
             return None;
         }
-        Some((instruments, db_path))
+        let ids: Vec<String> = instruments
+            .iter()
+            .map(|d| d.instrument.id.clone())
+            .collect();
+        let feed = load_feed(&db, &ids);
+        Some((instruments, db_path, feed))
     }
 
     /// The offline golden environment (in-memory; nothing touches disk).
@@ -160,6 +169,7 @@ impl Desk {
             metrics: BTreeMap::new(),
             source: Source::Offline,
             last_ingest: None,
+            feed: HomeFeed::seed(),
         }
     }
 
@@ -269,6 +279,7 @@ impl Desk {
             spark,
             since_stamp: format!("since {}", now.format("%a %H:%M")),
             closes,
+            feed: self.feed.clone(),
         }
     }
 
@@ -290,10 +301,167 @@ impl Desk {
                     .collect();
             }
         }
+        // The gather just wrote new rows; refresh the overview values too.
+        let ids: Vec<String> = self
+            .instruments
+            .iter()
+            .map(|d| d.instrument.id.clone())
+            .collect();
+        self.feed = load_feed(&db, &ids);
     }
+}
+
+/// Build the Home overview feed from the analytics queries (all local SQL).
+/// The seeded values stay wherever a query fails or finds nothing.
+pub fn load_feed(db: &Db, instrument_ids: &[String]) -> HomeFeed {
+    let now = now_naive();
+    let mut feed = HomeFeed::seed();
+    if let Ok(health) = analytics::data_health(db) {
+        if let Some(newest) = health.latest_bar.values().max() {
+            let age = (now - *newest).num_days().max(0);
+            feed.stale_age = format!("{age}d old");
+        } else {
+            feed.stale_age = "no bars".to_string();
+        }
+    }
+    if let Ok(pulse) = analytics::pulse(db, instrument_ids, now - Duration::days(1), 30, now) {
+        let new_items = pulse.total();
+        if new_items > 0 {
+            feed.since_line = truncate(&format!("{new_items} new items since your last visit"), 54);
+            feed.since_brief = format!("{new_items} new");
+        }
+        let window_total: usize = pulse.daily.iter().sum();
+        if window_total > 0 {
+            let spend = analytics::total_spend(db, Some(now - Duration::days(30))) + 0.0; // normalise -0.0
+            feed.activity_line = truncate(
+                &format!("{window_total} items in the last 30 days · ${spend:.2} LLM spend"),
+                54,
+            );
+        }
+    }
+    if let Ok(Some(headline)) = analytics::latest_headline(db, instrument_ids, 50) {
+        feed.newest_line = format!("newest   {}", truncate(&headline.title, 45));
+    }
+    if let Ok(events) = analytics::upcoming_events(db, instrument_ids, 1, now) {
+        if let Some(event) = events.first() {
+            let when = event.ts.format("%a %d %b").to_string();
+            feed.upcoming_line =
+                truncate(&format!("{when}  {} · {}", event.kind, event.summary), 54);
+            feed.upcoming_brief = truncate(&format!("{when} {}", event.kind), 20);
+        }
+    }
+    feed
+}
+
+/// Clip `text` to at most `max` chars, marking a cut with an ellipsis.
+fn truncate(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_string();
+    }
+    let mut cut: String = text.chars().take(max - 1).collect();
+    cut.push('…');
+    cut
 }
 
 /// Wall-clock now as the naive-UTC the pipeline speaks.
 pub fn now_naive() -> NaiveDateTime {
     Utc::now().naive_utc()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::NaiveDate;
+    use delta_core::db::StoreItem;
+    use delta_core::models::{Event, EventKind, NewsItem};
+
+    /// A bar timestamped `days_before` before "now", so ages are stable.
+    fn bar(days_before: i64) -> Bar {
+        Bar {
+            instrument_id: "US:AAPL".to_string(),
+            ts: now_naive() - Duration::days(days_before),
+            open: 1.0,
+            high: 2.0,
+            low: 0.5,
+            close: 1.5,
+            volume: 100.0,
+            source: "yahoo".to_string(),
+        }
+    }
+
+    #[test]
+    fn load_feed_reads_analytics_into_the_overview_lines() {
+        let mut db = Db::open_memory().unwrap();
+        let items: Vec<StoreItem> = vec![
+            bar(3).into(),
+            NewsItem {
+                id: "n1".to_string(),
+                instrument_ids: vec!["US:AAPL".to_string()],
+                published: now_naive() - Duration::hours(2),
+                title: "Apple announces new chip".to_string(),
+                url: "https://example.com".to_string(),
+                body: None,
+                source: "rss".to_string(),
+            }
+            .into(),
+            Event {
+                id: "e1".to_string(),
+                instrument_id: "US:AAPL".to_string(),
+                ts: NaiveDate::from_ymd_opt(2099, 1, 1)
+                    .unwrap()
+                    .and_hms_opt(0, 0, 0)
+                    .unwrap(),
+                kind: EventKind::Earnings,
+                summary: "Q4 earnings".to_string(),
+                sentiment: 0.0,
+                evidence_ids: vec![],
+                extracted_by: "m".to_string(),
+                prompt_version: "1".to_string(),
+            }
+            .into(),
+        ];
+        db.store_items(&items).unwrap();
+
+        let feed = load_feed(&db, &["US:AAPL".to_string()]);
+        assert_eq!(feed.stale_age, "3d old");
+        assert_eq!(feed.since_line, "1 new items since your last visit");
+        assert_eq!(feed.since_brief, "1 new");
+        assert_eq!(
+            feed.activity_line,
+            "1 items in the last 30 days · $0.00 LLM spend"
+        );
+        assert_eq!(feed.newest_line, "newest   Apple announces new chip");
+        assert!(feed
+            .upcoming_line
+            .starts_with("Thu 01 Jan  earnings · Q4 earnings"));
+        assert_eq!(feed.upcoming_brief, "Thu 01 Jan earnings");
+    }
+
+    #[test]
+    fn load_feed_truncates_long_titles_to_the_pane_width() {
+        let mut db = Db::open_memory().unwrap();
+        let long_title = "X".repeat(80);
+        db.store_items(&[NewsItem {
+            id: "n1".to_string(),
+            instrument_ids: vec!["US:AAPL".to_string()],
+            published: now_naive() - Duration::hours(2),
+            title: long_title,
+            url: "u".to_string(),
+            body: None,
+            source: "rss".to_string(),
+        }
+        .into()])
+            .unwrap();
+        let feed = load_feed(&db, &["US:AAPL".to_string()]);
+        // "newest   " + 44 X's + the ellipsis = exactly the pane's 54 cells.
+        assert_eq!(feed.newest_line.chars().count(), 54);
+        assert!(feed.newest_line.ends_with('…'));
+    }
+
+    #[test]
+    fn offline_desk_keeps_the_seeded_feed() {
+        let desk = Desk::offline();
+        assert_eq!(desk.feed, HomeFeed::seed());
+        assert_eq!(desk.home_state().feed, HomeFeed::seed());
+    }
 }

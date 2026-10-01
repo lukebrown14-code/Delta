@@ -10,7 +10,8 @@ use delta_tui::screens::{
     draw_decisions_wide, draw_glossary_overlay, draw_home, draw_home_narrow, draw_home_wide,
     draw_research, draw_research_narrow, draw_research_wide, draw_settings, draw_settings_narrow,
     draw_settings_wide, draw_theses, draw_theses_narrow, draw_theses_wide, draw_watchlist,
-    draw_watchlist_narrow, draw_watchlist_wide, grouped, HomeState, MetricsData, WatchlistState,
+    draw_watchlist_narrow, draw_watchlist_wide, grouped, HomeFeed, HomeState, MetricsData,
+    WatchlistState,
 };
 
 fn golden_path(name: &str) -> PathBuf {
@@ -299,6 +300,7 @@ fn home_state() -> HomeState {
         spark,
         since_stamp: "since Mon 09:30".to_string(),
         closes,
+        feed: HomeFeed::seed(),
     }
 }
 

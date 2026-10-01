@@ -219,7 +219,12 @@ impl Component for App {
                 }
             }
             Action::Status(msg) => self.status = msg,
-            _ => {}
+            Action::HomeRefresh(feed) => self.desk.feed = feed,
+            Action::Noop
+            | Action::OpenDialog(_)
+            | Action::CloseDialog
+            | Action::Goto(_)
+            | Action::Gather => {}
         }
     }
 
@@ -390,7 +395,7 @@ mod tests {
 
     use ratatui::backend::TestBackend;
 
-    fn app() -> App {
+    pub(super) fn app() -> App {
         App {
             desk: Desk::offline(),
             tab: Tab::Watchlist,
@@ -544,6 +549,71 @@ mod tests {
             "Dividend yield",
         ] {
             assert!(text.contains(probe), "missing {probe} on screen");
+        }
+    }
+}
+
+#[cfg(test)]
+mod home_feed_tests {
+    use super::tests::app;
+    use super::*;
+    use delta_tui::screens::HomeFeed;
+    use ratatui::backend::TestBackend;
+
+    #[test]
+    fn home_refresh_flows_from_analytics_output_into_the_home_state() {
+        let mut a = app();
+        // The offline desk starts seeded…
+        assert_eq!(a.desk.home_state().feed, HomeFeed::seed());
+        // …then the refresh worker's analytics output lands on the bus.
+        let mut feed = HomeFeed::seed();
+        feed.since_line = "3 new items since your last visit".to_string();
+        feed.since_brief = "3 new".to_string();
+        feed.newest_line = "newest   Apple announces new chip".to_string();
+        feed.stale_age = "0d old".to_string();
+        a.update(Action::HomeRefresh(feed));
+        let state = a.desk.home_state();
+        assert_eq!(state.feed.since_line, "3 new items since your last visit");
+        assert_eq!(state.feed.since_brief, "3 new");
+        assert_eq!(state.feed.newest_line, "newest   Apple announces new chip");
+        assert_eq!(state.feed.stale_age, "0d old");
+    }
+
+    #[test]
+    fn live_feed_values_render_on_the_home_screen() {
+        let mut a = app();
+        let mut feed = HomeFeed::seed();
+        feed.since_line = "3 new items since your last visit".to_string();
+        feed.since_brief = "3 new".to_string();
+        feed.newest_line = "newest   Apple announces new chip".to_string();
+        feed.stale_age = "0d old".to_string();
+        feed.upcoming_line = "Thu 01 Jan  earnings · Q4 results".to_string();
+        feed.upcoming_brief = "Thu 01 Jan earnings".to_string();
+        a.update(Action::HomeRefresh(feed));
+        a.tab = Tab::Home;
+        // The narrow breakpoint folds the since pane into briefs, not lines.
+        for &(w, h) in &[(80u16, 24u16), (120, 40), (200, 50)] {
+            let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
+            terminal.draw(|f| a.draw(f, f.area())).unwrap();
+            let text: String = terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .map(ratatui::buffer::Cell::symbol)
+                .collect();
+            let mut probes = vec!["0d old"];
+            if w == 80 {
+                probes.push("  3 new   ");
+                probes.push("next  Thu 01 Jan earnings");
+            } else {
+                probes.push("3 new items since your last visit");
+                probes.push("newest   Apple announces new chip");
+                probes.push("Thu 01 Jan  earnings · Q4 results");
+            }
+            for probe in probes {
+                assert!(text.contains(probe), "missing {probe} at {w}x{h}");
+            }
         }
     }
 }
