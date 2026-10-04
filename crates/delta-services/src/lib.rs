@@ -2,13 +2,21 @@
 
 pub mod analytics;
 pub mod brief;
+pub mod chat;
 pub mod config_ops;
+pub mod decisions;
 pub mod error;
+pub mod evidence;
 pub mod fixture;
 pub mod pipeline;
+pub mod reports;
+pub mod review;
 pub mod sentiment;
+pub mod setup;
 pub mod targets;
+pub mod theses;
 pub mod thesis_health;
+pub mod thesis_summary;
 
 pub use analytics::{
     data_health, latest_headline, latest_report, llm_costs, pulse, recent_closes, total_spend,
