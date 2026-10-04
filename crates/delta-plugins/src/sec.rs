@@ -68,7 +68,6 @@ pub fn filing_url(cik: &str, accession: &str, document: &str) -> String {
 }
 
 /// SEC EDGAR -> filings as news, XBRL facts as fundamentals (`SECEdgar`).
-#[derive(Default)]
 pub struct SecEdgar {
     pub contact: String,
     /// Public so tests can construct the struct with `..Default::default()`
@@ -80,6 +79,18 @@ pub struct SecEdgar {
     /// Test seam: base URL overrides (empty = production).
     pub tickers_url: String,
     pub data_base_url: String,
+}
+
+impl Default for SecEdgar {
+    fn default() -> Self {
+        Self {
+            contact: String::new(),
+            cik_by_symbol: AsyncMutex::new(None),
+            sleep_scale: 1.0,
+            tickers_url: String::new(),
+            data_base_url: String::new(),
+        }
+    }
 }
 
 impl SecEdgar {
@@ -168,6 +179,12 @@ impl DataPlugin for SecEdgar {
         instruments: &[Instrument],
         since: NaiveDateTime,
     ) -> Result<Rows, PluginError> {
+        if !self.contact.contains('@') {
+            return Err(PluginError::Other {
+                plugin: "sec_edgar",
+                message: "set [plugins.sec_edgar] contact to a real email address".to_string(),
+            });
+        }
         let since_date = since.date();
         let semaphore = Arc::new(tokio::sync::Semaphore::new(MAX_REQUESTS_PER_SECOND));
         let client = reqwest::Client::builder()

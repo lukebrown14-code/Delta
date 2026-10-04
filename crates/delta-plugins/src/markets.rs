@@ -1,14 +1,56 @@
 //! Market plugins: universe construction and session times
 //! (ports of `delta/plugins/markets/us.py` and `asx.py`).
 
-use chrono::{DateTime, Datelike, Duration, NaiveTime, Timelike, Utc};
+use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveTime, Utc};
 use delta_core::ids::make_instrument_id;
 use delta_core::models::Instrument;
 use serde_json::Value;
 
 use crate::plugin::DataPlugin;
 
-const US_EASTERN_OFFSET_SECONDS: i32 = -5 * 3600; // EST; see finding rust-plugins #7
+fn nth_sunday(year: i32, month: u32, nth: u32) -> NaiveDate {
+    let first = NaiveDate::from_ymd_opt(year, month, 1).unwrap();
+    let delta = (7 - first.weekday().num_days_from_sunday()) % 7;
+    first + Duration::days(i64::from(delta + 7 * (nth - 1)))
+}
+
+fn us_offset(ts: DateTime<Utc>) -> i32 {
+    let year = ts.year();
+    let start = nth_sunday(year, 3, 2).and_hms_opt(7, 0, 0).unwrap();
+    let end = nth_sunday(year, 11, 1).and_hms_opt(6, 0, 0).unwrap();
+    if ts.naive_utc() >= start && ts.naive_utc() < end {
+        -4 * 3600
+    } else {
+        -5 * 3600
+    }
+}
+
+fn us_offset_for_open(day: NaiveDate) -> i32 {
+    if day >= nth_sunday(day.year(), 3, 2) && day < nth_sunday(day.year(), 11, 1) {
+        -4 * 3600
+    } else {
+        -5 * 3600
+    }
+}
+
+fn asx_offset(ts: DateTime<Utc>) -> i32 {
+    let year = ts.year();
+    let end = nth_sunday(year, 4, 1).and_hms_opt(16, 0, 0).unwrap() - Duration::days(1);
+    let start = nth_sunday(year, 10, 1).and_hms_opt(16, 0, 0).unwrap() - Duration::days(1);
+    if ts.naive_utc() < end || ts.naive_utc() >= start {
+        11 * 3600
+    } else {
+        10 * 3600
+    }
+}
+
+fn asx_offset_for_open(day: NaiveDate) -> i32 {
+    if day >= nth_sunday(day.year(), 10, 1) || day < nth_sunday(day.year(), 4, 1) {
+        11 * 3600
+    } else {
+        10 * 3600
+    }
+}
 
 const MARKET_OPEN: (u32, u32) = (9, 30);
 const MARKET_CLOSE: (u32, u32) = (16, 0);
@@ -38,7 +80,7 @@ pub struct UsMarket {
 
 impl UsMarket {
     fn local(&self, ts: DateTime<Utc>) -> DateTime<chrono::FixedOffset> {
-        ts.with_timezone(&chrono::FixedOffset::east_opt(US_EASTERN_OFFSET_SECONDS).unwrap())
+        ts.with_timezone(&chrono::FixedOffset::east_opt(us_offset(ts)).unwrap())
     }
 
     pub fn universe(&self) -> Vec<Instrument> {
@@ -71,36 +113,30 @@ impl UsMarket {
     }
 
     pub fn next_open(&self, ts: DateTime<Utc>) -> DateTime<Utc> {
-        let mut candidate = self.local(ts);
+        let mut day = self.local(ts).date_naive();
         for _ in 0..14 {
-            candidate = candidate
-                .with_hour(MARKET_OPEN.0)
-                .and_then(|c| c.with_minute(MARKET_OPEN.1))
-                .unwrap_or(candidate)
-                .with_second(0)
-                .unwrap_or(candidate)
-                .with_nanosecond(0)
-                .unwrap_or(candidate)
-                + Duration::days(1);
-            if candidate.weekday().number_from_monday() < 6 {
-                return candidate.with_timezone(&Utc);
+            day += Duration::days(1);
+            if day.weekday().number_from_monday() < 6 {
+                let local = day.and_hms_opt(MARKET_OPEN.0, MARKET_OPEN.1, 0).unwrap();
+                return DateTime::from_naive_utc_and_offset(
+                    local - Duration::seconds(i64::from(us_offset_for_open(day))),
+                    Utc,
+                );
             }
         }
         ts
     }
 }
 
-/// ASX market (`AsxMarket`); sessions are 10:00–16:00 AEST (UTC+10).
+/// ASX market (`AsxMarket`); sessions follow Sydney daylight saving time.
 #[derive(Default, Clone)]
 pub struct AsxMarket {
     pub tickers: Vec<String>,
 }
 
-const ASX_OFFSET_SECONDS: i32 = 10 * 3600;
-
 impl AsxMarket {
     fn local(&self, ts: DateTime<Utc>) -> DateTime<chrono::FixedOffset> {
-        ts.with_timezone(&chrono::FixedOffset::east_opt(ASX_OFFSET_SECONDS).unwrap())
+        ts.with_timezone(&chrono::FixedOffset::east_opt(asx_offset(ts)).unwrap())
     }
 
     pub fn universe(&self) -> Vec<Instrument> {
@@ -133,19 +169,15 @@ impl AsxMarket {
     }
 
     pub fn next_open(&self, ts: DateTime<Utc>) -> DateTime<Utc> {
-        let mut candidate = self.local(ts);
+        let mut day = self.local(ts).date_naive();
         for _ in 0..14 {
-            candidate = candidate
-                .with_hour(10)
-                .and_then(|c| c.with_minute(0))
-                .unwrap_or(candidate)
-                .with_second(0)
-                .unwrap_or(candidate)
-                .with_nanosecond(0)
-                .unwrap_or(candidate)
-                + Duration::days(1);
-            if candidate.weekday().number_from_monday() < 6 {
-                return candidate.with_timezone(&Utc);
+            day += Duration::days(1);
+            if day.weekday().number_from_monday() < 6 {
+                let local = day.and_hms_opt(10, 0, 0).unwrap();
+                return DateTime::from_naive_utc_and_offset(
+                    local - Duration::seconds(i64::from(asx_offset_for_open(day))),
+                    Utc,
+                );
             }
         }
         ts
@@ -241,5 +273,27 @@ mod tests {
         // open today still yields tomorrow's open.
         let next = market.next_open(before.with_timezone(&Utc));
         assert_eq!(next.to_rfc3339(), "2026-01-08T14:30:00+00:00");
+    }
+
+    #[test]
+    fn summer_sessions_follow_daylight_saving() {
+        let us = UsMarket::default();
+        let summer = DateTime::parse_from_rfc3339("2026-07-06T13:30:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        assert!(us.is_open(summer));
+        assert_eq!(
+            us.next_open(summer).to_rfc3339(),
+            "2026-07-07T13:30:00+00:00"
+        );
+        let asx = AsxMarket::default();
+        let summer = DateTime::parse_from_rfc3339("2026-01-05T23:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        assert!(asx.is_open(summer));
+        assert_eq!(
+            asx.next_open(summer).to_rfc3339(),
+            "2026-01-06T23:00:00+00:00"
+        );
     }
 }

@@ -17,7 +17,8 @@ pub const RECENT_DAYS: i64 = 7;
 /// `ThesisStatus` values.
 pub const STATUSES: [&str; 3] = ["active", "concluded", "paused"];
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum EvidenceSide {
     Support,
     Against,
@@ -291,7 +292,7 @@ pub fn ensure_tables(db: &Db) -> Result<(), delta_core::db::DbError> {
     Ok(())
 }
 
-fn list_theses(db: &Db) -> Result<Vec<Thesis>, delta_core::db::DbError> {
+pub fn list_theses(db: &Db) -> Result<Vec<Thesis>, delta_core::db::DbError> {
     ensure_tables(db)?;
     let mut stmt = db
         .conn()
@@ -305,11 +306,12 @@ fn list_theses(db: &Db) -> Result<Vec<Thesis>, delta_core::db::DbError> {
             falsifiers: delta_core::json::from_json(Some(&row.get::<_, String>(4)?)),
             targets: delta_core::json::from_json(Some(&row.get::<_, String>(5)?)),
             time_horizon: row.get(6)?,
-            created_at: delta_core::db::decode_ts(&row.get::<_, String>(7)?).unwrap_or_default(),
+            created_at: delta_core::db::decode_ts(&row.get::<_, String>(7)?)
+                .ok_or(rusqlite::Error::InvalidQuery)?,
             status: row.get(8)?,
         })
     })?;
-    Ok(rows.filter_map(|r| r.ok()).collect())
+    Ok(rows.collect::<Result<Vec<_>, _>>()?)
 }
 
 /// Accepted evidence links for one thesis (`theses.evidence_for`).
@@ -325,7 +327,8 @@ fn accepted_links(
         Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
     })?;
     Ok(rows
-        .filter_map(|r| r.ok())
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
         .filter_map(|(id, side)| EvidenceSide::parse(&side).map(|s| (id, s)))
         .collect())
 }
@@ -380,7 +383,7 @@ fn in_clause(ids: &[String]) -> String {
 
 fn query_bars(db: &Db, ids: &[String]) -> Result<Vec<EvidenceItem>, delta_core::db::DbError> {
     let sql = format!(
-        "SELECT id, instrument_id, ts, close FROM bar WHERE id IN ({})",
+        "SELECT id, instrument_id, ts, close, source FROM bar WHERE id IN ({})",
         in_clause(ids)
     );
     let mut stmt = db.conn().prepare(&sql)?;
@@ -390,16 +393,17 @@ fn query_bars(db: &Db, ids: &[String]) -> Result<Vec<EvidenceItem>, delta_core::
         Ok(EvidenceItem {
             id: format!("bar:{}", row.get::<_, i64>(0)?),
             target_ids: vec![instrument_id.clone()],
-            ts: delta_core::db::decode_ts(&row.get::<_, String>(2)?).unwrap_or_default(),
+            ts: delta_core::db::decode_ts(&row.get::<_, String>(2)?)
+                .ok_or(rusqlite::Error::InvalidQuery)?,
             kind: "bar".to_string(),
             title: format!("{instrument_id} close {close:.2}"),
             body: None,
-            source: String::new(),
+            source: row.get(4)?,
             url: None,
             sentiment: None,
         })
     })?;
-    Ok(rows.filter_map(|r| r.ok()).collect())
+    Ok(rows.collect::<Result<Vec<_>, _>>()?)
 }
 
 fn query_news(db: &Db, ids: &[String]) -> Result<Vec<EvidenceItem>, delta_core::db::DbError> {
@@ -418,7 +422,8 @@ fn query_news(db: &Db, ids: &[String]) -> Result<Vec<EvidenceItem>, delta_core::
         Ok(EvidenceItem {
             id: format!("{kind}:{}", row.get::<_, String>(0)?),
             target_ids: delta_core::json::from_json(Some(&row.get::<_, String>(1)?)),
-            ts: delta_core::db::decode_ts(&row.get::<_, String>(2)?).unwrap_or_default(),
+            ts: delta_core::db::decode_ts(&row.get::<_, String>(2)?)
+                .ok_or(rusqlite::Error::InvalidQuery)?,
             kind: kind.to_string(),
             title: row.get(3)?,
             body: row.get(4)?,
@@ -427,7 +432,7 @@ fn query_news(db: &Db, ids: &[String]) -> Result<Vec<EvidenceItem>, delta_core::
             sentiment: None,
         })
     })?;
-    Ok(rows.filter_map(|r| r.ok()).collect())
+    Ok(rows.collect::<Result<Vec<_>, _>>()?)
 }
 
 fn query_events(db: &Db, ids: &[String]) -> Result<Vec<EvidenceItem>, delta_core::db::DbError> {
@@ -442,7 +447,8 @@ fn query_events(db: &Db, ids: &[String]) -> Result<Vec<EvidenceItem>, delta_core
         Ok(EvidenceItem {
             id: format!("event:{}", row.get::<_, String>(0)?),
             target_ids: vec![row.get(1)?],
-            ts: delta_core::db::decode_ts(&row.get::<_, String>(2)?).unwrap_or_default(),
+            ts: delta_core::db::decode_ts(&row.get::<_, String>(2)?)
+                .ok_or(rusqlite::Error::InvalidQuery)?,
             title: format!("{kind}: {summary}"),
             kind: "event".to_string(),
             body: None,
@@ -451,7 +457,7 @@ fn query_events(db: &Db, ids: &[String]) -> Result<Vec<EvidenceItem>, delta_core
             sentiment: row.get(5)?,
         })
     })?;
-    Ok(rows.filter_map(|r| r.ok()).collect())
+    Ok(rows.collect::<Result<Vec<_>, _>>()?)
 }
 
 fn query_fundamentals(
@@ -470,7 +476,7 @@ fn query_fundamentals(
         Ok(EvidenceItem {
             id: format!("fundamental:{}", row.get::<_, i64>(0)?),
             target_ids: vec![row.get(1)?],
-            ts: delta_core::time::parse_date(&as_of).unwrap_or_default(),
+            ts: delta_core::time::parse_date(&as_of).ok_or(rusqlite::Error::InvalidQuery)?,
             kind: "fundamental".to_string(),
             title: format!(
                 "{metric}: {value:.2} ({as_of}, {})",
@@ -482,7 +488,7 @@ fn query_fundamentals(
             sentiment: None,
         })
     })?;
-    Ok(rows.filter_map(|r| r.ok()).collect())
+    Ok(rows.collect::<Result<Vec<_>, _>>()?)
 }
 
 /// Health of every thesis, most at risk first (`services.thesis_fleet`).

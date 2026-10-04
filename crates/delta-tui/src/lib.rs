@@ -1,15 +1,24 @@
 //! Delta TUI: ratatui component-based terminal app (R0 skeleton + R1d widgets).
 
+pub mod ask_view;
 pub mod axes;
 pub mod braille;
 pub mod chart;
 pub mod components;
+pub mod decisions_view;
 pub mod desk;
 pub mod dialog;
+pub mod footer;
+pub mod markdown;
+pub mod metrics_view;
+pub mod research;
 pub mod screen;
 pub mod screens;
+pub mod settings_view;
 pub mod table;
 pub mod theme;
+pub mod theses_view;
+pub mod watchlist;
 pub mod workers;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -33,7 +42,7 @@ pub enum Action {
     /// Close the top modal.
     CloseDialog,
     /// Navigate to a screen by name.
-    Goto(&'static str),
+    Goto(String),
     /// Live quote prices keyed by instrument id (from the quotes worker).
     Quotes(BTreeMap<String, f64>),
     /// Inspector metric rows (label, formatted value) for one instrument.
@@ -41,12 +50,61 @@ pub enum Action {
         instrument: String,
         rows: Vec<(String, String)>,
     },
+    RefreshMetrics(String),
+    AssetMetrics {
+        range: String,
+        metrics: delta_services::asset_metrics::AssetMetrics,
+    },
     /// Ingest finished; carries per-source row counts.
     Ingested(BTreeMap<String, usize>),
+    /// Complete gather finished: rows, extracted events, and classified news.
+    Gathered {
+        counts: BTreeMap<String, usize>,
+        events: usize,
+        sentiment: usize,
+        warnings: Vec<String>,
+    },
     /// Refreshed Home overview values (headline, pulse, upcoming, health).
     HomeRefresh(crate::screens::HomeFeed),
+    FooterRefresh(crate::footer::FooterState),
     /// Request a gather run (UI -> ingest worker).
     Gather,
+    GatherTargets(Vec<String>),
+    CancelGather,
+    CancelReport,
+    GatherBusy(bool),
+    ReportBusy(bool),
+    /// Request a cited report for one instrument.
+    GenerateReport(String),
+    /// Generated report markdown to show in Research.
+    ReportReady {
+        target_id: String,
+        markdown: String,
+    },
+    /// Submit one Ask prompt from the input field.
+    AskQuestion(String),
+    /// Verified answer from the grounded chat service.
+    ChatReady(delta_services::ChatMessage),
+    ChatFailed(String),
+    CancelChat,
+    AskBusy(bool),
+    ChatFinished {
+        generation: u64,
+        result: Result<delta_services::ChatMessage, String>,
+    },
+    ThesisProposed(usize),
+    ProposeThesis(String),
+    SummarizeThesis(String),
+    ThesisSummaryReady(String),
+    ConnectProvider(delta_services::ProviderSetup),
+    LoadModels,
+    LoadDiagnostics,
+    SettingsDiagnostics(Result<crate::settings_view::SettingsDiagnostics, String>),
+    ModelsReady(Vec<String>),
+    ProviderConnected {
+        name: String,
+        verified: bool,
+    },
     /// One-line worker status for the status overlay.
     Status(String),
 }

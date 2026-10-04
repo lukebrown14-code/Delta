@@ -11,7 +11,17 @@ use delta_llm::client::LlmClient;
 use delta_llm::providers::{CompletionRequest, Provider, ProviderError, ProviderResult};
 use delta_plugins::plugin::DataPlugin;
 use delta_plugins::RssData;
-use delta_services::pipeline::{extract_events, ingest};
+use delta_services::pipeline::{extract_events, gather_configured, ingest};
+
+#[tokio::test]
+async fn configured_gather_reports_optional_llm_failure_without_losing_ingest_result() {
+    let mut db = Db::open_memory().unwrap();
+    let cfg = delta_core::config::AppConfig::default();
+    let result = gather_configured(&mut db, &cfg, &[], |_| {}).await.unwrap();
+    assert!(result.ingested.counts.is_empty());
+    assert_eq!(result.extracted.events, 0);
+    assert!(!result.warnings.is_empty());
+}
 
 fn inst(id: &str, market: &str, symbol: &str, name: Option<&str>) -> Instrument {
     Instrument {
@@ -34,6 +44,79 @@ fn since() -> chrono::NaiveDateTime {
         .unwrap()
         .and_hms_opt(0, 0, 0)
         .unwrap()
+}
+
+struct ScriptedSource {
+    fails: bool,
+}
+
+#[async_trait::async_trait]
+impl DataPlugin for ScriptedSource {
+    fn name(&self) -> &'static str {
+        if self.fails {
+            "failed"
+        } else {
+            "successful"
+        }
+    }
+    async fn fetch(
+        &self,
+        _instruments: &[Instrument],
+        _since: chrono::NaiveDateTime,
+    ) -> Result<Vec<StoreItem>, delta_plugins::PluginError> {
+        if self.fails {
+            return Err(delta_plugins::PluginError::Other {
+                plugin: "failed",
+                message: "offline scripted failure".into(),
+            });
+        }
+        Ok(vec![StoreItem::News(NewsItem {
+            id: "retained".into(),
+            instrument_ids: vec!["US:AAPL".into()],
+            published: since(),
+            title: "Stored despite another source failure".into(),
+            url: "https://example.test".into(),
+            body: None,
+            source: "successful".into(),
+        })])
+    }
+}
+
+#[tokio::test]
+async fn successful_source_results_are_stored_even_if_an_earlier_source_fails() {
+    let mut db = Db::open_memory().unwrap();
+    let plugins: Vec<Arc<dyn DataPlugin>> = vec![
+        Arc::new(ScriptedSource { fails: true }),
+        Arc::new(ScriptedSource { fails: false }),
+    ];
+    let result = ingest(
+        &mut db,
+        &plugins,
+        &[inst("US:AAPL", "us", "AAPL", None)],
+        None,
+        None,
+        Some("2026-01-01"),
+        2,
+        |_| {},
+    )
+    .await;
+    assert!(result.is_err());
+    assert_eq!(db.table_count("newsitem").unwrap(), 1);
+}
+
+#[test]
+fn invalid_extract_sentiment_rejects_the_batch() {
+    let valid = serde_json::json!({"events": [{
+        "kind": "other", "summary": "valid", "sentiment": 1.0, "evidence_ids": ["n1"]
+    }]});
+    assert!(serde_json::from_value::<delta_services::pipeline::EventBatch>(valid).is_ok());
+    for sentiment in [-1.1, 1.1] {
+        let invalid = serde_json::json!({"events": [{
+            "kind": "other", "summary": "invalid", "sentiment": sentiment,
+            "evidence_ids": ["n1"]
+        }]});
+        assert!(serde_json::from_value::<delta_services::pipeline::EventBatch>(invalid).is_err());
+    }
 }
 
 /// A dated feed, so item ids are stable across runs and idempotency is
@@ -147,7 +230,22 @@ impl Provider for ScriptedProvider {
     fn name(&self) -> &'static str {
         "scripted"
     }
-    async fn complete(&self, _req: CompletionRequest<'_>) -> Result<ProviderResult, ProviderError> {
+    async fn complete(&self, req: CompletionRequest<'_>) -> Result<ProviderResult, ProviderError> {
+        let schema = req
+            .response_format
+            .expect("extract must request structured output");
+        assert_eq!(schema["type"], "json_schema");
+        assert_eq!(schema["json_schema"]["name"], "EventBatch");
+        assert_eq!(
+            schema["json_schema"]["schema"]["$defs"]["EventDraft"]["properties"]["sentiment"]
+                ["minimum"],
+            -1
+        );
+        assert_eq!(
+            schema["json_schema"]["schema"]["$defs"]["EventDraft"]["properties"]["sentiment"]
+                ["maximum"],
+            1
+        );
         let mut queue = self.payloads.lock().unwrap();
         self.calls.fetch_add(1, Ordering::SeqCst);
         // An exhausted queue answers garbage: the extract loop must skip it.
@@ -229,5 +327,107 @@ async fn extract_events_persists_cited_events_only() {
     assert!(
         events2.iter().all(|e| e.id != events[0].id),
         "covered items are not re-sent"
+    );
+}
+
+struct FailingProvider;
+#[async_trait::async_trait]
+impl Provider for FailingProvider {
+    fn name(&self) -> &'static str {
+        "failure"
+    }
+    async fn complete(&self, _: CompletionRequest<'_>) -> Result<ProviderResult, ProviderError> {
+        Err(ProviderError::Status {
+            status: 401,
+            body: "offline denied".into(),
+        })
+    }
+}
+#[tokio::test]
+async fn extract_provider_failure_is_not_a_successful_empty_batch() {
+    let mut db = Db::open_memory().unwrap();
+    db.store_items(&[StoreItem::News(NewsItem {
+        id: "failure-news".into(),
+        instrument_ids: vec!["US:AAPL".into()],
+        published: since(),
+        title: "Offline story".into(),
+        url: "https://example.test".into(),
+        body: None,
+        source: "rss".into(),
+    })])
+    .unwrap();
+    let client = LlmClient::new(Arc::new(FailingProvider));
+    let result = extract_events(
+        &mut db,
+        &client,
+        "test/model",
+        &[inst("US:AAPL", "us", "AAPL", None)],
+        since(),
+        20,
+    )
+    .await;
+    assert!(result.unwrap_err().to_string().contains("401"));
+    assert_eq!(db.table_count("event").unwrap(), 0);
+}
+
+struct PendingSource {
+    started: tokio::sync::Notify,
+    dropped: Arc<std::sync::atomic::AtomicBool>,
+}
+
+struct FetchDropFlag(Arc<std::sync::atomic::AtomicBool>);
+impl Drop for FetchDropFlag {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+}
+
+#[async_trait::async_trait]
+impl DataPlugin for PendingSource {
+    fn name(&self) -> &'static str {
+        "pending"
+    }
+    async fn fetch(
+        &self,
+        _: &[Instrument],
+        _: chrono::NaiveDateTime,
+    ) -> Result<Vec<StoreItem>, delta_plugins::PluginError> {
+        let _guard = FetchDropFlag(self.dropped.clone());
+        self.started.notify_one();
+        std::future::pending().await
+    }
+}
+
+#[tokio::test]
+async fn cancelling_ingest_drops_in_flight_source_fetches() {
+    let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let source = Arc::new(PendingSource {
+        started: tokio::sync::Notify::new(),
+        dropped: dropped.clone(),
+    });
+    let worker_source = source.clone();
+    let worker = tokio::spawn(async move {
+        let mut db = Db::open_memory().unwrap();
+        let plugins: Vec<Arc<dyn DataPlugin>> = vec![worker_source];
+        ingest(
+            &mut db,
+            &plugins,
+            &[inst("US:AAPL", "us", "AAPL", None)],
+            None,
+            None,
+            Some("2026-01-01"),
+            1,
+            |_| {},
+        )
+        .await
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(1), source.started.notified())
+        .await
+        .expect("scripted fetch must start");
+    worker.abort();
+    assert!(worker.await.unwrap_err().is_cancelled());
+    assert!(
+        dropped.load(Ordering::SeqCst),
+        "fetch must not survive cancelled ingest"
     );
 }

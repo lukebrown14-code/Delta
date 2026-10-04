@@ -104,16 +104,32 @@ fn diff_against(golden_name: &str, screen: &Screen) -> Vec<String> {
             let want_ch = cell["ch"].as_str().unwrap().chars().next().unwrap();
             let want_fg = cell["fg"].as_str();
             let want_bg = cell["bg"].as_str();
-            let want_bold = cell["attrs"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|a| a == "bold");
-            let got = (mine.ch, mine.fg, mine.bg, mine.bold);
-            let want = (want_ch, want_fg, want_bg, want_bold);
+            let want_attrs = cell["attrs"].as_array().unwrap();
+            let want_bold = want_attrs.iter().any(|a| a == "bold");
+            let want_reverse = want_attrs.iter().any(|a| a == "reverse");
+            let want_italic = want_attrs.iter().any(|a| a == "italic");
+            let want_underline = want_attrs.iter().any(|a| a == "underline");
+            let got = (
+                mine.ch,
+                mine.fg,
+                mine.bg,
+                mine.bold,
+                mine.reverse,
+                mine.italic,
+                mine.underline,
+            );
+            let want = (
+                want_ch,
+                want_fg,
+                want_bg,
+                want_bold,
+                want_reverse,
+                want_italic,
+                want_underline,
+            );
             if got != want {
                 diffs.push(format!(
-                    "row {y} col {x}: want {want_ch:?} ({want_fg:?}/{want_bg:?}/bold={want_bold}) got {got:?}"
+                    "row {y} col {x}: want {want_ch:?} ({want_fg:?}/{want_bg:?}/attrs={want_attrs:?}) got {got:?}"
                 ));
                 if diffs.len() >= 40 {
                     diffs.push("... (truncated at 40)".to_string());
@@ -236,17 +252,25 @@ fn narrow_state_tier_a() {
     for (y, row) in value["rows"].as_array().unwrap().iter().enumerate() {
         for (x, cell) in row.as_array().unwrap().iter().enumerate() {
             let mine = &screen.cells[y * screen.w + x];
+            let attrs = cell["attrs"].as_array().unwrap();
             let want = (
                 cell["ch"].as_str().unwrap().chars().next().unwrap(),
                 cell["fg"].as_str(),
                 cell["bg"].as_str(),
-                cell["attrs"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .any(|a| a == "bold"),
+                attrs.iter().any(|a| a == "bold"),
+                attrs.iter().any(|a| a == "reverse"),
+                attrs.iter().any(|a| a == "italic"),
+                attrs.iter().any(|a| a == "underline"),
             );
-            let got = (mine.ch, mine.fg, mine.bg, mine.bold);
+            let got = (
+                mine.ch,
+                mine.fg,
+                mine.bg,
+                mine.bold,
+                mine.reverse,
+                mine.italic,
+                mine.underline,
+            );
             if got != want {
                 diffs.push(format!("row {y} col {x}: want {want:?} got {got:?}"));
                 if diffs.len() >= 40 {
@@ -318,17 +342,25 @@ fn home_state_tier_a() {
     for (y, row) in value["rows"].as_array().unwrap().iter().enumerate() {
         for (x, cell) in row.as_array().unwrap().iter().enumerate() {
             let mine = &screen.cells[y * screen.w + x];
+            let attrs = cell["attrs"].as_array().unwrap();
             let want = (
                 cell["ch"].as_str().unwrap().chars().next().unwrap(),
                 cell["fg"].as_str(),
                 cell["bg"].as_str(),
-                cell["attrs"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .any(|a| a == "bold"),
+                attrs.iter().any(|a| a == "bold"),
+                attrs.iter().any(|a| a == "reverse"),
+                attrs.iter().any(|a| a == "italic"),
+                attrs.iter().any(|a| a == "underline"),
             );
-            let got = (mine.ch, mine.fg, mine.bg, mine.bold);
+            let got = (
+                mine.ch,
+                mine.fg,
+                mine.bg,
+                mine.bold,
+                mine.reverse,
+                mine.italic,
+                mine.underline,
+            );
             if got != want {
                 diffs.push(format!("row {y} col {x}: want {want:?} got {got:?}"));
                 if diffs.len() >= 40 {
@@ -595,3 +627,61 @@ fn glossary_matrix_tier_b() {
     assert_glossary_sized_tier_b(200, 50);
 }
 // (dbg helper removed)
+
+#[test]
+fn dynamic_footer_matches_python_shell_at_all_sizes() {
+    let now = chrono::NaiveDate::from_ymd_opt(2026, 9, 21)
+        .unwrap()
+        .and_hms_opt(9, 30, 0)
+        .unwrap();
+    let footer = delta_tui::footer::FooterState {
+        latest_bar: Some(now - chrono::Duration::days(1)),
+        spend: 0.0,
+        provider: "openrouter".into(),
+        unavailable: false,
+    };
+    for (state, active) in [
+        ("home", "Home"),
+        ("default", "Watchlist"),
+        ("research", "Research"),
+        ("theses", "Theses"),
+        ("ask", "Ask"),
+        ("decisions", "Decisions"),
+        ("settings", "Settings"),
+    ] {
+        for (w, h) in [(80, 24), (120, 40), (200, 50)] {
+            let mut screen = Screen::new(w, h);
+            footer.paint_at(&mut screen, active, "", now);
+            let fixture = if state == "settings" {
+                format!("live-settings-{w}x{h}.json")
+            } else {
+                format!("{state}-{w}x{h}.json")
+            };
+            let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../fixtures/golden_screens")
+                .join(fixture);
+            let value: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+            let row = value["rows"][h - 1].as_array().unwrap();
+            let mut diffs = Vec::new();
+            for (x, want) in row.iter().enumerate() {
+                let mine = &screen.cells[(h - 1) * w + x];
+                let expected = (
+                    want["ch"].as_str().unwrap(),
+                    want["fg"].as_str(),
+                    want["bg"].as_str(),
+                    want["attrs"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|attr| attr == "bold"),
+                );
+                let actual = (mine.symbol.as_str(), mine.fg, mine.bg, mine.bold);
+                if actual != expected {
+                    diffs.push(format!("col{x}: {actual:?} != {expected:?}"));
+                }
+            }
+            assert!(diffs.is_empty(), "{state} {w}x{h}:\n{}", diffs.join("\n"));
+        }
+    }
+}

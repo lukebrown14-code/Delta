@@ -65,6 +65,37 @@ async fn compat_provider_sends_messages_and_parses_result() {
 }
 
 #[tokio::test]
+async fn compat_provider_retries_a_transient_status() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(ResponseTemplate::new(429).insert_header("Retry-After", "0"))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(chat_body("retried")))
+        .mount(&server)
+        .await;
+    let provider =
+        OpenAiCompatProvider::new(&OPENAI, "k", Duration::from_secs(5), None, &server.uri())
+            .unwrap();
+    let messages = vec![Message::new("user", "hello")];
+    let result = provider
+        .complete(CompletionRequest {
+            model: "m1",
+            messages: &messages,
+            response_format: None,
+            max_tokens: None,
+        })
+        .await
+        .unwrap();
+    assert_eq!(result.text, "retried");
+    assert_eq!(server.received_requests().await.unwrap().len(), 2);
+}
+
+#[tokio::test]
 async fn anthropic_sends_native_auth_headers() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))

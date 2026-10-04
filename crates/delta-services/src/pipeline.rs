@@ -1,16 +1,19 @@
 //! The evidence pipeline: ingest -> extract -> sentiment (`ingest`,
 //! `extract`, `gather` from `delta/services.py` and `delta/extract.py`).
 //!
-//! Sentiment classification (Jev) is not ported yet — see findings #3.
+//! The configured entry point below runs all three stages used by the live TUI.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
 
 use chrono::{Duration, NaiveDateTime, Utc};
+use delta_core::config::{read_env_value_named, AppConfig, ENV_PATH};
 use delta_core::db::{Db, StoreItem};
 use delta_core::ids::stable_id;
 use delta_core::models::{Event, EventKind, Instrument, NewsItem};
 use delta_core::time::parse_date;
 use delta_llm::providers::Message;
+use delta_llm::router::model_for;
 use serde_json::json;
 
 use crate::error::ServiceError;
@@ -47,6 +50,88 @@ fn to_utc(ts: NaiveDateTime) -> NaiveDateTime {
 #[derive(Debug, Clone, Default)]
 pub struct IngestResult {
     pub counts: BTreeMap<String, usize>,
+}
+
+/// Outcome of the complete Python-compatible gather pipeline.
+#[derive(Debug, Clone)]
+pub struct GatherResult {
+    pub ingested: IngestResult,
+    pub extracted: ExtractResult,
+    pub sentiment: usize,
+    pub warnings: Vec<String>,
+}
+
+/// Run configured data sources, extract cited events, then classify news.
+pub async fn gather_configured(
+    db: &mut Db,
+    cfg: &AppConfig,
+    universe: &[Instrument],
+    mut log: impl FnMut(&str),
+) -> Result<GatherResult, ServiceError> {
+    let plugins = delta_plugins::configured_plugins(cfg);
+    let workers = cfg
+        .plugins
+        .get("ingest_workers")
+        .and_then(serde_json::Value::as_u64)
+        .map(|n| n as usize)
+        .unwrap_or(4);
+    let ingested = ingest(db, &plugins, universe, None, None, None, workers, &mut log).await?;
+    let mut warnings = Vec::new();
+    let extraction = async {
+        let model =
+            model_for(cfg, "extract", None).map_err(|e| ServiceError::invalid(e.to_string()))?;
+        let client = delta_llm::client::build_client(
+            &cfg.llm_provider,
+            &|name| read_env_value_named(name, Path::new(ENV_PATH)),
+            std::time::Duration::from_secs(60),
+            Some(cfg.llm_max_output_tokens),
+            &cfg.llm_base_url,
+            &cfg.llm_api_key_env,
+        )
+        .map_err(|e| ServiceError::invalid(e.to_string()))?;
+        extract_events(
+            db,
+            &client,
+            &model,
+            universe,
+            Utc::now().naive_utc() - Duration::days(14),
+            20,
+        )
+        .await
+    }
+    .await;
+    let extracted = match extraction {
+        Ok(events) => ExtractResult {
+            events: events.len(),
+            instruments: events
+                .iter()
+                .map(|event| &event.instrument_id)
+                .collect::<BTreeSet<_>>()
+                .len(),
+        },
+        Err(error) => {
+            warnings.push(format!("extract: {error}"));
+            ExtractResult {
+                events: 0,
+                instruments: 0,
+            }
+        }
+    };
+    let key = read_env_value_named("OPENROUTER_API_KEY", Path::new(ENV_PATH));
+    let sentiment =
+        match crate::sentiment::classify_sentiment(db, cfg, &key, universe, None, None).await {
+            Ok((count, _)) => count,
+            Err(error) => {
+                warnings.push(format!("sentiment: {error}"));
+                0
+            }
+        };
+    Ok(GatherResult {
+        ingested,
+        extracted,
+        sentiment,
+        warnings,
+    })
 }
 
 /// Run every enabled data plugin over the (optionally narrowed) universe.
@@ -123,8 +208,18 @@ pub async fn ingest(
     }
 
     let mut total = IngestResult::default();
+    let mut failure = None;
     for (name, result) in futures::future::join_all(handles).await {
-        let rows: Vec<StoreItem> = result?;
+        let rows: Vec<StoreItem> = match result {
+            Ok(rows) => rows,
+            Err(error) => {
+                log(&format!("{name}: {error}"));
+                if failure.is_none() {
+                    failure = Some(error);
+                }
+                continue;
+            }
+        };
         log(&format!("Ingesting via {name} (stored below)..."));
         let counts = db.store_items(&rows)?;
         for (table, count) in &counts {
@@ -133,6 +228,9 @@ pub async fn ingest(
             }
             *total.counts.entry(table.clone()).or_insert(0) += count;
         }
+    }
+    if let Some(error) = failure {
+        return Err(error);
     }
     Ok(total)
 }
@@ -211,6 +309,7 @@ pub async fn extract_events(
                     "body": r.body.clone().unwrap_or_default(),
                 })).collect::<Vec<_>>(),
             });
+            let schema = crate::schemas::event_batch();
             let (draft, _result) = match delta_llm::structured::structured::<EventBatch>(
                 client,
                 db,
@@ -218,15 +317,16 @@ pub async fn extract_events(
                 model,
                 "extract_v1.j2",
                 &vars,
-                None,
+                Some(&schema),
             )
             .await
             {
                 Ok(pair) => pair,
-                Err(err) => {
+                Err(err @ delta_llm::providers::ProviderError::Validation(_)) => {
                     log::warn!("invalid extract output for {instrument_id}: {err}; skipping batch");
                     continue;
                 }
+                Err(err) => return Err(ServiceError::invalid(err.to_string())),
             };
 
             let mut new_events: Vec<StoreItem> = Vec::new();
@@ -310,14 +410,28 @@ pub struct EventBatch {
 pub struct EventDraft {
     pub kind: EventKind,
     pub summary: String,
-    #[serde(default)]
+    #[serde(deserialize_with = "bounded_sentiment")]
     pub sentiment: f64,
     #[cfg_attr(test, allow(dead_code))]
     #[serde(default)]
     pub evidence_ids: Vec<String>,
 }
 
-/// The full evidence pipeline minus sentiment (`gather`); see findings #3.
+pub(crate) fn bounded_sentiment<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<f64, D::Error> {
+    let value = <f64 as serde::Deserialize>::deserialize(deserializer)?;
+    if (-1.0..=1.0).contains(&value) {
+        Ok(value)
+    } else {
+        Err(serde::de::Error::custom(
+            "sentiment must be between -1 and 1",
+        ))
+    }
+}
+
+/// Run the ingest-and-extract portion of the pipeline for callers that need
+/// those stages separately. `gather_configured` adds stance classification.
 #[allow(clippy::too_many_arguments)]
 pub async fn gather(
     db: &mut Db,

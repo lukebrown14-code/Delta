@@ -14,6 +14,10 @@ Stream: `delta-services`. Reviewed against `delta/services.py`, `delta/extract.p
 | `latest_report` / `latest_report_age` | `src/analytics.rs` | sidecar `as_of`, filename-date fallback, non-date stem → None |
 | targets group | `src/config_ops.rs` + `src/targets.rs` | `target_specs`/`add_target`/`remove_target` with the same validation messages; legacy kind-by-shape modelling |
 | markets group | `src/config_ops.rs` | `market_profiles`/`save_market`/`remove_market` with dependency check; `set_plugin_enabled` |
+| `classify_sentiment` / `jev.py` | `src/sentiment.rs`, `delta-llm/src/jev.rs` | cached Jev decision client, stance validation, persistence and aggregate coverage |
+| `brief_for` / `brief.py` | `src/brief.rs` | deterministic brief from prices, evidence, events and stance data |
+| thesis fleet, evidence and health | `src/theses.rs`, `src/thesis_health.rs`, `src/evidence.rs` | CRUD, candidate/link workflow, filtering and computed health |
+| provider status/setup | `src/config_ops.rs` | provider status, configuration fields and setup validation |
 
 ## Parity verified
 
@@ -22,14 +26,9 @@ Stream: `delta-services`. Reviewed against `delta/services.py`, `delta/extract.p
 and `latest_headline` to outputs produced by running `delta.services` on the
 identically seeded DB (seed script preserved in the test's `seeded_db`).
 
-## Not ported (rolled into later work — none silently dropped)
+## Findings for follow-up
 
 | # | Category | Where | Finding |
 |---|---|---|---|
-| 1 | gap | `classify_sentiment` / `jev.py` | The Jev typed-decision client is not ported; `gather` therefore runs ingest+extract and returns the sentiment stage unimplemented. Block it behind a TODO in `gather` until jev lands (R3 ask flow needs it) |
-| 2 | gap | `brief_for` / `delta/brief.py` | Deferred to R3 with the screens that render briefs |
-| 3 | gap | `thesis_fleet` / `theses.py` / `thesis_health.py` / `evidence.py` | The thesis tables and health model are their own port (large; R3 Theses screen dependency) |
-| 4 | gap | `data_provider_status` / `configure_data_provider` / `setup_checks` | Need `DataProviderSpec` on the plugin trait; small follow-up once the settings screen is scheduled |
-| 5 | parity | `extract.rs` validation | Python validates `sentiment` in [-1, 1] via pydantic (a bad batch is skipped whole). The Rust port clamps nothing and skips on serde failure only — a model returning sentiment 5 would store it. Proposal: add the range check to `EventDraft` with `#[serde(try_from)]`-style validation; flagged rather than silently changed |
-| 6 | simplify | `pulse` floor | Python reads both tables with `>= floor`; the Rust port filters per row over the same span. Same output, one fewer temp |
-| 7 | perf | `analytics.rs` readers | `pulse`/`upcoming_events` load full rows instead of column projections; fine at desk scale, revisit only if profiling says so |
+| 1 | simplify | `pulse` floor | Python reads both tables with `>= floor`; the Rust port filters per row over the same span. Same output, one fewer temp |
+| 2 | perf | `analytics.rs` readers | `pulse`/`upcoming_events` load full rows instead of column projections; fine at desk scale, revisit only if profiling says so |

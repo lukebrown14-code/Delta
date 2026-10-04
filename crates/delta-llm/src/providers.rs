@@ -27,6 +27,13 @@ const BALANCE_MARGIN: f64 = 0.95;
 
 const PRICING_TTL_SECONDS: f64 = 86400.0;
 
+fn retry_delay(attempt: u32, retry_after: Option<f64>) -> Duration {
+    let seconds = retry_after
+        .filter(|value| value.is_finite() && *value >= 0.0)
+        .unwrap_or_else(|| 0.5 * 2f64.powi(attempt as i32));
+    Duration::from_secs_f64(seconds.min(60.0))
+}
+
 #[derive(Debug, Clone)]
 pub struct ProviderResult {
     pub text: String,
@@ -93,6 +100,8 @@ pub fn provider_spec(name: &str) -> Option<&'static ProviderSpec> {
 
 #[derive(Debug, thiserror::Error)]
 pub enum ProviderError {
+    #[error("invalid structured output: {0}")]
+    Validation(String),
     #[error("{0} provider requires a base URL; set [llm] base_url in config.toml")]
     MissingBaseUrl(&'static str),
     #[error("{0} is not set.")]
@@ -232,27 +241,48 @@ impl OpenAiCompatProvider {
         if self.base_url.is_empty() {
             return Err(ProviderError::MissingBaseUrl(self.spec.name));
         }
-        let mut builder = self
-            .client
-            .post(format!(
-                "{}/chat/completions",
-                self.base_url.trim_end_matches('/')
-            ))
-            .timeout(self.timeout)
-            .json(body);
-        for (k, v) in auth_headers(self.spec, &self.api_key).chain(self.extra_headers()) {
-            builder = builder.header(k, v);
-        }
-        let resp = builder.send().await?;
-        let status = resp.status();
-        let value: Value = resp.json().await?;
-        if !status.is_success() {
+        for attempt in 0..=5 {
+            let mut builder = self
+                .client
+                .post(format!(
+                    "{}/chat/completions",
+                    self.base_url.trim_end_matches('/')
+                ))
+                .timeout(self.timeout)
+                .json(body);
+            for (k, v) in auth_headers(self.spec, &self.api_key).chain(self.extra_headers()) {
+                builder = builder.header(k, v);
+            }
+            let resp = match builder.send().await {
+                Ok(resp) => resp,
+                Err(err) if attempt < 5 && (err.is_connect() || err.is_timeout()) => {
+                    tokio::time::sleep(retry_delay(attempt, None)).await;
+                    continue;
+                }
+                Err(err) => return Err(err.into()),
+            };
+            let status = resp.status();
+            if status.is_success() {
+                return resp.json::<Value>().await.map_err(Into::into);
+            }
+            let retry_after = resp
+                .headers()
+                .get("Retry-After")
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| value.parse::<f64>().ok());
+            let response_body = resp.text().await?;
+            if attempt < 5 && matches!(status.as_u16(), 408 | 409 | 429 | 500..=599) {
+                tokio::time::sleep(retry_delay(attempt, retry_after)).await;
+                continue;
+            }
+            let value = serde_json::from_str::<Value>(&response_body)
+                .unwrap_or(Value::String(response_body));
             return Err(ProviderError::Status {
                 status: status.as_u16(),
                 body: value.to_string(),
             });
         }
-        Ok(value)
+        unreachable!("the final provider attempt must return")
     }
 
     /// Normalise a chat-completion response into text/tokens/cost.

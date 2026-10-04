@@ -1,6 +1,8 @@
 [package]
 name = "delta-tui"
 description = "Delta TUI: ratatui component-based terminal app."
+repository = "https://github.com/lukebrown14-code/Delta"
+homepage = "https://github.com/lukebrown14-code/Delta"
 edition.workspace = true
 rust-version.workspace = true
 version.workspace = true

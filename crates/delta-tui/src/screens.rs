@@ -762,6 +762,8 @@ pub fn draw_glossary_overlay(screen: &mut Screen, state: &WatchlistState) {
 /// that render these fields stay byte-identical under the goldens.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct HomeFeed {
+    pub agenda: Option<[String; 4]>,
+    pub fleet: Vec<(String, String)>,
     /// "nothing new since your last visit" / "3 new items since …".
     pub since_line: Option<String>,
     /// "no activity in the last 30 days" / "7 items in the last 30 days …".
@@ -795,6 +797,8 @@ impl HomeFeed {
     /// The seeded golden scenario's values (offline desk and goldens).
     pub fn seed() -> Self {
         Self {
+            agenda: None,
+            fleet: Vec::new(),
             since_line: Some(feed_seed::SINCE_LINE.to_string()),
             activity_line: Some(feed_seed::ACTIVITY_LINE.to_string()),
             newest_line: Some(feed_seed::NEWEST_LINE.to_string()),

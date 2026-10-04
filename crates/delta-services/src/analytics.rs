@@ -15,7 +15,7 @@ pub const FILING_SOURCE: &str = "sec_edgar";
 
 /// Table row counts, the newest bar per instrument, and the newest LLM call
 /// (`data_health`).
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct DataHealth {
     pub counts: BTreeMap<String, usize>,
     pub latest_bar: BTreeMap<String, NaiveDateTime>,

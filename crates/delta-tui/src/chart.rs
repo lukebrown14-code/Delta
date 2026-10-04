@@ -81,6 +81,15 @@ impl PriceChart {
     /// gridline breaking around the line means a braille row can need two
     /// differently-styled runs, which a single-colour string cannot express.
     pub fn runs(&self, width: usize, height: usize) -> Vec<Vec<Run>> {
+        self.runs_with_format(width, height, default_y_format)
+    }
+
+    pub fn runs_with_format(
+        &self,
+        width: usize,
+        height: usize,
+        formatter: impl Fn(f64) -> String,
+    ) -> Vec<Vec<Run>> {
         if width < 1 || height < 1 {
             return Vec::new();
         }
@@ -146,7 +155,7 @@ impl PriceChart {
         let (plot_low, plot_high) = (ticks[0], ticks[ticks.len() - 1]);
         let span = (plot_high - plot_low).max(0.0);
         let span = if span == 0.0 { 1.0 } else { span };
-        let labels: Vec<String> = ticks.iter().map(|&t| default_y_format(t)).collect();
+        let labels: Vec<String> = ticks.iter().map(|&t| formatter(t)).collect();
         let gutter = 2 + labels.iter().map(String::len).max().unwrap_or(0);
         let mut plot = width.saturating_sub(gutter);
         let mut gutter = gutter;
@@ -174,7 +183,7 @@ impl PriceChart {
         let scaled = (last - plot_low) / span * (dot_rows as f64 - 1.0);
         let marker_row = (((dot_rows as f64 - 1.0 - crate::braille::py_round(scaled)) as i64) / 4)
             .clamp(0, plot_rows as i64 - 1) as usize;
-        let marker_label = default_y_format(last);
+        let marker_label = formatter(last);
 
         let mut runs: Vec<Vec<Run>> = Vec::new();
         for (index, row_cells) in cells.iter().enumerate().take(plot_rows) {

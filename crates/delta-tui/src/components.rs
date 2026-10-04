@@ -10,7 +10,7 @@ use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
 
 use crate::theme::Theme;
-use crate::{is_quit_key, Action, Component};
+use crate::{Action, Component};
 
 /// The empty state: a muted `✓`/`!` glyph line plus a hint
 /// (port of `components.py::EmptyState`; `severe` turns the glyph red).
@@ -127,19 +127,14 @@ impl SuggestionList {
     }
 
     /// Type-ahead: typing filters and resets the cursor; up/down move it;
-    /// Enter accepts into `Action::Goto`. Quit keys still quit.
+    /// Enter accepts into `Action::Goto`; printable keys filter the list.
     pub fn handle_key(&mut self, key: KeyEvent) -> Option<Action> {
         let visible_len = self.visible().len();
         match key.code {
-            _ if is_quit_key(key) => return Some(Action::Quit),
             KeyCode::Down => self.selected = (self.selected + 1).min(visible_len.saturating_sub(1)),
             KeyCode::Up => self.selected = self.selected.saturating_sub(1),
             KeyCode::Esc => return Some(Action::CloseDialog),
-            KeyCode::Enter => {
-                return self
-                    .selected()
-                    .map(|s| Action::Goto(Box::leak(s.into_boxed_str())))
-            }
+            KeyCode::Enter => return self.selected().map(Action::Goto),
             KeyCode::Backspace => {
                 self.filter.pop();
                 self.selected = 0;
@@ -302,7 +297,7 @@ mod tests {
         let mut list = SuggestionList::new(vec!["settings".to_string()]);
         assert_eq!(
             list.handle_key(KeyEvent::from(KeyCode::Enter)),
-            Some(Action::Goto("settings"))
+            Some(Action::Goto("settings".into()))
         );
     }
 

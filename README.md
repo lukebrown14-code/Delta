@@ -31,8 +31,7 @@ Four rules the code actually enforces:
 
 ## Requirements
 
-- Python 3.12+
-- [uv](https://docs.astral.sh/uv/)
+- Rust 1.94+ and Cargo
 - An LLM provider key. OpenRouter is the simplest single-key option.
 
 ## Install
@@ -40,9 +39,11 @@ Four rules the code actually enforces:
 ```bash
 git clone https://github.com/lukebrown14-code/Delta.git
 cd Delta
-uv sync
+cargo install --path crates/delta-tui
 cp .env.example .env      # then fill in your key(s)
 ```
+
+To build from source without installing globally, run `cargo run -p delta-tui --release`.
 
 ## Configure
 
@@ -75,7 +76,7 @@ Set `[plugins.sec_edgar].contact` to a real email before ingesting US filings â€
 Open the app:
 
 ```bash
-uv run delta
+delta
 ```
 
 | Key | Screen |
@@ -132,12 +133,12 @@ Press `c`, then `a` in Settings to add an exchange-level market. Enter its ID, c
 ## Develop
 
 ```bash
-uv run pytest
-uv run ruff check . && uv run ruff format .
-uv run mypy --strict delta/core delta/llm
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
 ```
 
-The same three run in CI on every push. Tests never touch the network.
+These checks run in CI on every push. Tests use local mocks and never call live data or model services. The Python implementation remains in the repository as the historical oracle and golden-screen exporter; the Rust binary is the supported application entry point.
 
 [PROJECT_SPEC.md](PROJECT_SPEC.md) is the source of truth for scope, architecture, plugin contracts and conventions â€” including why this stopped being a trading harness.
 

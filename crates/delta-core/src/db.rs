@@ -567,6 +567,11 @@ impl Db {
         &self.conn
     }
 
+    /// Mutable connection for application-level transactions.
+    pub fn conn_mut(&mut self) -> &mut Connection {
+        &mut self.conn
+    }
+
     /// Every stored event (read-side analytics).
     pub fn events_all(&self) -> Result<Vec<Event>, DbError> {
         let mut stmt = self.conn.prepare(

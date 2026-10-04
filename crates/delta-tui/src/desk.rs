@@ -1,6 +1,6 @@
 //! The desk: the screen states the app paints, loaded from the real
 //! `config.toml` + `data/delta.db` (via `delta-services` / `delta-core`),
-//! falling back to the offline golden seed when either is absent.
+//! with an explicit unavailable state when the configured data cannot load.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -85,10 +85,13 @@ pub enum Source {
     Real(PathBuf),
     /// The seeded in-memory golden environment.
     Offline,
+    /// A real launch could not load configured watch data.
+    Unavailable(String),
 }
 
 /// One desk: instruments, the selected one, the range, and live quotes.
 pub struct Desk {
+    pub last_seen: NaiveDateTime,
     pub instruments: Vec<InstrumentDesk>,
     pub selected: usize,
     pub range_index: usize,
@@ -96,6 +99,7 @@ pub struct Desk {
     pub live: BTreeMap<String, f64>,
     /// Inspector metric rows keyed by instrument id (metrics worker).
     pub metrics: BTreeMap<String, Vec<(String, String)>>,
+    pub asset_metrics: BTreeMap<(String, String), delta_services::asset_metrics::AssetMetrics>,
     pub source: Source,
     /// Last ingest counts, when a gather has run this session.
     pub last_ingest: Option<BTreeMap<String, usize>>,
@@ -110,63 +114,79 @@ impl Default for Desk {
 }
 
 impl Desk {
-    /// Load the real desk from `config.toml` + its DB; fall back to the
-    /// offline seed when either is missing or empty.
+    /// Load the real desk from `config.toml` + its DB. The golden seed is only
+    /// available through `offline()` and is never presented as live data.
     pub fn open() -> Desk {
-        match Self::try_real() {
-            Some((instruments, db_path, feed)) => Desk {
+        Self::open_at(std::path::Path::new("config.toml"))
+    }
+
+    pub fn open_at(config_path: &std::path::Path) -> Desk {
+        match Self::try_real(config_path) {
+            Ok((instruments, db_path, feed, last_seen)) => Desk {
+                last_seen,
                 instruments,
                 selected: 0,
                 range_index: 2, // "1m"
                 live: BTreeMap::new(),
                 metrics: BTreeMap::new(),
+                asset_metrics: BTreeMap::new(),
                 source: Source::Real(db_path),
                 last_ingest: None,
                 feed,
             },
-            None => Self::offline(),
+            Err(reason) => Desk {
+                last_seen: now_naive() - Duration::days(7),
+                instruments: Vec::new(),
+                selected: 0,
+                range_index: 2,
+                live: BTreeMap::new(),
+                metrics: BTreeMap::new(),
+                asset_metrics: BTreeMap::new(),
+                source: Source::Unavailable(reason),
+                last_ingest: None,
+                feed: HomeFeed::default(),
+            },
         }
     }
 
-    fn try_real() -> Option<(Vec<InstrumentDesk>, PathBuf, HomeFeed)> {
-        let config_path = PathBuf::from("config.toml");
+    fn try_real(
+        config_path: &std::path::Path,
+    ) -> Result<(Vec<InstrumentDesk>, PathBuf, HomeFeed, NaiveDateTime), String> {
         if !config_path.exists() {
-            return None;
+            return Err("config.toml is missing".to_string());
         }
-        let (_, app) = load_config(&config_path).ok()?;
+        let (_, app) = load_config(config_path).map_err(|e| e.to_string())?;
         let db_path = PathBuf::from(&app.db_path);
-        let specs = delta_services::config_ops::target_specs(&config_path).ok()?;
-        let universe: Vec<Instrument> = specs.into_values().flat_map(|t| t.instruments()).collect();
+        let universe =
+            delta_services::configured_universe(config_path).map_err(|e| e.to_string())?;
         if universe.is_empty() {
-            return None;
+            return Err("no watch targets with tickers are configured".to_string());
         }
-        let db = Db::open(&db_path).ok()?;
+        let db = Db::open(&db_path).map_err(|e| e.to_string())?;
         let mut instruments: Vec<InstrumentDesk> = Vec::new();
         for inst in universe {
-            let bars = db.bars(&inst.id).ok()?;
-            if !bars.is_empty() {
-                instruments.push(InstrumentDesk::from_db(inst, bars));
-            }
-        }
-        if instruments.is_empty() {
-            return None;
+            let bars = db.bars(&inst.id).map_err(|e| e.to_string())?;
+            instruments.push(InstrumentDesk::from_db(inst, bars));
         }
         let ids: Vec<String> = instruments
             .iter()
             .map(|d| d.instrument.id.clone())
             .collect();
-        let feed = load_feed(&db, &ids);
-        Some((instruments, db_path, feed))
+        let last_seen = delta_core::state::read_last_seen(&app.db_path).naive_utc();
+        let feed = load_feed_since(&db, &ids, last_seen);
+        Ok((instruments, db_path, feed, last_seen))
     }
 
     /// The offline golden environment (in-memory; nothing touches disk).
     pub fn offline() -> Desk {
         Desk {
+            last_seen: now_naive() - Duration::days(7),
             instruments: vec![InstrumentDesk::offline("AAPL")],
             selected: 0,
             range_index: 2, // "1m"
             live: BTreeMap::new(),
             metrics: BTreeMap::new(),
+            asset_metrics: BTreeMap::new(),
             source: Source::Offline,
             last_ingest: None,
             feed: HomeFeed::seed(),
@@ -199,22 +219,94 @@ impl Desk {
     /// The live quote for the current instrument, when a quote worker has
     /// reported one.
     pub fn live_price(&self) -> Option<f64> {
-        self.live.get(&self.current().instrument.id).copied()
+        self.instruments
+            .get(self.selected)
+            .and_then(|desk| self.live.get(&desk.instrument.id))
+            .copied()
     }
 
     /// The inspector state for the current instrument and range.
     pub fn watch_state(&self) -> WatchlistState {
+        if self.instruments.is_empty() {
+            return WatchlistState {
+                range: self.range(),
+                metric: None,
+            };
+        }
         let cur = self.current();
         let range = self.range();
+        if let Some(metric) = self
+            .asset_metrics
+            .get(&(cur.instrument.id.clone(), range.to_string()))
+        {
+            let label = if metric.profile == "bond" {
+                "Current yield"
+            } else {
+                "Current price"
+            };
+            let current = self
+                .live_price()
+                .map(grouped)
+                .or_else(|| metric.values.get(label).cloned())
+                .unwrap_or_else(|| "—".into());
+            let mut values = vec![(
+                label.into(),
+                metric
+                    .values
+                    .get(label)
+                    .cloned()
+                    .unwrap_or_else(|| current.clone()),
+            )];
+            for (_, group) in &metric.groups {
+                values.extend(group.clone());
+            }
+            if values.len() == 1 {
+                values.extend(
+                    metric
+                        .values
+                        .iter()
+                        .filter(|(key, _)| key.as_str() != label)
+                        .map(|(key, value)| (key.clone(), value.clone())),
+                );
+            }
+            return WatchlistState {
+                range,
+                metric: Some(MetricsData {
+                    symbol: cur.instrument.symbol.clone(),
+                    market: cur.instrument.market.clone(),
+                    asset_class: cur.instrument.asset_class.as_str().into(),
+                    currency: cur.instrument.currency.clone(),
+                    current,
+                    change_label: (!metric.change_label.is_empty())
+                        .then(|| metric.change_label.clone()),
+                    period_high: metric.period_high,
+                    period_low: metric.period_low,
+                    history_start: metric.history_start.clone(),
+                    history_end: metric.history_end.clone(),
+                    series: metric.series.clone(),
+                    series_times: metric.series_times.clone(),
+                    source: metric
+                        .error
+                        .as_ref()
+                        .map(|error| format!("metrics unavailable: {error} — press Enter to retry"))
+                        .unwrap_or_else(|| metric.source.clone()),
+                    values,
+                }),
+            };
+        }
         let window = crate::screens::range_window(range);
         let start = window.map_or(0, |n| cur.bars.len().saturating_sub(n));
         let picked: Vec<(f64, String)> = cur.bars[start..].to_vec();
-        let mut series: Vec<f64> = picked.iter().map(|(c, _)| *c).collect();
+        let series: Vec<f64> = picked.iter().map(|(c, _)| *c).collect();
         let times: Vec<String> = picked.iter().map(|(_, t)| t.clone()).collect();
-        // A live quote appends itself to the series head (labelled below).
+        // Python keeps historical chart points and their timestamps paired;
+        // the live quote updates the hero value without altering the history.
         let live = self.live_price();
-        if let Some(px) = live {
-            series.push(px);
+        if series.is_empty() {
+            return WatchlistState {
+                range,
+                metric: None,
+            };
         }
         let last = series[series.len() - 1];
         let first = series[0];
@@ -225,7 +317,7 @@ impl Desk {
         };
         let hi = series.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
         let lo = series.iter().cloned().fold(f64::INFINITY, f64::min);
-        let mut values = vec![("Current price".to_string(), grouped(last))];
+        let mut values = vec![("Current price".to_string(), grouped(live.unwrap_or(last)))];
         if live.is_some() {
             values.push(("Source".to_string(), "live quote".to_string()));
         }
@@ -239,9 +331,9 @@ impl Desk {
             metric: Some(MetricsData {
                 symbol: cur.instrument.symbol.clone(),
                 market: cur.instrument.market.clone(),
-                asset_class: "equity".to_string(),
+                asset_class: cur.instrument.asset_class.as_str().to_string(),
                 currency: cur.instrument.currency.clone(),
-                current: grouped(last),
+                current: grouped(live.unwrap_or(last)),
                 change_label: Some(format!("{change:+.1}%")),
                 period_high: Some(hi),
                 period_low: Some(lo),
@@ -266,18 +358,23 @@ impl Desk {
         if let Some(px) = self.live_price() {
             closes.push(px);
         }
-        let last = closes[closes.len() - 1];
-        let prev = closes[closes.len() - 2];
-        let chg_label = format!("{:+.2}%", (last / prev - 1.0) * 100.0);
+        let last = closes.last().copied();
+        let prev = closes.iter().rev().nth(1).copied();
+        let chg_label = match (last, prev) {
+            (Some(last), Some(prev)) if prev != 0.0 => {
+                format!("{:+.2}%", (last / prev - 1.0) * 100.0)
+            }
+            _ => "—".to_string(),
+        };
         let spark = BrailleGraph::filled(closes.clone()).rows(17, 1)[0].clone();
         let now = Utc::now();
         HomeState {
             clock: now.format("%A %d %B %Y · %H:%M:%S UTC").to_string(),
             symbol: cur.instrument.symbol.clone(),
-            last: grouped(last),
+            last: last.map_or_else(|| "no bars".to_string(), grouped),
             chg_label,
             spark,
-            since_stamp: format!("since {}", now.format("%a %H:%M")),
+            since_stamp: format!("since {}", self.last_seen.format("%a %H:%M")),
             closes,
             feed: self.feed.clone(),
         }
@@ -307,18 +404,83 @@ impl Desk {
             .iter()
             .map(|d| d.instrument.id.clone())
             .collect();
-        self.feed = load_feed(&db, &ids);
+        self.feed = load_feed_since(&db, &ids, self.last_seen);
     }
 }
 
 /// Build the Home overview feed from the analytics queries (all local SQL).
 /// The seeded values stay wherever a query fails or finds nothing.
 pub fn load_feed(db: &Db, instrument_ids: &[String]) -> HomeFeed {
+    load_feed_since(db, instrument_ids, now_naive() - Duration::days(1))
+}
+
+pub fn load_feed_since(db: &Db, instrument_ids: &[String], last_seen: NaiveDateTime) -> HomeFeed {
     let now = now_naive();
     // Slots stay unset (and the painters fall back to the golden seed text)
     // unless the query succeeded and found something — a failed query must
     // not present stale seed strings as fresh data.
     let mut feed = HomeFeed::default();
+    let due = delta_services::due_reviews(db, now.date())
+        .map(|rows| rows.len())
+        .unwrap_or(0);
+    let fleet = delta_services::thesis_fleet(db, Some(now)).unwrap_or_default();
+    let hits = fleet
+        .iter()
+        .filter(|row| {
+            row.result
+                .as_ref()
+                .is_some_and(|health| health.state == delta_services::HealthState::Challenged)
+        })
+        .count();
+    feed.fleet = fleet
+        .iter()
+        .map(|row| {
+            (
+                row.thesis.claim.clone(),
+                format!("{:?}", row.state()).to_lowercase(),
+            )
+        })
+        .collect();
+    let earnings = analytics::upcoming_events(db, instrument_ids, usize::MAX, now)
+        .unwrap_or_default()
+        .iter()
+        .filter(|event| event.kind == "earnings" && event.ts <= now + Duration::days(7))
+        .count();
+    let stale = analytics::data_health(db)
+        .map(|health| {
+            instrument_ids
+                .iter()
+                .filter(|id| {
+                    health
+                        .latest_bar
+                        .get(*id)
+                        .is_none_or(|ts| now - *ts > Duration::days(3))
+                })
+                .count()
+        })
+        .unwrap_or(0);
+    feed.agenda = Some([
+        if due == 0 {
+            "✓ no decision reviews due".into()
+        } else {
+            format!("⚠ {due} decision reviews due")
+        },
+        if hits == 0 {
+            "✓ no falsifier hits".into()
+        } else {
+            format!("⚠ {hits} theses with falsifier hits")
+        },
+        if earnings == 0 {
+            "✓ no earnings in the next 7 days".into()
+        } else {
+            format!("⚠ {earnings} earnings in the next 7 days")
+        },
+        if stale == 0 {
+            "✓ no stale price sources".into()
+        } else {
+            format!("⚠ {stale} stale price sources")
+        },
+    ]);
     if let Ok(health) = analytics::data_health(db) {
         if let Some(newest) = health.latest_bar.values().max() {
             let age = (now - *newest).num_days().max(0);
@@ -327,7 +489,7 @@ pub fn load_feed(db: &Db, instrument_ids: &[String]) -> HomeFeed {
             feed.stale_age = Some("no bars".to_string());
         }
     }
-    if let Ok(pulse) = analytics::pulse(db, instrument_ids, now - Duration::days(1), 30, now) {
+    if let Ok(pulse) = analytics::pulse(db, instrument_ids, last_seen, 30, now) {
         let new_items = pulse.total();
         if new_items > 0 {
             feed.since_line = Some(truncate(
@@ -489,5 +651,13 @@ mod tests {
         let desk = Desk::offline();
         assert_eq!(desk.feed, HomeFeed::seed());
         assert_eq!(desk.home_state().feed, HomeFeed::seed());
+    }
+
+    #[test]
+    fn watched_instrument_without_bars_has_no_price() {
+        let mut desk = Desk::offline();
+        desk.instruments[0].bars.clear();
+        assert!(desk.watch_state().metric.is_none());
+        assert_eq!(desk.home_state().last, "no bars");
     }
 }

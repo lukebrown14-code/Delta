@@ -22,7 +22,7 @@ pub const SYSTEM_PROMPT: &str = "You are an investment analyst.";
 /// given, a cached response failing the check is treated as a miss (and never
 /// re-served), so a previously-poisoned key is re-attempted live rather than
 /// replaying the same failure on every call.
-pub type CacheValidator<'a> = &'a dyn Fn(&str) -> bool;
+pub type CacheValidator<'a> = &'a (dyn Fn(&str) -> bool + Send + Sync);
 
 /// Arguments for [`LlmClient::complete`] / [`LlmClient::chat`].
 #[derive(Clone, Copy, Default)]
@@ -57,6 +57,14 @@ impl LlmClient {
 
     pub fn provider_name(&self) -> &'static str {
         self.provider.name()
+    }
+
+    pub async fn models(
+        &self,
+        cache_path: &std::path::Path,
+        force: bool,
+    ) -> Vec<crate::providers::ModelInfo> {
+        crate::catalog::catalog(self.provider.as_ref(), cache_path, force).await
     }
 
     /// Cache key: `stable_id(model, prompt_version, prompt)`.

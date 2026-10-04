@@ -3,6 +3,8 @@
 #[derive(Debug, thiserror::Error)]
 pub enum ServiceError {
     #[error("sqlite error: {0}")]
+    Sqlite(#[from] rusqlite::Error),
+    #[error("sqlite error: {0}")]
     Db(#[from] delta_core::db::DbError),
     #[error("http error: {0}")]
     Http(#[from] reqwest::Error),

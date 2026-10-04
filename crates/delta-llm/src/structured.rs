@@ -99,8 +99,5 @@ pub async fn structured<T: DeserializeOwned>(
 fn parse_or_empty<T: DeserializeOwned>(text: &str) -> Result<T, ProviderError> {
     // Parse JSON, or return `{}` so validation reports a clean error.
     let value = extract_json(text).unwrap_or(Value::Object(Default::default()));
-    serde_json::from_value::<T>(value).map_err(|e| ProviderError::Status {
-        status: 0,
-        body: e.to_string(),
-    })
+    serde_json::from_value::<T>(value).map_err(|e| ProviderError::Validation(e.to_string()))
 }

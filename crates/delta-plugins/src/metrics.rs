@@ -1,67 +1,13 @@
-//! Watchlist inspector metrics: the equity metric table from Python's
+//! Watchlist inspector metrics: the ordered profile tables from Python's
 //! `delta/metrics.toml` (label, Yahoo info key, format), formatting parity
 //! with `asset_metrics._fmt`, and the quoteSummary -> info merge.
 
 use serde_json::Value;
 use std::collections::BTreeMap;
 
-/// `(label, info key, format)` in card order (equity profile).
-pub const EQUITY_KEYS: &[(&str, &str, &str)] = &[
-    ("Revenue growth", "revenueGrowth", "ratio"),
-    ("EPS growth", "earningsGrowth", "ratio"),
-    ("Gross margin", "grossMargins", "ratio"),
-    ("Operating margin", "operatingMargins", "ratio"),
-    ("Net margin", "profitMargins", "ratio"),
-    ("EBITDA margin", "ebitdaMargins", "ratio"),
-    ("ROIC", "returnOnInvestedCapital", "ratio"),
-    ("ROE", "returnOnEquity", "ratio"),
-    ("EPS (trailing)", "trailingEps", "number"),
-    ("EPS (forward)", "forwardEps", "number"),
-    ("Revenue / share", "revenuePerShare", "number"),
-    ("P/E", "trailingPE", "x"),
-    ("Forward P/E", "forwardPE", "x"),
-    ("PEG ratio", "trailingPegRatio", "x"),
-    ("Price / Book", "priceToBook", "x"),
-    ("Price / Sales", "priceToSalesTrailing12Months", "x"),
-    ("EV / EBITDA", "enterpriseToEbitda", "x"),
-    ("Free cash flow", "freeCashflow", "money"),
-    ("Operating cash flow", "operatingCashflow", "money"),
-    ("Total cash", "totalCash", "money"),
-    ("Total debt", "totalDebt", "money"),
-    ("Debt / EBITDA", "netDebtToEBITDA", "x"),
-    ("Interest coverage", "interestCoverage", "x"),
-    ("Current ratio", "currentRatio", "x"),
-    ("Quick ratio", "quickRatio", "x"),
-    ("Debt / Equity", "debtToEquity", "percent"),
-    ("Dividend yield", "dividendYield", "percent"),
-    ("Dividend rate", "dividendRate", "number"),
-    ("Payout ratio", "payoutRatio", "ratio"),
-    ("5y avg yield", "fiveYearAvgDividendYield", "percent"),
-    ("Market cap", "marketCap", "money"),
-    ("Enterprise value", "enterpriseValue", "money"),
-    ("Shares out", "sharesOutstanding", "count"),
-    ("Float", "floatShares", "count"),
-    ("Avg volume", "averageVolume", "count"),
-    ("Beta", "beta", "number"),
-    ("Short % of float", "shortPercentOfFloat", "ratio"),
-    ("Short ratio", "shortRatio", "x"),
-    ("Institutions held", "heldPercentInstitutions", "ratio"),
-    ("Insiders held", "heldPercentInsiders", "ratio"),
-    ("Consensus", "recommendationKey", "text"),
-    ("Target mean", "targetMeanPrice", "price"),
-    ("Target median", "targetMedianPrice", "price"),
-    ("Target high", "targetHighPrice", "price"),
-    ("Target low", "targetLowPrice", "price"),
-    ("Analysts", "numberOfAnalystOpinions", "count"),
-    ("52w high", "fiftyTwoWeekHigh", "price"),
-    ("52w low", "fiftyTwoWeekLow", "price"),
-    ("52w change", "52WeekChange", "ratio"),
-    ("S&P 52w change", "SandP52WeekChange", "ratio"),
-    ("50-day average", "fiftyDayAverage", "price"),
-    ("200-day average", "twoHundredDayAverage", "price"),
-    ("Next earnings", "earningsTimestamp", "date"),
-    ("Ex-dividend", "exDividendDate", "date"),
-];
+#[path = "metrics_profiles.rs"]
+pub mod profiles;
+pub use profiles::{groups_for, keys_for, EQUITY_KEYS, METRIC_HELP};
 
 /// K/M/B/T compaction (`_compact`): two decimals, comma grouped; plain
 /// integers render with no decimals (`{:,0f}`).
@@ -87,8 +33,15 @@ fn money(value: f64) -> String {
     format!("{sign}${}", compact(value.abs()))
 }
 
+fn display_value(value: &Value) -> String {
+    value
+        .as_str()
+        .map(str::to_string)
+        .unwrap_or_else(|| value.to_string())
+}
+
 /// One value formatted per its key spec (`asset_metrics._fmt`); `None` when
-/// the value is absent or non-numeric and the format is numeric.
+/// the value is absent; non-numeric values retain Python's text fallback.
 pub fn format_metric(value: &Value, fmt: &str) -> Option<String> {
     // quoteSummary values arrive as {"raw": ..., "fmt": ...}; the raw field
     // is the number the spec formats.
@@ -96,7 +49,7 @@ pub fn format_metric(value: &Value, fmt: &str) -> Option<String> {
         Some(raw) if !value.as_object().map(|o| o.len() > 2).unwrap_or(false) => raw,
         _ => value,
     };
-    if value.is_null() {
+    if value.is_null() || value.as_str() == Some("") {
         return None;
     }
     match fmt {
@@ -109,9 +62,17 @@ pub fn format_metric(value: &Value, fmt: &str) -> Option<String> {
             )
         }
         "date" => {
-            let secs = value.as_i64()?;
+            let secs = value
+                .as_i64()
+                .or_else(|| value.as_f64().map(|v| v as i64))
+                .or_else(|| value.as_str().and_then(|v| v.parse().ok()));
+            let Some(secs) = secs else {
+                return Some(display_value(value));
+            };
             use chrono::TimeZone;
-            let stamp = chrono::Utc.timestamp_opt(secs, 0).single()?;
+            let Some(stamp) = chrono::Utc.timestamp_opt(secs, 0).single() else {
+                return Some(display_value(value));
+            };
             let day = stamp.format("%d").to_string();
             let day = day.trim_start_matches('0');
             return Some(format!("{day} {}", stamp.format("%b %Y")));
@@ -120,13 +81,23 @@ pub fn format_metric(value: &Value, fmt: &str) -> Option<String> {
     }
     let number = match value {
         Value::Number(n) => n.as_f64()?,
-        Value::String(s) => s.parse::<f64>().ok()?,
-        _ => return None,
+        Value::String(s) => match s.parse::<f64>() {
+            Ok(v) => v,
+            Err(_) => return Some(s.clone()),
+        },
+        Value::Bool(v) => {
+            if *v {
+                1.0
+            } else {
+                0.0
+            }
+        }
+        _ => return Some(display_value(value)),
     };
     match fmt {
         "ratio" => Some(format!("{:.1}%", number * 100.0)),
         "percent" => Some(format!("{:.1}%", number)),
-        "x" => Some(format!("{:.1}x", number)),
+        "x" => Some(format!("{}x", delta_core::format::grouped(number, 1))),
         "money" => Some(money(number)),
         "count" => Some(compact(number)),
         "fx" => Some(format!("{:.4}", number)),
@@ -224,6 +195,19 @@ mod tests {
 
     #[test]
     fn formats_match_the_python_spec() {
+        assert_eq!(format_metric(&json!(""), "text"), None);
+        assert_eq!(
+            format_metric(&json!("unavailable"), "ratio").as_deref(),
+            Some("unavailable")
+        );
+        assert_eq!(
+            format_metric(&json!("unknown"), "date").as_deref(),
+            Some("unknown")
+        );
+        assert_eq!(
+            format_metric(&json!(1234.5), "x").as_deref(),
+            Some("1,234.5x")
+        );
         assert_eq!(format_metric(&json!(0.0473), "ratio").unwrap(), "4.7%");
         assert_eq!(format_metric(&json!(0.32), "percent").unwrap(), "0.3%");
         assert_eq!(format_metric(&json!(31.2), "x").unwrap(), "31.2x");

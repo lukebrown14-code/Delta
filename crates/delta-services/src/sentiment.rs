@@ -202,7 +202,7 @@ pub async fn classify_news(
     openrouter_api_key: &str,
     universe: &[Instrument],
     since: Option<NaiveDateTime>,
-    log: Option<&dyn Fn(&str)>,
+    log: Option<&(dyn Fn(&str) + Send + Sync)>,
 ) -> Result<Vec<SentimentRow>, ServiceError> {
     classify_impl(db, cfg, openrouter_api_key, universe, since, log, None).await
 }
@@ -213,7 +213,7 @@ async fn classify_impl(
     openrouter_api_key: &str,
     universe: &[Instrument],
     since: Option<NaiveDateTime>,
-    log: Option<&dyn Fn(&str)>,
+    log: Option<&(dyn Fn(&str) + Send + Sync)>,
     base_url_override: Option<String>,
 ) -> Result<Vec<SentimentRow>, ServiceError> {
     let model =
@@ -282,7 +282,7 @@ pub async fn classify_sentiment(
     openrouter_api_key: &str,
     universe: &[Instrument],
     since: Option<NaiveDateTime>,
-    log: Option<&dyn Fn(&str)>,
+    log: Option<&(dyn Fn(&str) + Send + Sync)>,
 ) -> Result<(usize, usize), ServiceError> {
     let rows = classify_news(db, cfg, openrouter_api_key, universe, since, log).await?;
     let instruments = rows
@@ -325,7 +325,7 @@ pub mod test_hooks {
         universe: &[Instrument],
         since: Option<NaiveDateTime>,
         decisions_url: &str,
-        log: Option<&dyn Fn(&str)>,
+        log: Option<&(dyn Fn(&str) + Send + Sync)>,
     ) -> Result<(usize, usize), ServiceError> {
         let rows = classify_with_base(
             db,
@@ -354,7 +354,7 @@ async fn classify_with_base(
     universe: &[Instrument],
     since: Option<NaiveDateTime>,
     decisions_url: &str,
-    log: Option<&dyn Fn(&str)>,
+    log: Option<&(dyn Fn(&str) + Send + Sync)>,
 ) -> Result<Vec<SentimentRow>, ServiceError> {
     let base = decisions_url
         .rsplit_once("/api/alpha/decisions")

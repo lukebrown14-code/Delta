@@ -341,6 +341,23 @@ pub fn read_env_value_named(name: &str, env_path: &Path) -> String {
 /// Unrelated lines (and their order) are preserved; the file is created when
 /// absent. Secrets stay in `.env` (gitignored), never in config.toml.
 pub fn set_env_value(name: &str, value: &str, env_path: &Path) {
+    let _ = try_set_env_value(name, value, env_path);
+}
+
+/// Save a secret while reporting filesystem failures to the caller.
+pub fn try_set_env_value(name: &str, value: &str, env_path: &Path) -> std::io::Result<()> {
+    if name.is_empty()
+        || !name
+            .chars()
+            .enumerate()
+            .all(|(i, ch)| ch == '_' || ch.is_ascii_alphabetic() || (i > 0 && ch.is_ascii_digit()))
+        || value.contains(['\r', '\n'])
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "invalid environment variable or multiline value",
+        ));
+    }
     let lines: Vec<String> = std::fs::read_to_string(env_path)
         .map(|c| c.lines().map(str::to_string).collect())
         .unwrap_or_default();
@@ -354,7 +371,7 @@ pub fn set_env_value(name: &str, value: &str, env_path: &Path) {
     } else {
         lines.push(format!("{name}={value}"));
     }
-    let _ = std::fs::write(env_path, format!("{}\n", lines.join("\n")));
+    std::fs::write(env_path, format!("{}\n", lines.join("\n")))
 }
 
 #[cfg(test)]

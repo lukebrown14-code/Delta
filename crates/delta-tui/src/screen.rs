@@ -5,6 +5,7 @@
 //! come only from [`crate::theme::Theme`] tokens, as resolved by the exporter.
 
 use crate::chart::{PriceChart, RunKind};
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 /// Resolved theme hexes (see `theme.rs`); short aliases for the painter.
 pub mod color {
@@ -28,6 +29,8 @@ pub struct Style {
     pub bg: Option<&'static str>,
     pub bold: bool,
     pub reverse: bool,
+    pub italic: bool,
+    pub underline: bool,
 }
 
 impl Style {
@@ -36,6 +39,8 @@ impl Style {
         bg: None,
         bold: false,
         reverse: false,
+        italic: false,
+        underline: false,
     };
     pub const fn fg(color: &'static str) -> Style {
         Style {
@@ -43,6 +48,8 @@ impl Style {
             bg: None,
             bold: false,
             reverse: false,
+            italic: false,
+            underline: false,
         }
     }
     pub const fn bold(mut self) -> Style {
@@ -57,14 +64,26 @@ impl Style {
         self.reverse = true;
         self
     }
+    pub const fn italic(mut self) -> Style {
+        self.italic = true;
+        self
+    }
+    pub const fn underline(mut self) -> Style {
+        self.underline = true;
+        self
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Cell {
     pub ch: char,
+    pub symbol: String,
     pub fg: Option<&'static str>,
     pub bg: Option<&'static str>,
     pub bold: bool,
+    pub reverse: bool,
+    pub italic: bool,
+    pub underline: bool,
 }
 
 /// A painted screen: `w x h` cells.
@@ -83,9 +102,13 @@ impl Screen {
             cells: vec![
                 Cell {
                     ch: ' ',
+                    symbol: " ".into(),
                     fg: None,
                     bg: Some(color::BLACK),
-                    bold: false
+                    bold: false,
+                    reverse: false,
+                    italic: false,
+                    underline: false,
                 };
                 w * h
             ],
@@ -96,26 +119,56 @@ impl Screen {
         if x < self.w && y < self.h {
             let cell = &mut self.cells[y * self.w + x];
             cell.ch = ch;
+            cell.symbol = ch.to_string();
             cell.fg = style.fg;
             cell.bg = style.bg.or(cell.bg);
             cell.bold = style.bold;
+            cell.reverse = style.reverse;
+            cell.italic = style.italic;
+            cell.underline = style.underline;
         }
     }
 
     /// Paint `text` left to right from (x, y); returns the next x.
     pub fn text(&mut self, x: usize, y: usize, text: &str, style: Style) -> usize {
         let mut x = x;
+        let mut previous: Option<usize> = None;
         for ch in text.chars() {
+            let width = ch.width().unwrap_or(0);
+            if width == 0 {
+                if let Some(index) = previous {
+                    self.cells[index].symbol.push(ch);
+                }
+                continue;
+            }
+            if x + width > self.w {
+                break;
+            }
             self.put(x, y, ch, style);
-            x += 1;
+            if y < self.h {
+                previous = Some(y * self.w + x);
+            }
+            for offset in 1..width {
+                self.put(x + offset, y, ' ', style);
+            }
+            x += width;
         }
         x
     }
 
     /// Paint `text` right-aligned so it ends at `end` (exclusive).
     pub fn text_right(&mut self, end: usize, y: usize, text: &str, style: Style) {
-        let start = end.saturating_sub(text.chars().count());
+        let start = end.saturating_sub(text.width());
         self.text(start, y, text, style);
+    }
+
+    /// Copy a child view into a pane without changing its sibling regions.
+    pub fn blit_at(&mut self, child: &Screen, x: usize, y: usize) {
+        for row in 0..child.h.min(self.h.saturating_sub(y)) {
+            for col in 0..child.w.min(self.w.saturating_sub(x)) {
+                self.cells[(y + row) * self.w + x + col] = child.cells[row * child.w + col].clone();
+            }
+        }
     }
 
     /// Dim the whole screen: Textual's modal backdrop blends every resolved
@@ -238,11 +291,21 @@ impl Screen {
         h: usize,
         line: &'static str,
     ) {
-        for (row_index, row) in chart.runs(w, h).into_iter().enumerate() {
+        self.price_chart_runs(x, y, chart.runs(w, h), line);
+    }
+
+    pub fn price_chart_runs(
+        &mut self,
+        x: usize,
+        y: usize,
+        runs: Vec<Vec<crate::chart::Run>>,
+        line_color: &'static str,
+    ) {
+        for (row_index, row) in runs.into_iter().enumerate() {
             let mut cx = x;
             for run in row {
                 let style = match run.kind {
-                    RunKind::Line | RunKind::Marker => Style::fg(line),
+                    RunKind::Line | RunKind::Marker => Style::fg(line_color),
                     RunKind::Grid => Style::fg(color::DISABLED),
                     RunKind::Axis => Style::fg(color::MUTED),
                     RunKind::Blank => Style::fg(color::FG),

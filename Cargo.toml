@@ -8,11 +8,31 @@ rust-version = "1.94"
 version = "0.1.0"
 
 [profile.release]
-# Defaults; no overrides yet.
 
-# cargo-dist packaging (R4): `cargo dist build` produces the release
-# archives; the GitHub workflow builds them on tag push.
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"
+
+# Config for 'dist'
 [workspace.metadata.dist]
-# The binary crate.
+# Target platforms to build apps for (Rust target-triple syntax)
 targets = ["aarch64-apple-darwin", "x86_64-unknown-linux-gnu"]
+# Extra static files to include in each App (path relative to this Cargo.toml's dir)
 include = ["crates/delta-tui"]
+# The preferred dist version to use in CI (Cargo.toml SemVer syntax)
+cargo-dist-version = "0.32.0"
+# CI backends to support
+ci = "github"
+# The installers to generate for each app
+installers = ["shell", "homebrew"]
+# Path that installers should place binaries in
+install-path = "CARGO_HOME"
+# Where to host releases
+hosting = "github"
+# Whether to install an updater program
+install-updater = false
+# Homebrew formula destination; configure HOMEBREW_TAP_TOKEN in GitHub Actions
+# after creating this repository.
+tap = "lukebrown14-code/homebrew-tap"
+publish-jobs = ["homebrew"]

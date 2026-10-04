@@ -1,4 +1,4 @@
-# Findings — rust-screens (R3, in progress)
+# Findings — rust-screens (R3/R4 review)
 
 Stream: `delta-tui` screens. Oracle: `fixtures/golden_screens/*.json` via the
 cell-grid model in `crates/delta-tui/src/screen.rs` and the harness in
@@ -7,7 +7,8 @@ cell-grid model in `crates/delta-tui/src/screen.rs` and the harness in
 ## Done
 
 - **Golden harness** — loads the exporter JSON, renders the scenario, diffs
-  every cell (character, fg, bg, bold); prints per-cell diffs on failure.
+  every cell (character, fg, bg, bold, reverse, italic, underline); prints
+  per-cell diffs on failure. Static scenarios pass the full 3-size matrix.
 - **Watchlist screen / metrics inspector at 120x40, Tier A: zero mismatches**
   for both `default` and `range-cycled` states (`tests/golden.rs`), including
   the PriceChart, metric grid, range strip, pane chrome and status bar.
@@ -40,13 +41,36 @@ cell-grid model in `crates/delta-tui/src/screen.rs` and the harness in
   panes, the agenda with jump keys, and the `1 Home` status-bar variant.
   Exported via the new `home` scenario in `tests/export_golden.py`.
 
-## Remaining R3 work
+## Remaining live parity work
 
 | # | State | Tier | Notes |
 |---|---|---|---|
-| 6 | closed | `glossary-120x40` | The VerticalScroll scrollbar is ported (track, half-block cap, proportional thumb); the glossary now gates Tier A at 120x40 and Tier B (text exact) at 80x24/200x50 |
-| 7 | **reopened** (4 Oct) | other screens | The goldens are green, but Research, Theses, Ask, Decisions and Settings painters take no data: they draw the empty landing state only. Functional port tracked in `docs/rewrite/REMAINING.md` |
-| 8 | decided: D2 | `screens.rs` | The painter is layout-hardcoded to the captured geometry. Decision: rebuild every screen as a data-driven `Component`; painters retired screen by screen |
-| 9 | bug | app + watchlist bindings | Rust: `g` glossary, `h`/`l` range. Python: `g` Go, `i` glossary (metric help), `r`/`R` range, `h` Home. Rust also lacks `m`, `p`, `?`, `f2` and the palette. Fix to match Python (R3.1a app, R3.2 per screen) |
-| 10 | gap | `theme.rs` | Python ships `delta-light` (`f2` toggles); Rust is dark-only. Port in R3.1a |
-| 11 | parity | quotes | Python streams quotes by default on Watchlist and Research (`QuoteFeedMixin`); Rust needs `DELTA_QUOTES=1`. Match Python in R3.2 |
+| 6 | closed | `glossary-120x40` | The VerticalScroll scrollbar is ported; glossary gates Tier A at 120x40 and Tier B (text exact) at 80x24/200x50 |
+| 7 | closed | static screens | All screens have narrow and wide painters; static 3-size matrix passes (glossary Tier B at 80x24/200x50) |
+| 8 | simplify | `screens.rs` | Painter is layout-hardcoded to captured geometry; factor shared pieces only as additional states require it |
+| 9 | open (from status PR #19) | app + watchlist bindings | Rust: `g` glossary, `h`/`l` range. Python: `g` Go, `i` glossary (metric help), `r`/`R` range, `h` Home. Rust also lacks `m`, `p`, `?`, `f2` and the palette. Re-verify against the live-workflow app, then fix to match Python |
+| 10 | open (from status PR #19) | `theme.rs` | Python ships `delta-light` (`f2` toggles); Rust is dark-only. Re-verify, then port |
+| 11 | open (from status PR #19) | quotes | Python streams quotes by default on Watchlist and Research (`QuoteFeedMixin`); Rust needs `DELTA_QUOTES=1`. Match Python |
+
+## Live App integration review (2 October 2026)
+
+The static matrix covers painter fixtures. Populated Settings also passes the
+Python oracle at 80x24, 120x40 and 200x50. Populated Research, Theses, Ask and
+Decisions, and live modal/focus states, still need full-cell comparison before
+cutover.
+
+- **bug / cancellation:** Rust Ask originally accepted a late worker answer
+  after clearing its transcript. Generation checks and cancellation now prevent
+  stale turns; a binary interaction regression exercises old/new request results.
+- **perf / render path:** Settings diagnostics reopened SQLite on each paint.
+  Cached worker diagnostics now keep rendering free of storage reads.
+- **parity / bindings:** canonical `chat.py` stored citations navigate to Research,
+  web citations open the browser, and citation selection wraps. Rust now follows
+  these paths. Canonical `targets.py` Enter opens narrow metrics; Escape returns.
+- **parity / settings:** selected market edits now prepopulate their profile and
+  lock the ID. Settings focus/diagnostics still require populated cell comparison.
+- **parity / charts:** live quote appending without an associated timestamp
+  diverged from Python `targets.py` historical series. The quote updates the hero
+  independently; chart values remain paired with stored timestamps.
+
+No layout, colour or binding deviation has been approved by this entry.
