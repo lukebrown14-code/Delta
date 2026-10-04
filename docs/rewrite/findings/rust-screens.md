@@ -45,5 +45,8 @@ cell-grid model in `crates/delta-tui/src/screen.rs` and the harness in
 | # | State | Tier | Notes |
 |---|---|---|---|
 | 6 | closed | `glossary-120x40` | The VerticalScroll scrollbar is ported (track, half-block cap, proportional thumb); the glossary now gates Tier A at 120x40 and Tier B (text exact) at 80x24/200x50 |
-| 7 | closed | other screens | All screens now have narrow (80x24) and wide (200x50) painters; the full 3-size golden matrix is Tier A green (glossary Tier B: text exact, colour findings logged) |
-| 8 | simplify | `screens.rs` | The painter is layout-hardcoded to the captured geometry; as more states land, factor shared pieces (pane hints, hero row) behind the data they render. Deliberately not generalised ahead of the second screen |
+| 7 | **reopened** (4 Oct) | other screens | The goldens are green, but Research, Theses, Ask, Decisions and Settings painters take no data: they draw the empty landing state only. Functional port tracked in `docs/rewrite/REMAINING.md` |
+| 8 | decided: D2 | `screens.rs` | The painter is layout-hardcoded to the captured geometry. Decision: rebuild every screen as a data-driven `Component`; painters retired screen by screen |
+| 9 | bug | app + watchlist bindings | Rust: `g` glossary, `h`/`l` range. Python: `g` Go, `i` glossary (metric help), `r`/`R` range, `h` Home. Rust also lacks `m`, `p`, `?`, `f2` and the palette. Fix to match Python (R3.1a app, R3.2 per screen) |
+| 10 | gap | `theme.rs` | Python ships `delta-light` (`f2` toggles); Rust is dark-only. Port in R3.1a |
+| 11 | parity | quotes | Python streams quotes by default on Watchlist and Research (`QuoteFeedMixin`); Rust needs `DELTA_QUOTES=1`. Match Python in R3.2 |
