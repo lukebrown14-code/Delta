@@ -1,0 +1,145 @@
+{
+  "summary": "Apple enters autumn with a fresh chip cycle, a clean quarter, and a stretched multiple.",
+  "bull_summary": "Services momentum and the chip cycle carry the next two quarters.",
+  "bull": [
+    {
+      "text": "The announced chip cycle supports an upgrade supercycle into the holidays.",
+      "evidence_ids": [
+        "news:news-aapl-chip"
+      ]
+    }
+  ],
+  "bear_summary": "The multiple leaves no room for supply stumbles.",
+  "bear": [
+    {
+      "text": "Panel shortages flagged by suppliers could dent holiday unit volumes.",
+      "evidence_ids": [
+        "news:news-aapl-supply"
+      ]
+    }
+  ],
+  "risks_summary": "Holiday-quarter execution is the swing factor.",
+  "risks": [
+    {
+      "text": "The Q4 print lands inside the decision horizon and can reprice the thesis either way.",
+      "evidence_ids": [
+        "event:event-aapl-earnings"
+      ]
+    }
+  ],
+  "catalysts_summary": "Earnings and the chip launch both land inside the horizon.",
+  "catalysts": [
+    {
+      "text": "Q4 results are scheduled inside the horizon.",
+      "evidence_ids": [
+        "event:event-aapl-earnings"
+      ]
+    }
+  ],
+  "unknowns": [
+    "Holiday-quarter unit guidance"
+  ],
+  "sentiment": 0.35,
+  "sentiment_reasons_summary": "Chip-cycle news tips the balance positive against supply warnings.",
+  "sentiment_reasons": [
+    {
+      "text": "The chip announcement outweighs the supplier warnings for now.",
+      "evidence_ids": [
+        "news:news-aapl-chip",
+        "news:news-aapl-supply"
+      ]
+    }
+  ],
+  "target_id": "US:AAPL",
+  "as_of": "2026-09-21T09:30:00Z",
+  "prompt_version": "report_v2",
+  "citations": {
+    "event:event-aapl-earnings": "[test] earnings: Q4 results",
+    "bar:80": "[test] US:AAPL close 236.30",
+    "bar:79": "[test] US:AAPL close 234.83",
+    "filing:news-aapl-10q": "[sec_edgar] Apple 10-Q: services revenue up 12% year on year <https://example.com/filings/aapl-10q>",
+    "bar:78": "[test] US:AAPL close 233.14",
+    "bar:77": "[test] US:AAPL close 231.30",
+    "bar:76": "[test] US:AAPL close 229.40",
+    "news:news-aapl-chip": "[rss] Apple announces M6 chip with on-device inference <https://example.com/news/aapl-chip>",
+    "bar:75": "[test] US:AAPL close 227.55",
+    "bar:74": "[test] US:AAPL close 225.81",
+    "bar:73": "[test] US:AAPL close 224.29",
+    "bar:72": "[test] US:AAPL close 223.05",
+    "bar:71": "[test] US:AAPL close 222.15",
+    "bar:70": "[test] US:AAPL close 221.60",
+    "bar:69": "[test] US:AAPL close 221.43",
+    "news:news-aapl-supply": "[rss] Suppliers flag panel shortages into the holiday quarter <https://example.com/news/aapl-supply>",
+    "bar:68": "[test] US:AAPL close 221.62",
+    "bar:67": "[test] US:AAPL close 222.13",
+    "bar:66": "[test] US:AAPL close 222.90",
+    "bar:65": "[test] US:AAPL close 223.87",
+    "bar:64": "[test] US:AAPL close 224.95",
+    "bar:63": "[test] US:AAPL close 226.04",
+    "bar:62": "[test] US:AAPL close 227.05",
+    "bar:61": "[test] US:AAPL close 227.90",
+    "bar:60": "[test] US:AAPL close 228.51",
+    "bar:59": "[test] US:AAPL close 228.81",
+    "bar:58": "[test] US:AAPL close 228.76",
+    "bar:57": "[test] US:AAPL close 228.34",
+    "bar:56": "[test] US:AAPL close 227.56",
+    "bar:55": "[test] US:AAPL close 226.42",
+    "bar:54": "[test] US:AAPL close 224.99",
+    "bar:53": "[test] US:AAPL close 223.32",
+    "bar:52": "[test] US:AAPL close 221.50",
+    "bar:51": "[test] US:AAPL close 219.60",
+    "bar:50": "[test] US:AAPL close 217.73",
+    "bar:49": "[test] US:AAPL close 215.98",
+    "bar:48": "[test] US:AAPL close 214.43",
+    "bar:47": "[test] US:AAPL close 213.15",
+    "bar:46": "[test] US:AAPL close 212.19",
+    "bar:45": "[test] US:AAPL close 211.60",
+    "bar:44": "[test] US:AAPL close 211.38",
+    "bar:43": "[test] US:AAPL close 211.52",
+    "bar:42": "[test] US:AAPL close 211.99",
+    "bar:41": "[test] US:AAPL close 212.74",
+    "bar:40": "[test] US:AAPL close 213.68",
+    "bar:39": "[test] US:AAPL close 214.75",
+    "bar:38": "[test] US:AAPL close 215.84",
+    "bar:37": "[test] US:AAPL close 216.87",
+    "bar:36": "[test] US:AAPL close 217.75",
+    "bar:35": "[test] US:AAPL close 218.39",
+    "bar:34": "[test] US:AAPL close 218.74",
+    "bar:33": "[test] US:AAPL close 218.74",
+    "bar:32": "[test] US:AAPL close 218.37",
+    "bar:31": "[test] US:AAPL close 217.63",
+    "bar:30": "[test] US:AAPL close 216.54",
+    "bar:29": "[test] US:AAPL close 215.14",
+    "bar:28": "[test] US:AAPL close 213.50",
+    "bar:27": "[test] US:AAPL close 211.69",
+    "bar:26": "[test] US:AAPL close 209.80",
+    "bar:25": "[test] US:AAPL close 207.92",
+    "bar:24": "[test] US:AAPL close 206.15",
+    "bar:23": "[test] US:AAPL close 204.57",
+    "bar:22": "[test] US:AAPL close 203.25",
+    "bar:21": "[test] US:AAPL close 202.25",
+    "bar:20": "[test] US:AAPL close 201.60",
+    "bar:19": "[test] US:AAPL close 201.33",
+    "bar:18": "[test] US:AAPL close 201.43",
+    "bar:17": "[test] US:AAPL close 201.86",
+    "bar:16": "[test] US:AAPL close 202.57",
+    "bar:15": "[test] US:AAPL close 203.50",
+    "bar:14": "[test] US:AAPL close 204.55",
+    "bar:13": "[test] US:AAPL close 205.65",
+    "bar:12": "[test] US:AAPL close 206.69",
+    "bar:11": "[test] US:AAPL close 207.59",
+    "bar:10": "[test] US:AAPL close 208.27",
+    "bar:9": "[test] US:AAPL close 208.66",
+    "bar:8": "[test] US:AAPL close 208.70",
+    "bar:7": "[test] US:AAPL close 208.38",
+    "bar:6": "[test] US:AAPL close 207.69",
+    "bar:5": "[test] US:AAPL close 206.65",
+    "bar:4": "[test] US:AAPL close 205.29",
+    "bar:3": "[test] US:AAPL close 203.68",
+    "bar:2": "[test] US:AAPL close 201.88",
+    "bar:1": "[test] US:AAPL close 200.00",
+    "fundamental:1": "[yahoo] Market cap: 3400000000000.00 (2026-06-30, yahoo)",
+    "fundamental:2": "[yahoo] P/E: 31.20 (2026-06-30, yahoo)",
+    "fundamental:3": "[yahoo] Gross margin: 48.70 (2026-06-30, yahoo)"
+  }
+}
