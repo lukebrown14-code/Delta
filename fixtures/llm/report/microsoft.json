@@ -1,0 +1,45 @@
+{
+  "cost_usd": 0.01,
+  "text": {
+    "summary": "Microsoft's cloud keeps compounding, but the capex bill is coming due.",
+    "bull_summary": "Cloud growth stays durable through the cycle.",
+    "bull": [
+      {
+        "text": "Cloud growth re-accelerated on the latest enterprise demand read.",
+        "evidence_ids": ["news:news-msft-cloud"]
+      }
+    ],
+    "bear_summary": "Capex guidance compresses free-cash margins.",
+    "bear": [
+      {
+        "text": "Data-centre capex steps up faster than revenue into next year.",
+        "evidence_ids": ["news:news-msft-capex"]
+      }
+    ],
+    "risks_summary": "The earnings print lands inside the horizon.",
+    "risks": [
+      {
+        "text": "Results can reprice the capex narrative either way.",
+        "evidence_ids": ["event:event-msft-earnings"]
+      }
+    ],
+    "catalysts_summary": "Earnings inside the horizon.",
+    "catalysts": [
+      {
+        "text": "Results are scheduled inside the horizon.",
+        "evidence_ids": ["event:event-msft-earnings"]
+      }
+    ],
+    "unknowns": [
+      "Capex payback timeline"
+    ],
+    "sentiment": 0.1,
+    "sentiment_reasons_summary": "Durable cloud demand offsets the capex step-up.",
+    "sentiment_reasons": [
+      {
+        "text": "Demand read and capex warnings roughly balance.",
+        "evidence_ids": ["news:news-msft-cloud", "news:news-msft-capex"]
+      }
+    ]
+  }
+}

@@ -338,7 +338,7 @@ pub fn load_feed(db: &Db, instrument_ids: &[String]) -> HomeFeed {
         }
         let window_total: usize = pulse.daily.iter().sum();
         if window_total > 0 {
-            let spend = analytics::total_spend(db, Some(now - Duration::days(30))).max(0.0);
+            let spend = clamp_spend(analytics::total_spend(db, Some(now - Duration::days(30))));
             feed.activity_line = Some(truncate(
                 &format!("{window_total} items in the last 30 days · ${spend:.2} LLM spend"),
                 54,
@@ -359,6 +359,16 @@ pub fn load_feed(db: &Db, instrument_ids: &[String]) -> HomeFeed {
         }
     }
     feed
+}
+
+/// Clamp a spend value at zero, normalizing IEEE negative zero: `f64::max`
+/// may return either zero, and `{:.2}` would render `$-0.00`.
+fn clamp_spend(spend: f64) -> f64 {
+    if spend == 0.0 {
+        0.0
+    } else {
+        spend.max(0.0)
+    }
 }
 
 /// Clip `text` to at most `max` display columns (unicode width, so CJK and
@@ -391,7 +401,7 @@ mod tests {
     use super::*;
     use chrono::NaiveDate;
     use delta_core::db::StoreItem;
-    use delta_core::models::{Event, EventKind, NewsItem};
+    use delta_core::models::{Event, EventKind, LlmCall, NewsItem};
 
     /// A bar timestamped `days_before` before "now", so ages are stable.
     fn bar(days_before: i64) -> Bar {
@@ -460,6 +470,53 @@ mod tests {
             .as_deref()
             .is_some_and(|l| l.starts_with("Thu 01 Jan  earnings · Q4 earnings")));
         assert_eq!(feed.upcoming_brief.as_deref(), Some("Thu 01 Jan earnings"));
+    }
+
+    #[test]
+    fn spend_clamp_normalizes_negative_zero() {
+        for v in [-0.0, -0.001, 0.0] {
+            let spend = clamp_spend(v);
+            assert_eq!(format!("{spend:.2}"), "0.00");
+        }
+        assert_eq!(clamp_spend(12.5), 12.5);
+    }
+
+    #[test]
+    fn negligible_spend_renders_as_positive_zero() {
+        let mut db = Db::open_memory().unwrap();
+        db.store_items(&[
+            bar(3).into(),
+            NewsItem {
+                id: "n1".to_string(),
+                instrument_ids: vec!["US:AAPL".to_string()],
+                published: now_naive() - Duration::hours(2),
+                title: "Apple announces new chip".to_string(),
+                url: "https://example.com".to_string(),
+                body: None,
+                source: "rss".to_string(),
+            }
+            .into(),
+        ])
+        .unwrap();
+        db.llm_store_call(&LlmCall {
+            id: "c1".to_string(),
+            ts: now_naive(),
+            task: "extract".to_string(),
+            model: "m1".to_string(),
+            prompt_version: "1".to_string(),
+            prompt_hash: "h".to_string(),
+            input_tokens: 1,
+            output_tokens: 1,
+            cost_usd: -0.001,
+            latency_ms: 1,
+            cached: false,
+            response: None,
+        })
+        .unwrap();
+        let feed = load_feed(&db, &["US:AAPL".to_string()]);
+        let line = feed.activity_line.as_deref().unwrap_or_default();
+        assert!(line.contains("$0.00 LLM spend"), "got: {line}");
+        assert!(!line.contains('-'), "got: {line}");
     }
 
     #[test]

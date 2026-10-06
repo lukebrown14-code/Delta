@@ -1,0 +1,54 @@
+"""Golden scenarios, one module per screen (collected by ``export_golden.py``).
+
+Each module owns its screen's scenario list: the key states, the three-size
+matrix (80x24, 120x40, 200x50) and the declared tier. ``SCENARIOS`` here is
+the ordered concatenation, which is exactly the pre-split list, so the
+committed goldens stay byte-identical.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+#: The full three-size matrix (R4 gates on 120x40 only during R3).
+SIZES: tuple[tuple[int, int], ...] = ((80, 24), (120, 40), (200, 50))
+
+
+@dataclass(frozen=True)
+class Scenario:
+    name: str
+    size: tuple[int, int]
+    tier: str  # declared: "A" (status bar, chart, tables) or "B" (prose)
+    keys: tuple[str, ...]
+
+    @property
+    def size_label(self) -> str:
+        return f"{self.size[0]}x{self.size[1]}"
+
+    @property
+    def filename(self) -> str:
+        return f"{self.name}-{self.size_label}.json"
+
+    @property
+    def gate_tier(self) -> str:
+        """The tier the harness enforces: the canonical 120x40 gates Tier A."""
+        return "A" if self.size == (120, 40) else self.tier
+
+
+def matrix(name: str, keys: tuple[str, ...], tier: str) -> tuple[Scenario, ...]:
+    """One state exported at every matrix size."""
+    return tuple(Scenario(name, size, tier, keys) for size in SIZES)
+
+
+from . import ask, decisions, home, research, settings, theses, watchlist  # noqa: E402
+
+#: All scenarios in export order (the manifest and file order follow this).
+SCENARIOS: tuple[Scenario, ...] = (
+    home.SCENARIOS
+    + watchlist.SCENARIOS
+    + research.SCENARIOS
+    + theses.SCENARIOS
+    + ask.SCENARIOS
+    + decisions.SCENARIOS
+    + settings.SCENARIOS
+)

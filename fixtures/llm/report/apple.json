@@ -1,0 +1,49 @@
+{
+  "cost_usd": 0.01,
+  "text": {
+    "summary": "Apple enters autumn with a fresh chip cycle, a clean quarter, and a stretched multiple.",
+    "bull_summary": "Services momentum and the chip cycle carry the next two quarters.",
+    "bull": [
+      {
+        "text": "Services revenue keeps double-digit growth on the latest filing.",
+        "evidence_ids": ["news:news-aapl-10q"]
+      },
+      {
+        "text": "The announced chip cycle supports an upgrade supercycle into the holidays.",
+        "evidence_ids": ["news:news-aapl-chip"]
+      }
+    ],
+    "bear_summary": "The multiple leaves no room for supply stumbles.",
+    "bear": [
+      {
+        "text": "Panel shortages flagged by suppliers could dent holiday unit volumes.",
+        "evidence_ids": ["news:news-aapl-supply"]
+      }
+    ],
+    "risks_summary": "Holiday-quarter execution is the swing factor.",
+    "risks": [
+      {
+        "text": "The Q4 print lands inside the decision horizon and can reprice the thesis either way.",
+        "evidence_ids": ["event:event-aapl-earnings"]
+      }
+    ],
+    "catalysts_summary": "Earnings and the chip launch both land inside the horizon.",
+    "catalysts": [
+      {
+        "text": "Q4 results are scheduled inside the horizon.",
+        "evidence_ids": ["event:event-aapl-earnings"]
+      }
+    ],
+    "unknowns": [
+      "Holiday-quarter unit guidance"
+    ],
+    "sentiment": 0.35,
+    "sentiment_reasons_summary": "Chip-cycle news tips the balance positive against supply warnings.",
+    "sentiment_reasons": [
+      {
+        "text": "The chip announcement outweighs the supplier warnings for now.",
+        "evidence_ids": ["news:news-aapl-chip", "news:news-aapl-supply"]
+      }
+    ]
+  }
+}

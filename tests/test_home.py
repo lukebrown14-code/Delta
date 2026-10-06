@@ -124,11 +124,11 @@ def test_agenda_lines_and_jump_keys(home_app, offline_quotes, tmp_engine):
         for row in session.exec(select(BarTable)).all():
             session.delete(row)
         session.commit()
-    seed_bars(engine, AAPL.id, n=5, start=datetime.now(UTC) - timedelta(days=60))
+    with time_machine.travel(NOW, tick=False):
+        seed_bars(engine, AAPL.id, n=5, start=NOW - timedelta(days=60))
 
-    async def run():
-        async with app.run_test(size=(120, 40)) as pilot:
-            with time_machine.travel(NOW, tick=False):
+        async def run():
+            async with app.run_test(size=(120, 40)) as pilot:
                 await pilot.pause()
                 home = app.screen
                 reviews = home.query_one("#agenda-reviews", HomeLink)
@@ -136,7 +136,9 @@ def test_agenda_lines_and_jump_keys(home_app, offline_quotes, tmp_engine):
                 stale = home.query_one("#agenda-stale", HomeLink)
                 falsifier = home.query_one("#agenda-falsifier", HomeLink)
 
-                assert "1 decision review due" in str(reviews.query_one(".home-link-label").render())
+                assert "1 decision review due" in str(
+                    reviews.query_one(".home-link-label").render()
+                )
                 assert reviews.key == "6"
                 assert "1 earnings" in str(earnings.query_one(".home-link-label").render())
                 assert earnings.key == "3"
@@ -145,7 +147,7 @@ def test_agenda_lines_and_jump_keys(home_app, offline_quotes, tmp_engine):
                 assert "no falsifier hits" in str(falsifier.query_one(".home-link-label").render())
                 assert falsifier.key == "4"
 
-    asyncio.run(run())
+        asyncio.run(run())
 
 
 def test_first_run_shows_setup_checklist(home_app, offline_quotes):

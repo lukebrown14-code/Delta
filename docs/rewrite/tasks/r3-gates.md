@@ -36,6 +36,10 @@
    directly instead of rebuilding the data in Rust test code.
 6. **FakeLLM fixtures:** canned responses under `fixtures/llm/<task>/`, loaded by
    both the Python `FakeLLM` and the Rust `FakeLlm`.
+   _Amended 4 Oct, coordinator: the Rust `FakeLlm` + fixture loader is deferred to
+   R3.1c (which owns `delta-llm`); R3.0 ships the fixtures and the Python side.
+   The fixture format is the contract: `fixtures/llm/<task>/<name>.json` =
+   `{"cost_usd": float, "text": payload}`._
 7. **Golden harness:** read the scenario tier and seed from `manifest.json`; keep
    the side-by-side diff on failure.
 
