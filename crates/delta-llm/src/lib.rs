@@ -4,6 +4,7 @@
 pub mod catalog;
 pub mod client;
 pub mod eval;
+pub mod fake;
 pub mod jev;
 pub mod json;
 pub mod prompts;
@@ -21,6 +22,7 @@ pub use eval::{
     citation_validity_rate, evaluate, hallucinated_citations, valid_citations, EvalResult,
     GoldenCase,
 };
+pub use fake::{CannedResponse, FakeLlm, RecordedCall};
 pub use jev::{
     ChoiceQuestion, Decision, JevClient, JevError, Usage, DECISIONS_URL, JEV_MODEL, PROMPT_VERSION,
 };
