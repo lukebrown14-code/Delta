@@ -14,6 +14,7 @@ use delta_core::db::Db;
 
 use crate::error::ServiceError;
 use crate::theses::db_err;
+use crate::theses::truncate_to_micros;
 
 pub const DECISION_STATUSES: [&str; 3] = ["open", "retired", "reviewed"];
 
@@ -188,7 +189,11 @@ pub fn create_decision(
         Some(tid) => Some(linked_thesis(db, tid, &instrument_id)?),
         None => None,
     };
-    let now = created_at.unwrap_or_else(|| Utc::now().naive_utc());
+    // Same microsecond normalization as theses::create_thesis: SQLite stores
+    // `%.6f`, so keep the returned struct equal to its stored round-trip.
+    let now = created_at
+        .map(truncate_to_micros)
+        .unwrap_or_else(|| truncate_to_micros(Utc::now().naive_utc()));
     let decision = Decision {
         id: new_decision_id(),
         instrument_id,

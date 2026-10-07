@@ -12,12 +12,19 @@
 //! `ThesisDraft` payload). It lands with the theses screen stream, which owns
 //! the prompt/structured-call wiring.
 
-use chrono::{NaiveDateTime, Utc};
+use chrono::{NaiveDateTime, Timelike, Utc};
 
 use delta_core::db::Db;
 use delta_core::ids::stable_id;
 
 use crate::error::ServiceError;
+
+/// Truncate sub-microsecond precision so in-memory timestamps equal their
+/// `%.6f` SQLite round-trip (chrono's `round` feature is not enabled).
+pub(crate) fn truncate_to_micros(ts: NaiveDateTime) -> NaiveDateTime {
+    ts.with_nanosecond(ts.nanosecond() / 1_000 * 1_000)
+        .unwrap_or(ts)
+}
 use crate::evidence::{evidence, EvidenceItem};
 use crate::thesis_health::Thesis;
 
@@ -110,7 +117,12 @@ pub fn create_thesis(
     created_at: Option<NaiveDateTime>,
 ) -> Result<Thesis, ServiceError> {
     let tid = thesis_id(claim, scope);
-    let created_at = created_at.unwrap_or_else(|| Utc::now().naive_utc());
+    // Python clocks carry microsecond precision at most and SQLite stores
+    // `%.6f`; truncate so the returned struct equals its stored round-trip
+    // (nanosecond system clocks made `get_thesis` != the created value).
+    let created_at = created_at
+        .map(truncate_to_micros)
+        .unwrap_or_else(|| truncate_to_micros(Utc::now().naive_utc()));
     ensure_tables(db)?;
     let exists: bool = db
         .conn()
