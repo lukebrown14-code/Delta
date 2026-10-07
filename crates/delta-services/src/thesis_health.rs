@@ -1,15 +1,22 @@
 //! Deterministic thesis health: an evidence-based read, never a truth claim.
-//! Port of `delta/thesis_health.py` plus `services.thesis_fleet` and the
-//! evidence-by-id reads it needs (`delta.evidence.evidence_by_ids`).
+//! Port of `delta/thesis_health.py` plus `services.thesis_fleet`.
 //!
 //! The state is computed by a pure function over ACCEPTED evidence — the LLM
 //! may draft prose about it later, but it never decides the state.
+//!
+//! `EvidenceItem` and `evidence_by_ids` live in [`crate::evidence`] (their
+//! Python home is `delta/evidence.py`); they are re-exported here for the
+//! health callers.
 
 use std::collections::BTreeSet;
 
 use chrono::{DateTime, Duration, NaiveDateTime, Utc};
 
 use delta_core::db::Db;
+
+pub use crate::evidence::{evidence_by_ids, EvidenceItem};
+// The thesis tables are `theses.py`'s; re-exported for the health callers.
+pub use crate::theses::ensure_tables;
 
 /// Items at most this old count fully; older ones count half.
 pub const RECENT_DAYS: i64 = 7;
@@ -44,7 +51,7 @@ impl EvidenceSide {
 }
 
 /// A long-horizon claim plus the framing that makes it checkable (`Thesis`).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Thesis {
     pub id: String,
     pub claim: String,
@@ -55,20 +62,6 @@ pub struct Thesis {
     pub time_horizon: String,
     pub created_at: NaiveDateTime,
     pub status: String,
-}
-
-/// One sourced fact, normalised from any source table (`EvidenceItem`).
-#[derive(Debug, Clone)]
-pub struct EvidenceItem {
-    pub id: String,
-    pub target_ids: Vec<String>,
-    pub ts: NaiveDateTime,
-    pub kind: String,
-    pub title: String,
-    pub body: Option<String>,
-    pub source: String,
-    pub url: Option<String>,
-    pub sentiment: Option<f64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -264,35 +257,7 @@ fn risk_order(state: HealthState) -> usize {
     }
 }
 
-/// The thesis-stage tables, created when missing (SQLModel's `create_all`
-/// checks first, so repeat-safe). Matches `delta/theses.py` column-for-column.
-pub fn ensure_tables(db: &Db) -> Result<(), delta_core::db::DbError> {
-    db.conn().execute_batch(
-        "CREATE TABLE IF NOT EXISTS thesis (
-            id VARCHAR NOT NULL PRIMARY KEY,
-            claim VARCHAR NOT NULL,
-            scope VARCHAR NOT NULL,
-            assumptions VARCHAR NOT NULL,
-            falsifiers VARCHAR NOT NULL,
-            targets VARCHAR NOT NULL,
-            time_horizon VARCHAR NOT NULL,
-            created_at DATETIME NOT NULL,
-            status VARCHAR NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS thesis_evidence (
-            thesis_id VARCHAR NOT NULL,
-            evidence_id VARCHAR NOT NULL,
-            side VARCHAR NOT NULL,
-            note VARCHAR NOT NULL,
-            accepted BOOLEAN NOT NULL,
-            PRIMARY KEY (thesis_id, evidence_id)
-        );",
-    )?;
-    Ok(())
-}
-
 fn list_theses(db: &Db) -> Result<Vec<Thesis>, delta_core::db::DbError> {
-    ensure_tables(db)?;
     let mut stmt = db
         .conn()
         .prepare("SELECT id, claim, scope, assumptions, falsifiers, targets, time_horizon, created_at, status FROM thesis")?;
@@ -317,7 +282,6 @@ fn accepted_links(
     db: &Db,
     thesis_id: &str,
 ) -> Result<Vec<(String, EvidenceSide)>, delta_core::db::DbError> {
-    ensure_tables(db)?;
     let mut stmt = db.conn().prepare(
         "SELECT evidence_id, side FROM thesis_evidence WHERE thesis_id = ?1 AND accepted = 1",
     )?;
@@ -330,161 +294,6 @@ fn accepted_links(
         .collect())
 }
 
-/// Evidence items for the given ids, newest first; unknown ids are skipped
-/// (`evidence_by_ids`). News and filing are the same table, split only by
-/// source.
-pub fn evidence_by_ids(
-    db: &Db,
-    ids: &[String],
-) -> Result<Vec<EvidenceItem>, delta_core::db::DbError> {
-    let mut by_prefix: std::collections::BTreeMap<String, Vec<String>> = Default::default();
-    for id in ids {
-        if let Some((prefix, rest)) = id.split_once(':') {
-            if !rest.is_empty() {
-                by_prefix
-                    .entry(prefix.to_string())
-                    .or_default()
-                    .push(rest.to_string());
-            }
-        }
-    }
-    let mut items: Vec<EvidenceItem> = Vec::new();
-    if let Some(bar_ids) = by_prefix.get("bar") {
-        items.extend(query_bars(db, bar_ids)?);
-    }
-    if let Some(event_ids) = by_prefix.get("event") {
-        items.extend(query_events(db, event_ids)?);
-    }
-    if let Some(fundamental_ids) = by_prefix.get("fundamental") {
-        items.extend(query_fundamentals(db, fundamental_ids)?);
-    }
-    let mut news_ids: Vec<String> = by_prefix.get("news").cloned().unwrap_or_default();
-    news_ids.extend(by_prefix.get("filing").cloned().unwrap_or_default());
-    if !news_ids.is_empty() {
-        items.extend(query_news(db, &news_ids)?);
-    }
-    Ok(ordered(items))
-}
-
-/// Newest first; items sharing a timestamp keep ascending id order.
-fn ordered(mut items: Vec<EvidenceItem>) -> Vec<EvidenceItem> {
-    items.sort_by(|a, b| a.id.cmp(&b.id));
-    items.sort_by(|a, b| b.ts.cmp(&a.ts));
-    items
-}
-
-fn in_clause(ids: &[String]) -> String {
-    // Parameter placeholders, never interpolated values (SQL safety).
-    ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ")
-}
-
-fn query_bars(db: &Db, ids: &[String]) -> Result<Vec<EvidenceItem>, delta_core::db::DbError> {
-    let sql = format!(
-        "SELECT id, instrument_id, ts, close FROM bar WHERE id IN ({})",
-        in_clause(ids)
-    );
-    let mut stmt = db.conn().prepare(&sql)?;
-    let rows = stmt.query_map(rusqlite::params_from_iter(ids), |row| {
-        let instrument_id: String = row.get(1)?;
-        let close: f64 = row.get(3)?;
-        Ok(EvidenceItem {
-            id: format!("bar:{}", row.get::<_, i64>(0)?),
-            target_ids: vec![instrument_id.clone()],
-            ts: delta_core::db::decode_ts(&row.get::<_, String>(2)?).unwrap_or_default(),
-            kind: "bar".to_string(),
-            title: format!("{instrument_id} close {close:.2}"),
-            body: None,
-            source: String::new(),
-            url: None,
-            sentiment: None,
-        })
-    })?;
-    Ok(rows.filter_map(|r| r.ok()).collect())
-}
-
-fn query_news(db: &Db, ids: &[String]) -> Result<Vec<EvidenceItem>, delta_core::db::DbError> {
-    let sql = format!(
-        "SELECT id, instrument_ids, published, title, body, source, url FROM newsitem WHERE id IN ({})",
-        in_clause(ids)
-    );
-    let mut stmt = db.conn().prepare(&sql)?;
-    let rows = stmt.query_map(rusqlite::params_from_iter(ids), |row| {
-        let source: String = row.get(5)?;
-        let kind = if crate::brief::PRIMARY_FILING_SOURCES.contains(&source.as_str()) {
-            "filing"
-        } else {
-            "news"
-        };
-        Ok(EvidenceItem {
-            id: format!("{kind}:{}", row.get::<_, String>(0)?),
-            target_ids: delta_core::json::from_json(Some(&row.get::<_, String>(1)?)),
-            ts: delta_core::db::decode_ts(&row.get::<_, String>(2)?).unwrap_or_default(),
-            kind: kind.to_string(),
-            title: row.get(3)?,
-            body: row.get(4)?,
-            source,
-            url: row.get(6)?,
-            sentiment: None,
-        })
-    })?;
-    Ok(rows.filter_map(|r| r.ok()).collect())
-}
-
-fn query_events(db: &Db, ids: &[String]) -> Result<Vec<EvidenceItem>, delta_core::db::DbError> {
-    let sql = format!(
-        "SELECT id, instrument_id, ts, kind, summary, sentiment, extracted_by FROM event WHERE id IN ({})",
-        in_clause(ids)
-    );
-    let mut stmt = db.conn().prepare(&sql)?;
-    let rows = stmt.query_map(rusqlite::params_from_iter(ids), |row| {
-        let kind: String = row.get(3)?;
-        let summary: String = row.get(4)?;
-        Ok(EvidenceItem {
-            id: format!("event:{}", row.get::<_, String>(0)?),
-            target_ids: vec![row.get(1)?],
-            ts: delta_core::db::decode_ts(&row.get::<_, String>(2)?).unwrap_or_default(),
-            title: format!("{kind}: {summary}"),
-            kind: "event".to_string(),
-            body: None,
-            source: row.get(6)?,
-            url: None,
-            sentiment: row.get(5)?,
-        })
-    })?;
-    Ok(rows.filter_map(|r| r.ok()).collect())
-}
-
-fn query_fundamentals(
-    db: &Db,
-    ids: &[String],
-) -> Result<Vec<EvidenceItem>, delta_core::db::DbError> {
-    let sql = format!(
-        "SELECT id, instrument_id, as_of, metric, value, source FROM fundamental WHERE id IN ({})",
-        in_clause(ids)
-    );
-    let mut stmt = db.conn().prepare(&sql)?;
-    let rows = stmt.query_map(rusqlite::params_from_iter(ids), |row| {
-        let as_of: String = row.get(2)?;
-        let metric: String = row.get(3)?;
-        let value: f64 = row.get(4)?;
-        Ok(EvidenceItem {
-            id: format!("fundamental:{}", row.get::<_, i64>(0)?),
-            target_ids: vec![row.get(1)?],
-            ts: delta_core::time::parse_date(&as_of).unwrap_or_default(),
-            kind: "fundamental".to_string(),
-            title: format!(
-                "{metric}: {value:.2} ({as_of}, {})",
-                row.get::<_, String>(5)?
-            ),
-            body: None,
-            source: row.get(5)?,
-            url: None,
-            sentiment: None,
-        })
-    })?;
-    Ok(rows.filter_map(|r| r.ok()).collect())
-}
-
 /// Health of every thesis, most at risk first (`services.thesis_fleet`).
 ///
 /// Ties break on tilt (most negative first), then on the claim.
@@ -493,6 +302,7 @@ pub fn thesis_fleet(
     now: Option<NaiveDateTime>,
 ) -> Result<Vec<ThesisHealth>, delta_core::db::DbError> {
     let now = now.unwrap_or_else(|| Utc::now().naive_utc());
+    ensure_tables(db)?;
     let mut fleet: Vec<ThesisHealth> = Vec::new();
     for thesis in list_theses(db)? {
         let links = accepted_links(db, &thesis.id)?;
