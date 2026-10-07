@@ -10,6 +10,9 @@
 `components.rs`, `dialog.rs`, `theme.rs`, `table.rs`, new `input.rs`, `form.rs`,
 `markdown.rs`, `wrap.rs`, `keymap.rs`, `screens/mod.rs`, `screens/status_bar.rs`.
 Also `tests/golden_scenarios/shell.py`, `crates/delta-tui/Cargo.toml`.
+_Amended 7 Oct (R3.1 review, finding 18): `crates/delta-tui/tests/golden.rs` and
+`tests/golden_scenarios/__init__.py` added to owns — mechanically required to
+register and gate the shell scenarios._
 
 ## Python sources
 
