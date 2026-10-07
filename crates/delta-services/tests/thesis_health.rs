@@ -37,6 +37,8 @@ fn linked(id: &str, days: i64, side: EvidenceSide, title: &str) -> (EvidenceItem
             source: "test".to_string(),
             url: None,
             sentiment: None,
+            raw: serde_json::Value::Null,
+            quality: "secondary".to_string(),
         },
         side,
     )

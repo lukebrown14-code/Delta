@@ -27,16 +27,36 @@ pub use config_ops::{
     add_target, legacy_kind, market_profiles, remove_market, remove_target, save_market,
     set_plugin_enabled, target_specs,
 };
+pub use decisions::{
+    append_review, create_decision, delete_decision, due_reviews, get_decision, list_decisions,
+    new_decision_id, relink_thesis, review_history, update_decision, Decision, DecisionReview,
+    DECISION_STATUSES,
+};
 pub use error::ServiceError;
-pub use pipeline::{
-    default_since, event_id, extract_events, gather, ingest, ExtractResult, IngestResult,
+pub use evidence::{
+    cite, evidence, evidence_by_ids, falsifier_hit, source_quality, EvidenceItem,
+    PRIMARY_DISCLOSURE_SOURCES,
+};
+pub use pipeline::{default_since, event_id, extract_events, ingest, ExtractResult, IngestResult};
+pub use review::{
+    evidence_audit, primary_sources, primary_sources_for, review_queue, EvidenceAudit, PluginInfo,
+    ReviewItem, EVIDENCE_WINDOW, MIN_NON_PRICE_ITEMS, MIN_SOURCES, NEWS_STALE_AFTER,
+    PRICE_STALE_AFTER, PRIMARY_STALE_AFTER,
 };
 pub use sentiment::{
     classify_news, judgment_id, stance_of, stock_sentiment, SentimentRow, SentimentSummary,
     DEFAULT_SINCE_DAYS, HALF_LIFE_DAYS, SENTIMENT_TASK,
 };
+pub use setup::{
+    configure_data_provider, data_provider_status, setup_checks, Check, DataProviderStatus,
+};
 pub use targets::{target_from_spec, WatchTarget, DEFAULT_KIND, KNOWN_KINDS, LEGACY_KIND};
+pub use theses::{
+    accepted_items, add_evidence, create_thesis, ensure_tables, evidence_for, get_thesis,
+    list_theses, remove_evidence, set_accepted, set_status, thesis_id, update_thesis,
+    ThesisEvidence, SIDES,
+};
 pub use thesis_health::{
-    badge_text, compute_health, evidence_by_ids, state_style, thesis_fleet, EvidenceItem,
-    EvidenceSide, HealthResult, HealthState, Thesis, ThesisHealth, RECENT_DAYS,
+    badge_text, compute_health, state_style, thesis_fleet, EvidenceSide, HealthResult, HealthState,
+    Thesis, ThesisHealth, RECENT_DAYS,
 };
