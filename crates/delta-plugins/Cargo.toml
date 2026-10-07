@@ -9,6 +9,8 @@ version.workspace = true
 async-trait = "0.1"
 base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["std", "clock", "serde"] }
+# D5: real tz database for market sessions (was fixed EST/AEST offsets).
+chrono-tz = "0.10"
 delta-core = { path = "../delta-core" }
 feed-rs = "2"
 futures = "0.3"

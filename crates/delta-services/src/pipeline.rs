@@ -300,6 +300,10 @@ fn covered_evidence(db: &Db) -> Result<BTreeSet<String>, ServiceError> {
 }
 
 /// The validated extract payload (`EventBatch` / `EventDraft`).
+///
+/// `sentiment` must land in [-1, 1] (`pydantic`'s `Field(ge=-1, le=1)`,
+/// finding rust-services #5): one bad sentiment fails the whole batch
+/// deserialization, which the extract loop skips wholesale — as Python does.
 #[derive(Debug, serde::Deserialize)]
 pub struct EventBatch {
     #[serde(default)]
@@ -310,11 +314,26 @@ pub struct EventBatch {
 pub struct EventDraft {
     pub kind: EventKind,
     pub summary: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "sentiment_in_range")]
     pub sentiment: f64,
     #[cfg_attr(test, allow(dead_code))]
     #[serde(default)]
     pub evidence_ids: Vec<String>,
+}
+
+/// `pydantic`'s `Field(ge=-1, le=1)` for `EventDraft.sentiment`.
+fn sentiment_in_range<'de, D>(d: D) -> Result<f64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde::Deserialize::deserialize(d)?;
+    if !(-1.0..=1.0).contains(&value) {
+        return Err(serde::de::Error::invalid_value(
+            serde::de::Unexpected::Float(value),
+            &"a sentiment in [-1, 1]",
+        ));
+    }
+    Ok(value)
 }
 
 /// The full evidence pipeline minus sentiment (`gather`); see findings #3.

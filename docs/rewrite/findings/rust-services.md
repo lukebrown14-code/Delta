@@ -33,3 +33,14 @@ identically seeded DB (seed script preserved in the test's `seeded_db`).
 | 5 | parity | `extract.rs` validation | Python validates `sentiment` in [-1, 1] via pydantic (a bad batch is skipped whole). The Rust port clamps nothing and skips on serde failure only — a model returning sentiment 5 would store it. Proposal: add the range check to `EventDraft` with `#[serde(try_from)]`-style validation; flagged rather than silently changed |
 | 6 | simplify | `pulse` floor | Python reads both tables with `>= floor`; the Rust port filters per row over the same span. Same output, one fewer temp |
 | 7 | perf | `analytics.rs` readers | `pulse`/`upcoming_events` load full rows instead of column projections; fine at desk scale, revisit only if profiling says so |
+
+## Fixed
+
+- **#5 (sentiment range) — fixed in 74444e1** (R3.1c, decision D8):
+  `EventDraft.sentiment` deserializes through a [-1, 1] range check
+  (pydantic's `Field(ge=-1, le=1)`), so one out-of-range sentiment fails the
+  whole `EventBatch` and the extract loop skips it — nothing stored, as in
+  Python. The failed response also fails the structured cache validator, so
+  a poisoned answer is recalled live. Tests in
+  `crates/delta-services/tests/extract_sentiment.rs` cover the skip and the
+  inclusive boundaries.
