@@ -157,6 +157,30 @@ fn target_paths_preserve_comments() {
         .contains("[targets.chip]"));
 }
 
+/// Resolve a Python interpreter for the parity check: `DELTA_TEST_PYTHON`
+/// wins, then `uv run python` (the repo's dev setup), then bare `python3`
+/// (CI runners ship Python without `uv` on the cargo job's PATH).
+fn python_command(script: &str) -> (std::process::Command, String) {
+    let on_path = |name: &str| {
+        std::env::var_os("PATH")
+            .map(|paths| std::env::split_paths(&paths).any(|dir| dir.join(name).exists()))
+            .unwrap_or(false)
+    };
+    if let Ok(py) = std::env::var("DELTA_TEST_PYTHON") {
+        let mut cmd = std::process::Command::new(&py);
+        cmd.arg("-c").arg(script);
+        return (cmd, py);
+    }
+    if on_path("uv") {
+        let mut cmd = std::process::Command::new("uv");
+        cmd.args(["run", "python", "-c", script]);
+        return (cmd, "uv run python".to_string());
+    }
+    let mut cmd = std::process::Command::new("python3");
+    cmd.arg("-c").arg(script);
+    (cmd, "python3".to_string())
+}
+
 /// The written file must stay valid TOML for the Python app: parse it with
 /// the stdlib `tomllib` Python 3.12's `delta.core.config` reads with.
 #[test]
@@ -176,19 +200,14 @@ fn written_config_parses_in_python() {
         "equity",
     )
     .unwrap();
-    let output = std::process::Command::new("uv")
-        .args([
-            "run",
-            "python",
-            "-c",
-            &format!(
-                "import tomllib, json\nwith open({:?}, 'rb') as f:\n    data = tomllib.load(f)\nprint(json.dumps(data))",
-                path
-            ),
-        ])
+    let (mut command, label) = python_command(&format!(
+        "import tomllib, json\nwith open({:?}, 'rb') as f:\n    data = tomllib.load(f)\nprint(json.dumps(data))",
+        path
+    ));
+    let output = command
         .current_dir(env!("CARGO_MANIFEST_DIR"))
         .output()
-        .expect("uv run python");
+        .unwrap_or_else(|e| panic!("{label} not runnable: {e}"));
     assert!(
         output.status.success(),
         "python failed: {}",
