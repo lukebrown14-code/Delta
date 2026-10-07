@@ -1,14 +1,13 @@
 //! Market plugins: universe construction and session times
 //! (ports of `delta/plugins/markets/us.py` and `asx.py`).
 
-use chrono::{DateTime, Datelike, Duration, NaiveTime, Timelike, Utc};
+use chrono::{DateTime, Datelike, Duration, MappedLocalTime, NaiveTime, TimeZone, Timelike, Utc};
+use chrono_tz::{America::New_York, Australia::Sydney, Tz};
 use delta_core::ids::make_instrument_id;
 use delta_core::models::Instrument;
 use serde_json::Value;
 
 use crate::plugin::DataPlugin;
-
-const US_EASTERN_OFFSET_SECONDS: i32 = -5 * 3600; // EST; see finding rust-plugins #7
 
 const MARKET_OPEN: (u32, u32) = (9, 30);
 const MARKET_CLOSE: (u32, u32) = (16, 0);
@@ -37,8 +36,13 @@ pub struct UsMarket {
 }
 
 impl UsMarket {
-    fn local(&self, ts: DateTime<Utc>) -> DateTime<chrono::FixedOffset> {
-        ts.with_timezone(&chrono::FixedOffset::east_opt(US_EASTERN_OFFSET_SECONDS).unwrap())
+    /// Sessions follow `America/New_York`, DST included (finding rust-plugins #6).
+    fn tz(&self) -> Tz {
+        New_York
+    }
+
+    fn local(&self, ts: DateTime<Utc>) -> DateTime<Tz> {
+        ts.with_timezone(&self.tz())
     }
 
     pub fn universe(&self) -> Vec<Instrument> {
@@ -70,37 +74,45 @@ impl UsMarket {
         open <= local.time() && local.time() <= close
     }
 
+    /// Port of `USMarket.next_open`: advance one wall-clock day, stamp the
+    /// local open on it (so a DST shift moves the UTC instant with the local
+    /// open), then skip weekends.
     pub fn next_open(&self, ts: DateTime<Utc>) -> DateTime<Utc> {
-        let mut candidate = self.local(ts);
+        let tz = self.tz();
+        let mut naive = ts.with_timezone(&tz).naive_local();
         for _ in 0..14 {
-            candidate = candidate
+            naive = (naive + Duration::days(1))
                 .with_hour(MARKET_OPEN.0)
                 .and_then(|c| c.with_minute(MARKET_OPEN.1))
-                .unwrap_or(candidate)
-                .with_second(0)
-                .unwrap_or(candidate)
-                .with_nanosecond(0)
-                .unwrap_or(candidate)
-                + Duration::days(1);
-            if candidate.weekday().number_from_monday() < 6 {
-                return candidate.with_timezone(&Utc);
+                .and_then(|c| c.with_second(0))
+                .and_then(|c| c.with_nanosecond(0))
+                .unwrap_or(naive + Duration::days(1));
+            // 09:30 local is never inside a 2–3 AM transition, so the local
+            // resolution is unambiguous in both zones.
+            if let MappedLocalTime::Single(candidate) = tz.from_local_datetime(&naive) {
+                if candidate.weekday().number_from_monday() < 6 {
+                    return candidate.with_timezone(&Utc);
+                }
             }
         }
         ts
     }
 }
 
-/// ASX market (`AsxMarket`); sessions are 10:00–16:00 AEST (UTC+10).
+/// ASX market (`AsxMarket`); sessions are 10:00–16:00 Sydney time, DST
+/// included (finding rust-plugins #6).
 #[derive(Default, Clone)]
 pub struct AsxMarket {
     pub tickers: Vec<String>,
 }
 
-const ASX_OFFSET_SECONDS: i32 = 10 * 3600;
-
 impl AsxMarket {
-    fn local(&self, ts: DateTime<Utc>) -> DateTime<chrono::FixedOffset> {
-        ts.with_timezone(&chrono::FixedOffset::east_opt(ASX_OFFSET_SECONDS).unwrap())
+    fn tz(&self) -> Tz {
+        Sydney
+    }
+
+    fn local(&self, ts: DateTime<Utc>) -> DateTime<Tz> {
+        ts.with_timezone(&self.tz())
     }
 
     pub fn universe(&self) -> Vec<Instrument> {
@@ -132,23 +144,39 @@ impl AsxMarket {
         open <= local.time() && local.time() <= close
     }
 
+    /// Port of `ASXMarket.next_open`: stamp today's wall-clock open first; if
+    /// that moment has already passed, advance a day, then skip weekends. Day
+    /// steps are wall-clock (`timedelta(days=1)`), so 10:00 local stays 10:00
+    /// across an offset change.
     pub fn next_open(&self, ts: DateTime<Utc>) -> DateTime<Utc> {
-        let mut candidate = self.local(ts);
-        for _ in 0..14 {
-            candidate = candidate
-                .with_hour(10)
-                .and_then(|c| c.with_minute(0))
-                .unwrap_or(candidate)
-                .with_second(0)
-                .unwrap_or(candidate)
-                .with_nanosecond(0)
-                .unwrap_or(candidate)
-                + Duration::days(1);
-            if candidate.weekday().number_from_monday() < 6 {
-                return candidate.with_timezone(&Utc);
+        let tz = self.tz();
+        let local_now = ts.with_timezone(&tz);
+        let mut naive = local_now
+            .naive_local()
+            .with_hour(10)
+            .and_then(|c| c.with_minute(0))
+            .and_then(|c| c.with_second(0))
+            .and_then(|c| c.with_nanosecond(0))
+            .unwrap_or_else(|| local_now.naive_local());
+        // 10:00 local never falls inside a 2–3 AM transition, so resolution
+        // is unambiguous and never None.
+        let mut candidate = match tz.from_local_datetime(&naive) {
+            MappedLocalTime::Single(dt) => dt,
+            _ => local_now,
+        };
+        if candidate <= local_now {
+            naive += Duration::days(1);
+            if let MappedLocalTime::Single(dt) = tz.from_local_datetime(&naive) {
+                candidate = dt;
             }
         }
-        ts
+        while candidate.weekday().number_from_monday() >= 6 {
+            naive += Duration::days(1);
+            if let MappedLocalTime::Single(dt) = tz.from_local_datetime(&naive) {
+                candidate = dt;
+            }
+        }
+        candidate.with_timezone(&Utc)
     }
 }
 
