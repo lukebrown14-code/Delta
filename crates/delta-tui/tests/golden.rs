@@ -12,6 +12,8 @@ use std::path::{Path, PathBuf};
 
 use delta_core::db::Db;
 use delta_tui::braille::BrailleGraph;
+use delta_tui::components::CommandPalette;
+use delta_tui::dialog::{GoPicker, HelpDialog};
 use delta_tui::screen::Screen;
 use delta_tui::screens::{
     draw_ask, draw_ask_narrow, draw_ask_wide, draw_decisions, draw_decisions_narrow,
@@ -21,6 +23,7 @@ use delta_tui::screens::{
     draw_watchlist_narrow, draw_watchlist_wide, grouped, HomeFeed, HomeState, MetricsData,
     WatchlistState,
 };
+use delta_tui::theme::Palette;
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -163,13 +166,33 @@ fn watchlist_range(state: &str) -> &'static str {
 /// Render one scenario at its manifest size through the matching painter.
 fn render(entry: &Entry, seed: &Seed) -> Screen {
     let (w, h) = entry.size;
-    let mut screen = Screen::new(w, h);
-    match entry.state.as_str() {
-        "home" => match h {
+    let state = entry.state.as_str();
+    // The home-light state paints Home in delta-light; everything else is
+    // dark.
+    let palette = if state == "home-light" {
+        Palette::Light
+    } else {
+        Palette::Dark
+    };
+    let mut screen = Screen::themed(palette, w, h);
+    match state {
+        "home" | "home-light" => match h {
             24 => draw_home_narrow(&mut screen, &seed.home_state()),
             40 => draw_home(&mut screen, &seed.home_state()),
             _ => draw_home_wide(&mut screen, &seed.home_state()),
         },
+        "palette-open" => {
+            paint_home(&mut screen, seed, h);
+            CommandPalette::new().draw_screen(&mut screen);
+        }
+        "help-open" => {
+            paint_home(&mut screen, seed, h);
+            HelpDialog::default().draw_screen(&mut screen);
+        }
+        "go-open" => {
+            paint_home(&mut screen, seed, h);
+            GoPicker::draw_screen(&mut screen);
+        }
         "default" | "range-cycled" | "narrow" => {
             let state = seed.watchlist_state(watchlist_range(&entry.state));
             match h {
@@ -207,6 +230,16 @@ fn render(entry: &Entry, seed: &Seed) -> Screen {
         other => panic!("no Rust renderer for scenario state {other:?}; add one to golden.rs"),
     }
     screen
+}
+
+/// Home under the shell modals: the landing screen the exporter captured
+/// them over.
+fn paint_home(screen: &mut Screen, seed: &Seed, h: usize) {
+    match h {
+        24 => draw_home_narrow(screen, &seed.home_state()),
+        40 => draw_home(screen, &seed.home_state()),
+        _ => draw_home_wide(screen, &seed.home_state()),
+    }
 }
 
 fn golden_path(entry: &Entry) -> PathBuf {
@@ -416,10 +449,12 @@ fn home_goldens() {
     let entries = manifest();
     let seed = Seed::open(&entries[0].seed);
     run_screen(&entries, &seed, "home");
+    run_screen(&entries, &seed, "home-light");
     assert_all_covered(
         &entries,
         &[
             "home",
+            "home-light",
             "default",
             "range-cycled",
             "narrow",
@@ -429,8 +464,21 @@ fn home_goldens() {
             "ask",
             "decisions",
             "settings",
+            "palette-open",
+            "help-open",
+            "go-open",
         ],
     );
+}
+
+/// The R3.1a shell states: palette, help and Go modals over Home.
+#[test]
+fn shell_goldens() {
+    let entries = manifest();
+    let seed = Seed::open(&entries[0].seed);
+    for state in ["palette-open", "help-open", "go-open"] {
+        run_screen(&entries, &seed, state);
+    }
 }
 
 #[test]
