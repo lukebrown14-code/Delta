@@ -40,7 +40,16 @@ def matrix(name: str, keys: tuple[str, ...], tier: str) -> tuple[Scenario, ...]:
     return tuple(Scenario(name, size, tier, keys) for size in SIZES)
 
 
-from . import ask, decisions, home, research, settings, theses, watchlist  # noqa: E402
+from . import (  # noqa: E402
+    ask,
+    decisions,
+    home,
+    research,
+    settings,
+    shell,
+    theses,
+    watchlist,
+)
 
 #: All scenarios in export order (the manifest and file order follow this).
 SCENARIOS: tuple[Scenario, ...] = (
@@ -51,4 +60,5 @@ SCENARIOS: tuple[Scenario, ...] = (
     + ask.SCENARIOS
     + decisions.SCENARIOS
     + settings.SCENARIOS
+    + shell.SCENARIOS
 )

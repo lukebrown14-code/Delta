@@ -1,6 +1,7 @@
 //! The app: desk data + active pane, painting through the golden `Screen`
 //! model so the live frame is cell-for-cell what the goldens capture. Owns
-//! the event loop, worker startup and the quotes switch (`DELTA_QUOTES=1`).
+//! the event loop, worker startup, the Python-matching bindings, the shell
+//! modals (Go, help, palette) and the theme switch.
 
 use std::io::Stdout;
 use std::time::{Duration, Instant};
@@ -8,11 +9,12 @@ use std::time::{Duration, Instant};
 use crossterm::event::{Event, EventStream, KeyCode, KeyEvent};
 use futures::StreamExt;
 use ratatui::backend::CrosstermBackend;
-use ratatui::style::{Color, Modifier, Style as RStyle};
 use ratatui::{Frame, Terminal};
 use tokio::sync::mpsc;
 
+use delta_tui::components::CommandPalette;
 use delta_tui::desk::Desk;
+use delta_tui::dialog::{GoPicker, HelpDialog};
 use delta_tui::screen::{color, Screen, Style};
 use delta_tui::screens::{
     draw_ask, draw_ask_narrow, draw_ask_wide, draw_decisions, draw_decisions_narrow,
@@ -21,7 +23,18 @@ use delta_tui::screens::{
     draw_settings_wide, draw_theses, draw_theses_narrow, draw_theses_wide, draw_watchlist,
     draw_watchlist_narrow, draw_watchlist_wide,
 };
-use delta_tui::{is_quit_key, workers, Action, Component};
+use delta_tui::theme::Palette;
+use delta_tui::{is_quit_key, workers, Action, Breakpoint, Component};
+
+/// The shell modals the app can float over a pane.
+enum Overlay {
+    /// `g`: the Go picker (`shell.py::GoPicker`).
+    Go,
+    /// `?`: the help modal (`screens/help.py::HelpScreen`).
+    Help(HelpDialog),
+    /// ctrl+k / ctrl+p: the command palette (`app.py::DeltaCommands`).
+    Palette(CommandPalette),
+}
 
 /// The seven panes: 1-6 plus `c`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -33,6 +46,21 @@ pub(crate) enum Tab {
     Ask,
     Decisions,
     Settings,
+}
+
+impl Tab {
+    fn from_screen_name(name: &str) -> Option<Tab> {
+        match name {
+            "home" => Some(Tab::Home),
+            "targets" => Some(Tab::Watchlist),
+            "data" => Some(Tab::Research),
+            "theses" => Some(Tab::Theses),
+            "chat" => Some(Tab::Ask),
+            "decisions" => Some(Tab::Decisions),
+            "config" => Some(Tab::Settings),
+            _ => None,
+        }
+    }
 }
 
 /// Frame-time counters, printed on exit (R4 instrumentation hook).
@@ -72,13 +100,19 @@ pub(crate) struct App {
     status: String,
     frame_stats: FrameStats,
     quit: bool,
+    /// The active theme (`f2` toggles; Python boots `delta-dark`).
+    palette: Palette,
+    /// The floating shell modal, if any.
+    overlay: Option<Overlay>,
 }
 
 impl App {
     fn paint(&mut self, screen: &mut Screen) {
         let w = screen.w;
-        let wide = w >= 160;
-        let narrow = w < delta_tui::NARROW_WIDTH as usize;
+        // The shell breakpoints (`shell.py::NARROW_WIDTH` plus the wide
+        // layout the goldens capture).
+        let wide = Breakpoint::from_width(w as u16) == Breakpoint::Wide;
+        let narrow = Breakpoint::from_width(w as u16) == Breakpoint::Narrow;
         macro_rules! route {
             ($wide:expr, $normal:expr, $narrow:expr) => {
                 if wide {
@@ -130,6 +164,12 @@ impl App {
         if self.glossary && self.tab == Tab::Watchlist {
             draw_glossary_overlay(screen, &self.desk.watch_state());
         }
+        match &mut self.overlay {
+            Some(Overlay::Go) => GoPicker::draw_screen(screen),
+            Some(Overlay::Help(help)) => help.draw_screen(screen),
+            Some(Overlay::Palette(palette)) => palette.draw_screen(screen),
+            None => {}
+        }
         self.paint_status_overlay(screen);
     }
 
@@ -156,13 +196,20 @@ impl App {
     }
 }
 
-impl Component for App {
-    fn handle_key(&mut self, key: KeyEvent) -> Option<Action> {
+impl App {
+    /// The shell keys, in `DeltaApp.BINDINGS` order (plus the esc close and
+    /// the palette keys Textual/the plan install). Per-screen keys (the
+    /// watchlist's `r`/`R` range, `enter` inspect, ...) belong to their
+    /// screens in R3.2.
+    fn handle_shell_key(&mut self, key: KeyEvent) -> Option<Action> {
         if is_quit_key(key) {
             return Some(Action::Quit);
         }
         match key.code {
-            KeyCode::Esc => self.glossary = false,
+            KeyCode::Esc => {
+                self.glossary = false;
+                return Some(Action::Noop);
+            }
             KeyCode::Char('1') => self.tab = Tab::Home,
             KeyCode::Char('2') => self.tab = Tab::Watchlist,
             KeyCode::Char('3') => self.tab = Tab::Research,
@@ -170,21 +217,72 @@ impl Component for App {
             KeyCode::Char('5') => self.tab = Tab::Ask,
             KeyCode::Char('6') => self.tab = Tab::Decisions,
             KeyCode::Char('c') => self.tab = Tab::Settings,
-            KeyCode::Char('g') if self.tab == Tab::Watchlist => self.glossary = !self.glossary,
-            KeyCode::Char('h') | KeyCode::Left if self.tab == Tab::Watchlist => {
-                self.desk.cycle_range(-1);
+            KeyCode::Char('h') => self.tab = Tab::Home,
+            KeyCode::Char('m') => return Some(Action::ShowModelPicker),
+            // Textual's palette key (`COMMAND_PALETTE_BINDING`) and the
+            // plan's ctrl+k alias open the same palette.
+            KeyCode::Char('p')
+                if key
+                    .modifiers
+                    .contains(crossterm::event::KeyModifiers::CONTROL) =>
+            {
+                self.overlay = Some(Overlay::Palette(CommandPalette::new()));
+                return Some(Action::Noop);
             }
-            KeyCode::Char('l') | KeyCode::Right if self.tab == Tab::Watchlist => {
-                self.desk.cycle_range(1);
+            KeyCode::Char('p') => return Some(Action::ShowProviderPicker),
+            KeyCode::Char('g') => {
+                self.overlay = Some(Overlay::Go);
+                return Some(Action::Noop);
             }
-            KeyCode::Char(',') if !self.desk.instruments.is_empty() => {
-                self.desk.cycle_instrument(-1);
+            KeyCode::Char('?') => {
+                self.overlay = match self.overlay.take() {
+                    // `?` on the help toggles it off (action_show_help pops).
+                    Some(Overlay::Help(_)) => None,
+                    _ => Some(Overlay::Help(HelpDialog::default())),
+                };
+                return Some(Action::Noop);
             }
-            KeyCode::Char('.') if !self.desk.instruments.is_empty() => {
-                self.desk.cycle_instrument(1);
+            KeyCode::Char('i') if self.tab == Tab::Watchlist => {
+                // The watchlist's glossary (`i` metric_help) until its
+                // screen owns its keys in R3.2.
+                self.glossary = !self.glossary;
+                return Some(Action::Noop);
             }
             KeyCode::Char('U') => return Some(Action::Gather),
+            KeyCode::F(2) => return Some(Action::ToggleTheme),
+            KeyCode::Char('k')
+                if key
+                    .modifiers
+                    .contains(crossterm::event::KeyModifiers::CONTROL) =>
+            {
+                self.overlay = Some(Overlay::Palette(CommandPalette::new()));
+                return Some(Action::Noop);
+            }
             _ => {}
+        }
+        None
+    }
+}
+
+impl Component for App {
+    fn handle_key(&mut self, key: KeyEvent) -> Option<Action> {
+        // Modals take the key first (a Textual modal stops propagation).
+        if let Some(overlay) = &mut self.overlay {
+            let action = match overlay {
+                Overlay::Go => delta_tui::dialog::go_picker_key(key),
+                Overlay::Help(help) => help.handle_key(key),
+                Overlay::Palette(palette) => palette.handle_key(key),
+            };
+            let action = action.unwrap_or(Action::Noop);
+            match action {
+                Action::CloseDialog => self.overlay = None,
+                Action::Quit => return Some(Action::Quit),
+                other => self.update(other),
+            }
+            return None;
+        }
+        if let Some(action) = self.handle_shell_key(key) {
+            return Some(action);
         }
         None
     }
@@ -216,6 +314,34 @@ impl Component for App {
             }
             Action::Status(msg) => self.status = msg,
             Action::HomeRefresh(feed) => self.desk.feed = feed,
+            Action::ToggleTheme => {
+                // `action_toggle_theme`: swap the palette and notify.
+                self.palette = match self.palette {
+                    Palette::Dark => Palette::Light,
+                    Palette::Light => Palette::Dark,
+                };
+                self.status = format!("Theme: {}", self.palette.name());
+            }
+            Action::GotoScreen(name) => {
+                if let Some(tab) = Tab::from_screen_name(&name) {
+                    self.tab = tab;
+                    self.overlay = None;
+                    self.glossary = false;
+                }
+            }
+            Action::ShowHelp => self.overlay = Some(Overlay::Help(HelpDialog::default())),
+            Action::ShowModelPicker => {
+                // The picker screen lands with R3.2 (settings stream); the
+                // binding is live now so the keymap cannot drift.
+                self.status = "model picker: lands with R3.2 settings".to_string();
+            }
+            Action::ShowProviderPicker => {
+                self.status = "provider picker: lands with R3.2 settings".to_string();
+            }
+            Action::FormSubmitted(title) => {
+                self.overlay = None;
+                self.status = format!("{title} saved");
+            }
             Action::Noop
             | Action::OpenDialog(_)
             | Action::CloseDialog
@@ -228,41 +354,10 @@ impl Component for App {
         if area.width < 4 || area.height < 4 {
             return; // degenerate terminal; the painters assume a status bar
         }
-        let mut screen = Screen::new(area.width as usize, area.height as usize);
+        let mut screen = Screen::themed(self.palette, area.width as usize, area.height as usize);
         self.paint(&mut screen);
-        blit(frame, &screen, area);
+        delta_tui::screen::blit(frame, &screen, area);
     }
-}
-
-/// Blit the golden `Screen` cell grid into the ratatui buffer.
-fn blit(frame: &mut Frame, screen: &Screen, area: ratatui::layout::Rect) {
-    for y in 0..screen.h.min(area.height as usize) {
-        for x in 0..screen.w.min(area.width as usize) {
-            let cell = &screen.cells[y * screen.w + x];
-            let mut style = RStyle::default();
-            if let Some(fg) = cell.fg {
-                style = style.fg(hex_color(fg));
-            }
-            if let Some(bg) = cell.bg {
-                style = style.bg(hex_color(bg));
-            }
-            if cell.bold {
-                style = style.add_modifier(Modifier::BOLD);
-            }
-            frame
-                .buffer_mut()
-                .cell_mut((x as u16, y as u16))
-                .expect("cell in bounds")
-                .set_char(cell.ch)
-                .set_style(style);
-        }
-    }
-}
-
-/// `#rrggbb` (the exporter's resolved tokens) to a ratatui RGB colour.
-fn hex_color(hex: &str) -> Color {
-    let byte = |i: usize| u8::from_str_radix(&hex[i..i + 2], 16).unwrap_or(0);
-    Color::Rgb(byte(1), byte(3), byte(5))
 }
 
 pub(crate) async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> std::io::Result<()> {
@@ -288,6 +383,8 @@ pub(crate) async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> st
         status: String::new(),
         frame_stats: FrameStats::default(),
         quit: false,
+        palette: Palette::Dark,
+        overlay: None,
     };
 
     let mut events = EventStream::new();
@@ -373,13 +470,23 @@ mod tests {
             status: String::new(),
             frame_stats: FrameStats::default(),
             quit: false,
+            palette: Palette::Dark,
+            overlay: None,
         }
     }
 
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    fn ctrl(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::CONTROL)
+    }
+
     #[test]
-    fn tab_keys_navigate_all_seven_panes() {
+    fn bindings_match_python_delta_app() {
         let mut a = app();
-        for (key, tab) in [
+        for (key_code, tab) in [
             (KeyCode::Char('1'), Tab::Home),
             (KeyCode::Char('2'), Tab::Watchlist),
             (KeyCode::Char('3'), Tab::Research),
@@ -387,56 +494,115 @@ mod tests {
             (KeyCode::Char('5'), Tab::Ask),
             (KeyCode::Char('6'), Tab::Decisions),
         ] {
-            a.handle_key(KeyEvent::new(key, KeyModifiers::NONE));
+            a.handle_key(key(key_code));
             assert_eq!(a.tab, tab);
         }
-        a.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE));
+        a.handle_key(key(KeyCode::Char('c')));
         assert_eq!(a.tab, Tab::Settings);
+        // `h` jumps Home from anywhere (Python binds it app-wide).
+        a.handle_key(key(KeyCode::Char('3')));
+        a.handle_key(key(KeyCode::Char('h')));
+        assert_eq!(a.tab, Tab::Home);
     }
 
     #[test]
-    fn glossary_toggles_on_watchlist_and_esc_closes() {
+    fn g_opens_go_picker_and_esc_closes() {
         let mut a = app();
-        a.handle_key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE));
+        a.handle_key(key(KeyCode::Char('g')));
+        assert!(matches!(a.overlay, Some(Overlay::Go)));
+        a.handle_key(key(KeyCode::Esc));
+        assert!(a.overlay.is_none());
+        // `4` on the Go picker jumps to Theses and closes it.
+        a.handle_key(key(KeyCode::Char('g')));
+        a.handle_key(key(KeyCode::Char('4')));
+        assert_eq!(a.tab, Tab::Theses);
+        assert!(a.overlay.is_none());
+    }
+
+    #[test]
+    fn question_mark_toggles_the_help_modal() {
+        let mut a = app();
+        a.handle_key(key(KeyCode::Char('?')));
+        assert!(matches!(a.overlay, Some(Overlay::Help(_))));
+        a.handle_key(key(KeyCode::Char('?')));
+        assert!(a.overlay.is_none(), "? on help pops it (action_show_help)");
+        a.handle_key(key(KeyCode::Char('?')));
+        a.handle_key(key(KeyCode::Esc));
+        assert!(a.overlay.is_none());
+    }
+
+    #[test]
+    fn palette_opens_on_ctrl_k_and_ctrl_p() {
+        let mut a = app();
+        a.handle_key(ctrl(KeyCode::Char('k')));
+        assert!(matches!(a.overlay, Some(Overlay::Palette(_))));
+        a.handle_key(key(KeyCode::Esc));
+        a.handle_key(ctrl(KeyCode::Char('p')));
+        assert!(matches!(a.overlay, Some(Overlay::Palette(_))));
+        // Typing filters, esc closes.
+        a.handle_key(key(KeyCode::Char('g')));
+        a.handle_key(key(KeyCode::Esc));
+        assert!(a.overlay.is_none());
+    }
+
+    #[test]
+    fn model_and_provider_pickers_are_bound() {
+        let mut a = app();
+        assert_eq!(
+            a.handle_key(key(KeyCode::Char('m'))),
+            Some(Action::ShowModelPicker)
+        );
+        a.update(Action::ShowModelPicker);
+        assert!(!a.status.is_empty());
+        assert_eq!(
+            a.handle_key(key(KeyCode::Char('p'))),
+            Some(Action::ShowProviderPicker)
+        );
+        a.update(Action::ShowProviderPicker);
+        assert!(!a.status.is_empty());
+    }
+
+    #[test]
+    fn f2_toggles_the_theme_and_the_screen_remaps() {
+        let mut a = app();
+        a.tab = Tab::Home;
+        assert_eq!(a.handle_key(key(KeyCode::F(2))), Some(Action::ToggleTheme));
+        a.update(Action::ToggleTheme);
+        assert_eq!(a.palette, Palette::Light);
+        assert_eq!(a.status, "Theme: delta-light");
+        let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        terminal.draw(|f| a.draw(f, f.area())).unwrap();
+        // The light background shows on the terminal buffer's corner cell.
+        let bg = terminal.backend().buffer()[(0, 0)].bg;
+        assert_eq!(bg, ratatui::style::Color::Rgb(0xf4, 0xf4, 0xef));
+        a.update(Action::ToggleTheme);
+        assert_eq!(a.palette, Palette::Dark);
+    }
+
+    #[test]
+    fn glossary_toggles_on_watchlist_with_i_and_esc_closes() {
+        let mut a = app();
+        a.handle_key(key(KeyCode::Char('i')));
         assert!(a.glossary);
-        a.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        a.handle_key(key(KeyCode::Esc));
         assert!(!a.glossary);
-        // `g` on another pane does not open it.
-        a.handle_key(KeyEvent::new(KeyCode::Char('3'), KeyModifiers::NONE));
-        a.handle_key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE));
+        // `i` on another pane does not open it.
+        a.handle_key(key(KeyCode::Char('3')));
+        a.handle_key(key(KeyCode::Char('i')));
         assert!(!a.glossary);
-    }
-
-    #[test]
-    fn range_cycling_walks_the_ranges() {
-        let mut a = app();
-        assert_eq!(a.desk.range(), "1m");
-        a.handle_key(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE));
-        assert_eq!(a.desk.range(), "6m");
-        a.handle_key(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE));
-        assert_eq!(a.desk.range(), "1m");
     }
 
     #[test]
     fn quit_keys_produce_quit_action() {
         let mut a = app();
-        assert_eq!(
-            a.handle_key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE)),
-            Some(Action::Quit)
-        );
-        assert_eq!(
-            a.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
-            Some(Action::Quit)
-        );
+        assert_eq!(a.handle_key(key(KeyCode::Char('q'))), Some(Action::Quit));
+        assert_eq!(a.handle_key(ctrl(KeyCode::Char('c'))), Some(Action::Quit));
     }
 
     #[test]
     fn gather_is_requested_and_statuses_update() {
         let mut a = app();
-        assert_eq!(
-            a.handle_key(KeyEvent::new(KeyCode::Char('U'), KeyModifiers::NONE)),
-            Some(Action::Gather)
-        );
+        assert_eq!(a.handle_key(key(KeyCode::Char('U'))), Some(Action::Gather));
         let mut counts = BTreeMap::new();
         counts.insert("bar".to_string(), 5);
         a.update(Action::Ingested(counts));
@@ -485,6 +651,21 @@ mod tests {
                 let mut terminal = Terminal::new(backend).unwrap();
                 terminal.draw(|frame| a.draw(frame, frame.area())).unwrap();
             }
+        }
+    }
+
+    #[test]
+    fn every_shell_modal_paints_at_all_sizes() {
+        for &(w, h) in &[(80u16, 24u16), (120, 40), (200, 50)] {
+            let mut a = app();
+            a.tab = Tab::Home;
+            a.overlay = Some(Overlay::Go);
+            let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
+            terminal.draw(|f| a.draw(f, f.area())).unwrap();
+            a.overlay = Some(Overlay::Help(HelpDialog::default()));
+            terminal.draw(|f| a.draw(f, f.area())).unwrap();
+            a.overlay = Some(Overlay::Palette(CommandPalette::new()));
+            terminal.draw(|f| a.draw(f, f.area())).unwrap();
         }
     }
 

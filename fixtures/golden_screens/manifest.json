@@ -195,6 +195,90 @@
       "size": "200x50",
       "state": "settings",
       "tier": "A"
+    },
+    {
+      "file": "palette-open-80x24.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "80x24",
+      "state": "palette-open",
+      "tier": "A"
+    },
+    {
+      "file": "palette-open-120x40.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "120x40",
+      "state": "palette-open",
+      "tier": "A"
+    },
+    {
+      "file": "palette-open-200x50.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "200x50",
+      "state": "palette-open",
+      "tier": "A"
+    },
+    {
+      "file": "help-open-80x24.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "80x24",
+      "state": "help-open",
+      "tier": "A"
+    },
+    {
+      "file": "help-open-120x40.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "120x40",
+      "state": "help-open",
+      "tier": "A"
+    },
+    {
+      "file": "help-open-200x50.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "200x50",
+      "state": "help-open",
+      "tier": "A"
+    },
+    {
+      "file": "go-open-80x24.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "80x24",
+      "state": "go-open",
+      "tier": "A"
+    },
+    {
+      "file": "go-open-120x40.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "120x40",
+      "state": "go-open",
+      "tier": "A"
+    },
+    {
+      "file": "go-open-200x50.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "200x50",
+      "state": "go-open",
+      "tier": "A"
+    },
+    {
+      "file": "home-light-80x24.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "80x24",
+      "state": "home-light",
+      "tier": "A"
+    },
+    {
+      "file": "home-light-120x40.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "120x40",
+      "state": "home-light",
+      "tier": "A"
+    },
+    {
+      "file": "home-light-200x50.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "200x50",
+      "state": "home-light",
+      "tier": "A"
     }
   ],
   "seed": "fixtures/golden_seed.db"
