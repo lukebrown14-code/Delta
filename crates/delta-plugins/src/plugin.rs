@@ -119,6 +119,54 @@ pub fn parse_scope(raw: Option<&Value>, market: Option<&str>) -> Scope {
 /// One gathered row (bars / news / fundamentals / events).
 pub type Rows = Vec<StoreItem>;
 
+/// One setting an adapter safely exposes to the source-setup UI
+/// (`DataProviderField`).
+#[derive(Debug, Clone, Copy)]
+pub struct DataProviderField {
+    pub name: &'static str,
+    pub label: &'static str,
+    pub required: bool,
+    /// Secrets go to `.env`, never to `config.toml`.
+    pub secret: bool,
+    /// Fixed environment-variable name a secret must declare.
+    pub env_var: &'static str,
+    pub placeholder: &'static str,
+}
+
+/// An adapter-owned setup contract, not a generic HTTP connector
+/// (`DataProviderSpec`).
+#[derive(Debug, Clone, Copy)]
+pub struct DataProviderSpec {
+    pub label: &'static str,
+    pub fields: &'static [DataProviderField],
+    pub primary_disclosure: bool,
+    pub notice: &'static str,
+}
+
+/// `SECEdgar.provider_spec` — the only plugin with a setup contract today.
+pub static SEC_EDGAR_PROVIDER_SPEC: DataProviderSpec = DataProviderSpec {
+    label: "SEC EDGAR",
+    fields: &[DataProviderField {
+        name: "contact",
+        label: "Contact email",
+        required: true,
+        secret: false,
+        env_var: "",
+        placeholder: "you@example.com",
+    }],
+    primary_disclosure: true,
+    notice: "SEC requires a real contact address in the User-Agent.",
+};
+
+/// The setup contract each named plugin declares (`plugin.provider_spec`).
+///
+/// The per-plugin trait impls live with their plugins; the table sits here so
+/// the settings surface can look a spec up by plugin name without touching
+/// every plugin module.
+pub fn provider_specs() -> std::collections::BTreeMap<String, &'static DataProviderSpec> {
+    std::collections::BTreeMap::from([("sec_edgar".to_string(), &SEC_EDGAR_PROVIDER_SPEC)])
+}
+
 /// A data source plugin (port of `DataPlugin`).
 #[async_trait::async_trait]
 pub trait DataPlugin: Send + Sync {
@@ -136,6 +184,10 @@ pub trait DataPlugin: Send + Sync {
     }
     fn universe(&self, universe: &[Instrument]) -> Vec<Instrument> {
         self.scope().filter(universe)
+    }
+    /// The plugin's setup contract, when it exposes one (`provider_spec`).
+    fn provider_spec(&self) -> Option<&'static DataProviderSpec> {
+        None
     }
     async fn fetch(
         &self,
@@ -162,6 +214,7 @@ pub fn default_plugins() -> Vec<Box<dyn DataPlugin>> {
         Box::new(crate::asx::AsxAnnouncements::default()),
         Box::new(crate::sec::SecEdgar::default()),
         Box::new(crate::yahoo::YfinanceBars::default()),
+        Box::new(crate::calendar::YfinanceCalendar::default()),
     ]
 }
 
