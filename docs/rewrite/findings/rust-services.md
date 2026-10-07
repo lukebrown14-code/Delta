@@ -76,3 +76,13 @@ the Python SQLModel models (verified green).
 | 11 | simplify | `setup.rs::configure_data_provider` | Python's trailing `delta.reload_data_sources()` hook has no Rust counterpart (no live registry yet); callers rebuild plugins. Note for the settings stream |
 | 12 | simplify | `delta-plugins/plugin.rs` | `DataProviderSpec` statics sit in `plugin.rs` behind `provider_specs()` instead of per-plugin trait impls, so the parallel streams never touched files they don't own (`sec.rs` etc.). A later stream can move the spec into `impl DataPlugin for SecEdgar` without a behaviour change |
 | 13 | parity | `evidence.rs` | Case-insensitive matching uses `to_lowercase()` where Python uses `str.casefold()`. Identical for ASCII (all stored data today); only a non-ASCII German-sharp-s / dotless-i edge could diverge. Flagged, not changed |
+## Fixed
+
+- **#5 (sentiment range) — fixed in 74444e1** (R3.1c, decision D8):
+  `EventDraft.sentiment` deserializes through a [-1, 1] range check
+  (pydantic's `Field(ge=-1, le=1)`), so one out-of-range sentiment fails the
+  whole `EventBatch` and the extract loop skips it — nothing stored, as in
+  Python. The failed response also fails the structured cache validator, so
+  a poisoned answer is recalled live. Tests in
+  `crates/delta-services/tests/extract_sentiment.rs` cover the skip and the
+  inclusive boundaries.

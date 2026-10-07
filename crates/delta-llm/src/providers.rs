@@ -4,9 +4,13 @@
 //! Finding (rust-llm): Python delegates the HTTP call to the `openai` SDK; the
 //! Rust port speaks the chat-completions protocol directly with `reqwest`
 //! (no official Rust SDK exists — an accepted rewrite trade-off). The wire
-//! protocol, headers, retry and auto-fit behaviour match the Python paths.
+//! protocol, headers, retry and auto-fit behaviour match the Python paths —
+//! including the SDK's `max_retries` retry policy, ported as [`RETRY_MAX_ATTEMPTS`]
+//! attempts on 429/5xx/timeouts with exponential backoff, jitter and
+//! `Retry-After` support (decision D7).
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use serde::Deserialize;
@@ -26,6 +30,63 @@ pub const MAX_TOKENS_FLOOR: i64 = 512;
 const BALANCE_MARGIN: f64 = 0.95;
 
 const PRICING_TTL_SECONDS: f64 = 86400.0;
+
+/// Total attempts per chat-completion call (the `openai` SDK's
+/// `max_retries=5` port; D7). 429s, 5xx and transport timeouts are retried;
+/// other statuses fail on the first attempt.
+pub const RETRY_MAX_ATTEMPTS: u32 = 5;
+
+/// Exponential backoff: `RETRY_BASE_DELAY * 2^(attempt-1)`, capped.
+pub const RETRY_BASE_DELAY: Duration = Duration::from_millis(500);
+pub const RETRY_MAX_DELAY: Duration = Duration::from_secs(8);
+/// Uniform jitter added on top of each computed backoff.
+pub const RETRY_JITTER: Duration = Duration::from_millis(250);
+
+/// The pause between attempt `attempt` (1-based) and the next one.
+///
+/// `retry_after` (the parsed `Retry-After` header, seconds) takes precedence
+/// over the computed exponential backoff; jitter is added only to backoff.
+pub fn retry_delay(attempt: u32, retry_after: Option<f64>) -> Duration {
+    if let Some(seconds) = retry_after.filter(|s| *s >= 0.0 && s.is_finite()) {
+        return Duration::from_secs_f64(seconds);
+    }
+    let factor = 2u32.saturating_pow(attempt.saturating_sub(1));
+    let backoff = RETRY_BASE_DELAY.saturating_mul(factor).min(RETRY_MAX_DELAY);
+    backoff + Duration::from_millis(jitter_ms())
+}
+
+/// Bounded jitter without a `rand` dependency: hash the clock's nanoseconds.
+fn jitter_ms() -> u64 {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| u64::from(d.subsec_nanos()))
+        .unwrap_or(0);
+    let mixed = nanos.wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 33;
+    mixed % (RETRY_JITTER.as_millis() as u64 + 1)
+}
+
+/// The sleep between retry attempts: a seam so tests observe backoff instead
+/// of waiting for it (D7). Production uses [`TokioSleep`].
+#[async_trait::async_trait]
+pub trait RetrySleep: Send + Sync {
+    async fn sleep(&self, delay: Duration);
+}
+
+/// Production sleeper: park the task on the tokio timer.
+pub struct TokioSleep;
+
+#[async_trait::async_trait]
+impl RetrySleep for TokioSleep {
+    async fn sleep(&self, delay: Duration) {
+        tokio::time::sleep(delay).await;
+    }
+}
+
+/// Whether `status` is worth another attempt (D7 mirrors the SDK: throttling
+/// and server-side faults are transient, client errors are not).
+fn retryable_status(status: u16) -> bool {
+    status == 429 || status >= 500
+}
 
 #[derive(Debug, Clone)]
 pub struct ProviderResult {
@@ -183,6 +244,8 @@ pub struct OpenAiCompatProvider {
     /// Additional request headers (OpenRouter app attribution).
     pub extra: BTreeMap<String, String>,
     client: reqwest::Client,
+    /// Retry-backoff seam; tests record pauses instead of sleeping (D7).
+    pub sleep: Arc<dyn RetrySleep>,
 }
 
 impl OpenAiCompatProvider {
@@ -206,6 +269,7 @@ impl OpenAiCompatProvider {
             max_tokens,
             extra: BTreeMap::new(),
             client: reqwest::Client::new(),
+            sleep: Arc::new(TokioSleep),
         })
     }
 
@@ -228,31 +292,55 @@ impl OpenAiCompatProvider {
         body
     }
 
+    /// POST the chat-completion body, retrying 429/5xx/timeout failures
+    /// (D7): at most [`RETRY_MAX_ATTEMPTS`] attempts, exponential backoff
+    /// with jitter, and a server `Retry-After` honoured verbatim. Other
+    /// statuses — 402 credit-budget rejections among them — fail on the
+    /// first attempt so OpenRouter's refit path stays unchanged.
     async fn post_chat(&self, body: &Value) -> Result<Value, ProviderError> {
         if self.base_url.is_empty() {
             return Err(ProviderError::MissingBaseUrl(self.spec.name));
         }
-        let mut builder = self
-            .client
-            .post(format!(
-                "{}/chat/completions",
-                self.base_url.trim_end_matches('/')
-            ))
-            .timeout(self.timeout)
-            .json(body);
-        for (k, v) in auth_headers(self.spec, &self.api_key).chain(self.extra_headers()) {
-            builder = builder.header(k, v);
+        let mut attempt = 0;
+        loop {
+            attempt += 1;
+            let mut builder = self
+                .client
+                .post(format!(
+                    "{}/chat/completions",
+                    self.base_url.trim_end_matches('/')
+                ))
+                .timeout(self.timeout)
+                .json(body);
+            for (k, v) in auth_headers(self.spec, &self.api_key).chain(self.extra_headers()) {
+                builder = builder.header(k, v);
+            }
+            match builder.send().await {
+                Ok(resp) => {
+                    let status = resp.status();
+                    if status.is_success() {
+                        return Ok(resp.json().await?);
+                    }
+                    let retry_after = retry_after_seconds(resp.headers());
+                    let err = ProviderError::Status {
+                        status: status.as_u16(),
+                        body: error_body(resp).await,
+                    };
+                    if attempt >= RETRY_MAX_ATTEMPTS || !retryable_status(status.as_u16()) {
+                        return Err(err);
+                    }
+                    self.sleep.sleep(retry_delay(attempt, retry_after)).await;
+                }
+                Err(err) => {
+                    let retryable = err.is_timeout() || err.is_connect();
+                    let err = ProviderError::Http(err);
+                    if attempt >= RETRY_MAX_ATTEMPTS || !retryable {
+                        return Err(err);
+                    }
+                    self.sleep.sleep(retry_delay(attempt, None)).await;
+                }
+            }
         }
-        let resp = builder.send().await?;
-        let status = resp.status();
-        let value: Value = resp.json().await?;
-        if !status.is_success() {
-            return Err(ProviderError::Status {
-                status: status.as_u16(),
-                body: value.to_string(),
-            });
-        }
-        Ok(value)
     }
 
     /// Normalise a chat-completion response into text/tokens/cost.
@@ -646,6 +734,28 @@ pub async fn verify_key(spec: &ProviderSpec, api_key: &str, base_url: &str) -> b
 fn elapsed_secs(at: Instant) -> f64 {
     at.elapsed().as_secs_f64()
 }
+
+/// `Retry-After` as seconds, when the server sends a parseable delay
+/// (D7); HTTP-date forms fall back to exponential backoff.
+fn retry_after_seconds(headers: &reqwest::header::HeaderMap) -> Option<f64> {
+    headers
+        .get(reqwest::header::RETRY_AFTER)?
+        .to_str()
+        .ok()?
+        .trim()
+        .parse::<f64>()
+        .ok()
+}
+
+/// The error response body: stringified JSON when parseable, raw text
+/// otherwise (same `Status { body }` shape as before the retry loop).
+async fn error_body(resp: reqwest::Response) -> String {
+    let text = resp.text().await.unwrap_or_default();
+    serde_json::from_str::<Value>(&text)
+        .map(|v| v.to_string())
+        .unwrap_or(text)
+}
+
 fn parse_context_length(value: Option<&Value>) -> Option<i64> {
     match value {
         Some(Value::Number(n)) => n.as_i64(),
