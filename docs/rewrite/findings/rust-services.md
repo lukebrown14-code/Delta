@@ -86,3 +86,15 @@ the Python SQLModel models (verified green).
   a poisoned answer is recalled live. Tests in
   `crates/delta-services/tests/extract_sentiment.rs` cover the skip and the
   inclusive boundaries.
+
+## R3.1b review findings (7 Oct, reviewer agent — triage pending)
+
+| # | Category | Location | Evidence | Proposed fix |
+|---|---|---|---|---|
+| R1 | parity | crates/delta-services/src/setup.rs:42-55 | `provider_key` trims API-key values before the emptiness check; Python `_provider_key` (services.py:766-770) does not — whitespace-only key counts as configured in Python, missing in Rust | Match Python: don't trim before the emptiness check |
+| R2 | parity | crates/delta-services/src/setup.rs:180-185 | `data_provider_status` `configured` treats 0/""/[]/{} as truthy (only Null/false falsy); Python `bool(table.get(...))` is falsy for those | Mirror Python truthiness |
+| R3 | parity | crates/delta-services/src/setup.rs:234-266 | `configure_data_provider` error precedence: Python raises "unknown markets" before "{label} is required"; Rust reverses. Multiple empty required fields report alphabetical (Rust) vs insertion (Python) order | Match Python order |
+| R4 | docs | crates/delta-services/src/theses.rs:201 | Comment claims Python's `startswith` is literal; Python `.startswith()` on a LIKE-built query treats %/_ as wildcards. Unreachable with sha256-hex ids | Fix the comment |
+| R5 | note | crates/delta-plugins/src/calendar.rs | Calendar fetch error log drops the instrument id Python logs | Add the id to the log line |
+| R6 | note | tests/shared_parity.rs | Parity harness never compares the dumped `raw` field ("field for field" overstated); verified equivalent by code read | Add `raw` to the comparison |
+| R7 | note | crates/delta-services/src/decisions.rs | No now-path `created_at` round-trip regression test (theses has one); the µs fix itself is verified correct | Add a test mirroring theses |

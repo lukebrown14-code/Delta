@@ -52,3 +52,12 @@ Stream: `delta-llm`. Reviewed against `delta/llm/*.py`.
 | 2 | simplify | delta/llm/client.py `complete` | 9 positional args invite transposition; Rust port uses a `CompleteParams` struct | No action in Python needed |
 | 3 | perf | delta/llm/providers.py `_estimate_prompt_cost` | chars/4 heuristic counts Rust `char` lengths vs Python `len()` — differs only for astral-plane chars (emoji); negligible for cost estimation | None |
 | 4 | parity | delta/llm/providers.py 402 retry | Retry only fires when the refitted cap is strictly lower than the previous cap; Rust matches | None |
+
+## R3.1c review findings (7 Oct, reviewer agent — triage pending)
+
+| # | Category | Location | Evidence | Proposed fix |
+|---|---|---|---|---|
+| 5 | bug | crates/delta-llm/src/providers.rs:540 `retry_delay` | `Duration::from_secs_f64` on a server-supplied `Retry-After`; a hostile/broken header like `1e300` passes the finite/>=0 filter and panics the task | Clamp/saturate, e.g. `try_from_secs_f64().unwrap_or(RETRY_MAX_DELAY)` |
+| 6 | parity | crates/delta-llm/src/providers.rs `EventDraft.sentiment` | `#[serde(default)]` makes an omitted sentiment store 0.0 in Rust; Python's `Field(ge=-1, le=1)` is required and rejects the whole batch (delta/extract.py:34) | Make the field required for full pydantic parity |
+| 7 | docs | crates/delta-llm/src/fake.rs | FakeLlm serialises `text` compact (`serde_json::to_string`) vs Python `json.dumps` space-y separators — semantically identical JSON; the "exactly as Python serialises" doc claim is overstated | Soften the doc comment |
+| 8 | note | crates/delta-llm/src/providers.rs | D7 also retries connect errors (`is_connect`) — a harmless superset of the card's 429/5xx/timeouts; no duplicate reaches the server | None (document) |

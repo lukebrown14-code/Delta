@@ -42,3 +42,13 @@ Stream: `delta-tui` widgets. Reviewed against `delta/tui/axes.py`, `widgets.py`,
 | 14 | gap | `app.rs` m/p | `m` (model picker) and `p` (provider picker) are bound and raise `Action::ShowModelPicker`/`ShowProviderPicker` (the app shows a status line); the picker screens themselves land with R3.2 settings per `REMAINING.md` |
 | 15 | gap (Tier B) | `markdown.rs` | DeltaMarkdown ports headings (h1 centred bold / h2 underline / h3+ bold, all `$text-primary`), paragraphs with strong/em/softbreak, inline code tint, hr, bullet+ordered lists, fences. **Not** ported: tables (the help tutorial's table is below the fold at all three golden sizes — port before the ask/research streams render tables), blockquote chrome (text flows unstyled), strikethrough (cell model has no strike attr; text renders plain), link styling (Textual 8 gives links only a click action). All Tier B wrap/structure territory |
 | 16 | perf | `screen.rs::dim` | The R3.0 dim lookup was replaced by the equivalent per-channel formula `int(v*0.4)` over a `match` of the two palettes' token hexes (verified against the exporter values) — no allocation, same output, and it now covers the light palette too |
+
+## R3.1a review findings (7 Oct, reviewer agent — triage pending)
+
+| # | Category | Location | Evidence | Proposed fix |
+|---|---|---|---|---|
+| 17 | simplify | components.rs:687-690,771-774; markdown.rs:233-265; screen.rs:14-36 | Dark-token hex literals duplicated outside theme.rs (StatusDot/Pill/Markdown/exporter internals). Golden-pinned, but the markdown code colors are NOT in LIGHT_REMAP — DeltaMarkdown would paint dark code colors on light theme (Tier B; no light golden covers it) | Centralize resolved internals in theme.rs before R3.2 screens consume them; add markdown code colors to LIGHT_REMAP |
+| 18 | process | docs/rewrite/tasks/r3-tui-foundations.md | Stream modified `crates/delta-tui/tests/golden.rs` + `tests/golden_scenarios/__init__.py` though not in the card owns-list — minimal, additive, mechanically required to register and gate the shell scenarios | Card owns-list amended (done alongside this entry) |
+| 19 | note | keymap.rs | ctrl+k (plan/card) and ctrl+p (Python Textual default) both bound to palette — pick one at triage if only one should survive | User call at triage |
+| 20 | note | theme.rs:8-9 | Doc cites an "exported pair table" in this findings file; the table lives in LIGHT_REMAP | Fix the doc pointer |
+| 21 | note | screen.rs LIGHT_REMAP | Light `block-cursor-foreground` ("auto 87%" → #dfeef0) is unverified by any light golden (no cursor rendered in current scenarios) | Cover with a scenario when a light screen renders a cursor |
