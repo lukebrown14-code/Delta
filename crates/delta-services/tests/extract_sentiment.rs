@@ -93,10 +93,16 @@ async fn out_of_range_sentiment_skips_the_whole_batch() {
     });
     let client = LlmClient::new(provider.clone());
 
-    let events =
-        extract_events(&mut db, &client, "test/model", std::slice::from_ref(&aapl), since(), 20)
-            .await
-            .unwrap();
+    let events = extract_events(
+        &mut db,
+        &client,
+        "test/model",
+        std::slice::from_ref(&aapl),
+        since(),
+        20,
+    )
+    .await
+    .unwrap();
 
     assert!(events.is_empty(), "the batch with sentiment 5 is skipped");
     // structured() re-prompts once on the validation failure (Python parity)
