@@ -1,0 +1,4529 @@
+{
+ "accepted_items": {
+  "aea0f54851f323b039d57f40cf8b8a73cfec514ce5e3db6d8d6713400223e0ef": [
+   {
+    "item": {
+     "body": "Capex guidance now implies a step-up faster than revenue.",
+     "cite": "[rss] Microsoft steps up data-centre capex into next year <https://example.com/news/msft-capex>",
+     "id": "news:news-msft-capex",
+     "kind": "news",
+     "quality": "secondary",
+     "raw": {
+      "instrument_ids": [
+       "US:MSFT"
+      ]
+     },
+     "sentiment": null,
+     "source": "rss",
+     "target_ids": [
+      "US:MSFT"
+     ],
+     "title": "Microsoft steps up data-centre capex into next year",
+     "ts": "2026-09-10T13:45:00",
+     "url": "https://example.com/news/msft-capex"
+    },
+    "link": "Guidance implies margin pressure.",
+    "side": "support"
+   }
+  ],
+  "da2334aea9b42284dcf9d62870e57631239bb7396a39773a8915c53f314e14fe": []
+ },
+ "audit_aapl": {
+  "news_at": "2026-09-15T14:30:00",
+  "non_price_items": 3,
+  "price_at": "2026-09-20T00:00:00",
+  "primary_at": "2026-09-18T16:05:00",
+  "primary_coverage": "fresh",
+  "source_count": 2,
+  "warnings": []
+ },
+ "decision_reviews": {
+  "dec-seed-aapl": [
+   {
+    "created_at": "2026-08-21T09:30:00",
+    "decision_id": "dec-seed-aapl",
+    "id": 1,
+    "note": "Tracking plan; chip cycle on schedule.",
+    "status": null
+   }
+  ],
+  "dec-seed-msft": []
+ },
+ "decisions": [
+  {
+   "created_at": "2026-09-18T09:30:00",
+   "id": "dec-seed-msft",
+   "instrument_id": "US:MSFT",
+   "invalidation_criteria": "Cloud bookings roll over",
+   "rationale": "Cloud demand durable; capex narrative needs watching.",
+   "review_date": "2026-10-27",
+   "status": "open",
+   "thesis_claim_snapshot": "Cloud capex compresses margins into next year",
+   "thesis_id": "aea0f54851f323b039d57f40cf8b8a73cfec514ce5e3db6d8d6713400223e0ef",
+   "time_horizon": "6m",
+   "valuation_context": "30x forward earnings"
+  },
+  {
+   "created_at": "2026-09-11T09:30:00",
+   "id": "dec-seed-aapl",
+   "instrument_id": "US:AAPL",
+   "invalidation_criteria": "Supply warnings escalate or services growth misses",
+   "rationale": "Chip cycle into the earnings print; services carry the multiple.",
+   "review_date": "2026-09-21",
+   "status": "open",
+   "thesis_claim_snapshot": "Apple's services line sustains double-digit growth",
+   "thesis_id": "da2334aea9b42284dcf9d62870e57631239bb7396a39773a8915c53f314e14fe",
+   "time_horizon": "3m",
+   "valuation_context": "32x forward earnings"
+  }
+ ],
+ "due_reviews": [
+  "dec-seed-aapl"
+ ],
+ "env_openrouter_empty": true,
+ "evidence_aapl": [
+  "event:event-aapl-earnings",
+  "bar:80",
+  "bar:79",
+  "filing:news-aapl-10q",
+  "bar:78",
+  "bar:77",
+  "bar:76",
+  "news:news-aapl-chip",
+  "bar:75",
+  "bar:74",
+  "bar:73",
+  "bar:72",
+  "bar:71",
+  "bar:70",
+  "bar:69",
+  "news:news-aapl-supply",
+  "bar:68",
+  "bar:67",
+  "bar:66",
+  "bar:65",
+  "bar:64",
+  "bar:63",
+  "bar:62",
+  "bar:61",
+  "bar:60",
+  "bar:59",
+  "bar:58",
+  "bar:57",
+  "bar:56",
+  "bar:55",
+  "bar:54",
+  "bar:53",
+  "bar:52",
+  "bar:51",
+  "bar:50",
+  "bar:49",
+  "bar:48",
+  "bar:47",
+  "bar:46",
+  "bar:45",
+  "bar:44",
+  "bar:43",
+  "bar:42",
+  "bar:41",
+  "bar:40",
+  "bar:39",
+  "bar:38",
+  "bar:37",
+  "bar:36",
+  "bar:35",
+  "bar:34",
+  "bar:33",
+  "bar:32",
+  "bar:31",
+  "bar:30",
+  "bar:29",
+  "bar:28",
+  "bar:27",
+  "bar:26",
+  "bar:25",
+  "bar:24",
+  "bar:23",
+  "bar:22",
+  "bar:21",
+  "bar:20",
+  "bar:19",
+  "bar:18",
+  "bar:17",
+  "bar:16",
+  "bar:15",
+  "bar:14",
+  "bar:13",
+  "bar:12",
+  "bar:11",
+  "bar:10",
+  "bar:9",
+  "bar:8",
+  "bar:7",
+  "bar:6",
+  "bar:5",
+  "bar:4",
+  "bar:3",
+  "bar:2",
+  "bar:1",
+  "fundamental:1",
+  "fundamental:2",
+  "fundamental:3"
+ ],
+ "evidence_all": [
+  {
+   "body": null,
+   "cite": "[test] earnings: Q1 FY27 results",
+   "id": "event:event-msft-earnings",
+   "kind": "event",
+   "quality": "secondary",
+   "raw": {
+    "evidence_ids": [],
+    "extracted_by": "test",
+    "kind": "earnings",
+    "prompt_version": "test_v1",
+    "summary": "Q1 FY27 results"
+   },
+   "sentiment": 0.1,
+   "source": "test",
+   "target_ids": [
+    "US:MSFT"
+   ],
+   "title": "earnings: Q1 FY27 results",
+   "ts": "2026-10-27T21:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] earnings: Q4 results",
+   "id": "event:event-aapl-earnings",
+   "kind": "event",
+   "quality": "secondary",
+   "raw": {
+    "evidence_ids": [],
+    "extracted_by": "test",
+    "kind": "earnings",
+    "prompt_version": "test_v1",
+    "summary": "Q4 results"
+   },
+   "sentiment": 0.2,
+   "source": "test",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "earnings: Q4 results",
+   "ts": "2026-10-01T20:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:MSFT close 113.48",
+   "id": "bar:160",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 113.48,
+    "high": 114.48,
+    "low": 112.48,
+    "open": 113.48,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:MSFT"
+   ],
+   "title": "US:MSFT close 113.48",
+   "ts": "2026-09-20T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:AAPL close 236.30",
+   "id": "bar:80",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 236.3,
+    "high": 237.3,
+    "low": 235.3,
+    "open": 236.3,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "US:AAPL close 236.30",
+   "ts": "2026-09-20T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:MSFT close 112.55",
+   "id": "bar:159",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 112.55,
+    "high": 113.55,
+    "low": 111.55,
+    "open": 112.55,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:MSFT"
+   ],
+   "title": "US:MSFT close 112.55",
+   "ts": "2026-09-19T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:AAPL close 234.83",
+   "id": "bar:79",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 234.83,
+    "high": 235.83,
+    "low": 233.83,
+    "open": 234.83,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "US:AAPL close 234.83",
+   "ts": "2026-09-19T00:00:00",
+   "url": null
+  },
+  {
+   "body": "Services margin held; installed base grew.",
+   "cite": "[sec_edgar] Apple 10-Q: services revenue up 12% year on year <https://example.com/filings/aapl-10q>",
+   "id": "filing:news-aapl-10q",
+   "kind": "filing",
+   "quality": "primary",
+   "raw": {
+    "instrument_ids": [
+     "US:AAPL"
+    ]
+   },
+   "sentiment": null,
+   "source": "sec_edgar",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "Apple 10-Q: services revenue up 12% year on year",
+   "ts": "2026-09-18T16:05:00",
+   "url": "https://example.com/filings/aapl-10q"
+  },
+  {
+   "body": null,
+   "cite": "[test] US:MSFT close 111.29",
+   "id": "bar:158",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 111.29,
+    "high": 112.29,
+    "low": 110.29,
+    "open": 111.29,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:MSFT"
+   ],
+   "title": "US:MSFT close 111.29",
+   "ts": "2026-09-18T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:AAPL close 233.14",
+   "id": "bar:78",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 233.14,
+    "high": 234.14,
+    "low": 232.14,
+    "open": 233.14,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "US:AAPL close 233.14",
+   "ts": "2026-09-18T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:MSFT close 109.80",
+   "id": "bar:157",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 109.8,
+    "high": 110.8,
+    "low": 108.8,
+    "open": 109.8,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:MSFT"
+   ],
+   "title": "US:MSFT close 109.80",
+   "ts": "2026-09-17T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:AAPL close 231.30",
+   "id": "bar:77",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 231.3,
+    "high": 232.3,
+    "low": 230.3,
+    "open": 231.3,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "US:AAPL close 231.30",
+   "ts": "2026-09-17T00:00:00",
+   "url": null
+  },
+  {
+   "body": "Booking momentum improved for the third straight month.",
+   "cite": "[rss] Enterprise cloud demand re-accelerates, channel checks say <https://example.com/news/msft-cloud>",
+   "id": "news:news-msft-cloud",
+   "kind": "news",
+   "quality": "secondary",
+   "raw": {
+    "instrument_ids": [
+     "US:MSFT"
+    ]
+   },
+   "sentiment": null,
+   "source": "rss",
+   "target_ids": [
+    "US:MSFT"
+   ],
+   "title": "Enterprise cloud demand re-accelerates, channel checks say",
+   "ts": "2026-09-16T11:00:00",
+   "url": "https://example.com/news/msft-cloud"
+  },
+  {
+   "body": null,
+   "cite": "[test] US:MSFT close 108.22",
+   "id": "bar:156",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 108.22,
+    "high": 109.22,
+    "low": 107.22,
+    "open": 108.22,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:MSFT"
+   ],
+   "title": "US:MSFT close 108.22",
+   "ts": "2026-09-16T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:AAPL close 229.40",
+   "id": "bar:76",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 229.4,
+    "high": 230.4,
+    "low": 228.4,
+    "open": 229.4,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "US:AAPL close 229.40",
+   "ts": "2026-09-16T00:00:00",
+   "url": null
+  },
+  {
+   "body": "The chip ships in laptops this quarter; analysts see an upgrade cycle.",
+   "cite": "[rss] Apple announces M6 chip with on-device inference <https://example.com/news/aapl-chip>",
+   "id": "news:news-aapl-chip",
+   "kind": "news",
+   "quality": "secondary",
+   "raw": {
+    "instrument_ids": [
+     "US:AAPL"
+    ]
+   },
+   "sentiment": null,
+   "source": "rss",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "Apple announces M6 chip with on-device inference",
+   "ts": "2026-09-15T14:30:00",
+   "url": "https://example.com/news/aapl-chip"
+  },
+  {
+   "body": null,
+   "cite": "[test] US:MSFT close 106.70",
+   "id": "bar:155",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 106.7,
+    "high": 107.7,
+    "low": 105.7,
+    "open": 106.7,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:MSFT"
+   ],
+   "title": "US:MSFT close 106.70",
+   "ts": "2026-09-15T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:AAPL close 227.55",
+   "id": "bar:75",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 227.55,
+    "high": 228.55,
+    "low": 226.55,
+    "open": 227.55,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "US:AAPL close 227.55",
+   "ts": "2026-09-15T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:MSFT close 105.38",
+   "id": "bar:154",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 105.38,
+    "high": 106.38,
+    "low": 104.38,
+    "open": 105.38,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:MSFT"
+   ],
+   "title": "US:MSFT close 105.38",
+   "ts": "2026-09-14T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:AAPL close 225.81",
+   "id": "bar:74",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 225.81,
+    "high": 226.81,
+    "low": 224.81,
+    "open": 225.81,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "US:AAPL close 225.81",
+   "ts": "2026-09-14T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:MSFT close 104.38",
+   "id": "bar:153",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 104.38,
+    "high": 105.38,
+    "low": 103.38,
+    "open": 104.38,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:MSFT"
+   ],
+   "title": "US:MSFT close 104.38",
+   "ts": "2026-09-13T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:AAPL close 224.29",
+   "id": "bar:73",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 224.29,
+    "high": 225.29,
+    "low": 223.29,
+    "open": 224.29,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "US:AAPL close 224.29",
+   "ts": "2026-09-13T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:MSFT close 103.77",
+   "id": "bar:152",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 103.77,
+    "high": 104.77,
+    "low": 102.77,
+    "open": 103.77,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:MSFT"
+   ],
+   "title": "US:MSFT close 103.77",
+   "ts": "2026-09-12T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:AAPL close 223.05",
+   "id": "bar:72",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 223.05,
+    "high": 224.05,
+    "low": 222.05,
+    "open": 223.05,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "US:AAPL close 223.05",
+   "ts": "2026-09-12T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:MSFT close 103.60",
+   "id": "bar:151",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 103.6,
+    "high": 104.6,
+    "low": 102.6,
+    "open": 103.6,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:MSFT"
+   ],
+   "title": "US:MSFT close 103.60",
+   "ts": "2026-09-11T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:AAPL close 222.15",
+   "id": "bar:71",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 222.15,
+    "high": 223.15,
+    "low": 221.15,
+    "open": 222.15,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "US:AAPL close 222.15",
+   "ts": "2026-09-11T00:00:00",
+   "url": null
+  },
+  {
+   "body": "Capex guidance now implies a step-up faster than revenue.",
+   "cite": "[rss] Microsoft steps up data-centre capex into next year <https://example.com/news/msft-capex>",
+   "id": "news:news-msft-capex",
+   "kind": "news",
+   "quality": "secondary",
+   "raw": {
+    "instrument_ids": [
+     "US:MSFT"
+    ]
+   },
+   "sentiment": null,
+   "source": "rss",
+   "target_ids": [
+    "US:MSFT"
+   ],
+   "title": "Microsoft steps up data-centre capex into next year",
+   "ts": "2026-09-10T13:45:00",
+   "url": "https://example.com/news/msft-capex"
+  },
+  {
+   "body": null,
+   "cite": "[test] US:MSFT close 103.87",
+   "id": "bar:150",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 103.87,
+    "high": 104.87,
+    "low": 102.87,
+    "open": 103.87,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:MSFT"
+   ],
+   "title": "US:MSFT close 103.87",
+   "ts": "2026-09-10T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:AAPL close 221.60",
+   "id": "bar:70",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 221.6,
+    "high": 222.6,
+    "low": 220.6,
+    "open": 221.6,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "US:AAPL close 221.60",
+   "ts": "2026-09-10T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:MSFT close 104.50",
+   "id": "bar:149",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 104.5,
+    "high": 105.5,
+    "low": 103.5,
+    "open": 104.5,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:MSFT"
+   ],
+   "title": "US:MSFT close 104.50",
+   "ts": "2026-09-09T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:AAPL close 221.43",
+   "id": "bar:69",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 221.43,
+    "high": 222.43,
+    "low": 220.43,
+    "open": 221.43,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "US:AAPL close 221.43",
+   "ts": "2026-09-09T00:00:00",
+   "url": null
+  },
+  {
+   "body": "Two suppliers trimmed shipment guidance for the December quarter.",
+   "cite": "[rss] Suppliers flag panel shortages into the holiday quarter <https://example.com/news/aapl-supply>",
+   "id": "news:news-aapl-supply",
+   "kind": "news",
+   "quality": "secondary",
+   "raw": {
+    "instrument_ids": [
+     "US:AAPL"
+    ]
+   },
+   "sentiment": null,
+   "source": "rss",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "Suppliers flag panel shortages into the holiday quarter",
+   "ts": "2026-09-08T09:10:00",
+   "url": "https://example.com/news/aapl-supply"
+  },
+  {
+   "body": null,
+   "cite": "[test] US:MSFT close 105.41",
+   "id": "bar:148",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 105.41,
+    "high": 106.41,
+    "low": 104.41,
+    "open": 105.41,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:MSFT"
+   ],
+   "title": "US:MSFT close 105.41",
+   "ts": "2026-09-08T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:AAPL close 221.62",
+   "id": "bar:68",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 221.62,
+    "high": 222.62,
+    "low": 220.62,
+    "open": 221.62,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "US:AAPL close 221.62",
+   "ts": "2026-09-08T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:MSFT close 106.46",
+   "id": "bar:147",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 106.46,
+    "high": 107.46,
+    "low": 105.46,
+    "open": 106.46,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:MSFT"
+   ],
+   "title": "US:MSFT close 106.46",
+   "ts": "2026-09-07T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:AAPL close 222.13",
+   "id": "bar:67",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 222.13,
+    "high": 223.13,
+    "low": 221.13,
+    "open": 222.13,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "US:AAPL close 222.13",
+   "ts": "2026-09-07T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:MSFT close 107.53",
+   "id": "bar:146",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 107.53,
+    "high": 108.53,
+    "low": 106.53,
+    "open": 107.53,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:MSFT"
+   ],
+   "title": "US:MSFT close 107.53",
+   "ts": "2026-09-06T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:AAPL close 222.90",
+   "id": "bar:66",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 222.9,
+    "high": 223.9,
+    "low": 221.9,
+    "open": 222.9,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "US:AAPL close 222.90",
+   "ts": "2026-09-06T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:MSFT close 108.45",
+   "id": "bar:145",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 108.45,
+    "high": 109.45,
+    "low": 107.45,
+    "open": 108.45,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:MSFT"
+   ],
+   "title": "US:MSFT close 108.45",
+   "ts": "2026-09-05T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:AAPL close 223.87",
+   "id": "bar:65",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 223.87,
+    "high": 224.87,
+    "low": 222.87,
+    "open": 223.87,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "US:AAPL close 223.87",
+   "ts": "2026-09-05T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:MSFT close 109.10",
+   "id": "bar:144",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 109.1,
+    "high": 110.1,
+    "low": 108.1,
+    "open": 109.1,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:MSFT"
+   ],
+   "title": "US:MSFT close 109.10",
+   "ts": "2026-09-04T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:AAPL close 224.95",
+   "id": "bar:64",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 224.95,
+    "high": 225.95,
+    "low": 223.95,
+    "open": 224.95,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "US:AAPL close 224.95",
+   "ts": "2026-09-04T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:MSFT close 109.38",
+   "id": "bar:143",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 109.38,
+    "high": 110.38,
+    "low": 108.38,
+    "open": 109.38,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:MSFT"
+   ],
+   "title": "US:MSFT close 109.38",
+   "ts": "2026-09-03T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:AAPL close 226.04",
+   "id": "bar:63",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 226.04,
+    "high": 227.04,
+    "low": 225.04,
+    "open": 226.04,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "US:AAPL close 226.04",
+   "ts": "2026-09-03T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:MSFT close 109.23",
+   "id": "bar:142",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 109.23,
+    "high": 110.23,
+    "low": 108.23,
+    "open": 109.23,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:MSFT"
+   ],
+   "title": "US:MSFT close 109.23",
+   "ts": "2026-09-02T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:AAPL close 227.05",
+   "id": "bar:62",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 227.05,
+    "high": 228.05,
+    "low": 226.05,
+    "open": 227.05,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "US:AAPL close 227.05",
+   "ts": "2026-09-02T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:MSFT close 108.65",
+   "id": "bar:141",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 108.65,
+    "high": 109.65,
+    "low": 107.65,
+    "open": 108.65,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:MSFT"
+   ],
+   "title": "US:MSFT close 108.65",
+   "ts": "2026-09-01T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:AAPL close 227.90",
+   "id": "bar:61",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 227.9,
+    "high": 228.9,
+    "low": 226.9,
+    "open": 227.9,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "US:AAPL close 227.90",
+   "ts": "2026-09-01T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:MSFT close 107.67",
+   "id": "bar:140",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 107.67,
+    "high": 108.67,
+    "low": 106.67,
+    "open": 107.67,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:MSFT"
+   ],
+   "title": "US:MSFT close 107.67",
+   "ts": "2026-08-31T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:AAPL close 228.51",
+   "id": "bar:60",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 228.51,
+    "high": 229.51,
+    "low": 227.51,
+    "open": 228.51,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "US:AAPL close 228.51",
+   "ts": "2026-08-31T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:MSFT close 106.36",
+   "id": "bar:139",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 106.36,
+    "high": 107.36,
+    "low": 105.36,
+    "open": 106.36,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:MSFT"
+   ],
+   "title": "US:MSFT close 106.36",
+   "ts": "2026-08-30T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:AAPL close 228.81",
+   "id": "bar:59",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 228.81,
+    "high": 229.81,
+    "low": 227.81,
+    "open": 228.81,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "US:AAPL close 228.81",
+   "ts": "2026-08-30T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:MSFT close 104.85",
+   "id": "bar:138",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 104.85,
+    "high": 105.85,
+    "low": 103.85,
+    "open": 104.85,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:MSFT"
+   ],
+   "title": "US:MSFT close 104.85",
+   "ts": "2026-08-29T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:AAPL close 228.76",
+   "id": "bar:58",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 228.76,
+    "high": 229.76,
+    "low": 227.76,
+    "open": 228.76,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "US:AAPL close 228.76",
+   "ts": "2026-08-29T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:MSFT close 103.27",
+   "id": "bar:137",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 103.27,
+    "high": 104.27,
+    "low": 102.27,
+    "open": 103.27,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:MSFT"
+   ],
+   "title": "US:MSFT close 103.27",
+   "ts": "2026-08-28T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:AAPL close 228.34",
+   "id": "bar:57",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 228.34,
+    "high": 229.34,
+    "low": 227.34,
+    "open": 228.34,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "US:AAPL close 228.34",
+   "ts": "2026-08-28T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:MSFT close 101.78",
+   "id": "bar:136",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 101.78,
+    "high": 102.78,
+    "low": 100.78,
+    "open": 101.78,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:MSFT"
+   ],
+   "title": "US:MSFT close 101.78",
+   "ts": "2026-08-27T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:AAPL close 227.56",
+   "id": "bar:56",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 227.56,
+    "high": 228.56,
+    "low": 226.56,
+    "open": 227.56,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "US:AAPL close 227.56",
+   "ts": "2026-08-27T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:MSFT close 100.50",
+   "id": "bar:135",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 100.5,
+    "high": 101.5,
+    "low": 99.5,
+    "open": 100.5,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:MSFT"
+   ],
+   "title": "US:MSFT close 100.50",
+   "ts": "2026-08-26T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:AAPL close 226.42",
+   "id": "bar:55",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 226.42,
+    "high": 227.42,
+    "low": 225.42,
+    "open": 226.42,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "US:AAPL close 226.42",
+   "ts": "2026-08-26T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:MSFT close 99.55",
+   "id": "bar:134",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 99.55,
+    "high": 100.55,
+    "low": 98.55,
+    "open": 99.55,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:MSFT"
+   ],
+   "title": "US:MSFT close 99.55",
+   "ts": "2026-08-25T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:AAPL close 224.99",
+   "id": "bar:54",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 224.99,
+    "high": 225.99,
+    "low": 223.99,
+    "open": 224.99,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "US:AAPL close 224.99",
+   "ts": "2026-08-25T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:MSFT close 99.01",
+   "id": "bar:133",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 99.01,
+    "high": 100.01,
+    "low": 98.01,
+    "open": 99.01,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:MSFT"
+   ],
+   "title": "US:MSFT close 99.01",
+   "ts": "2026-08-24T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:AAPL close 223.32",
+   "id": "bar:53",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 223.32,
+    "high": 224.32,
+    "low": 222.32,
+    "open": 223.32,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "US:AAPL close 223.32",
+   "ts": "2026-08-24T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:MSFT close 98.90",
+   "id": "bar:132",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 98.9,
+    "high": 99.9,
+    "low": 97.9,
+    "open": 98.9,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:MSFT"
+   ],
+   "title": "US:MSFT close 98.90",
+   "ts": "2026-08-23T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:AAPL close 221.50",
+   "id": "bar:52",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 221.5,
+    "high": 222.5,
+    "low": 220.5,
+    "open": 221.5,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "US:AAPL close 221.50",
+   "ts": "2026-08-23T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:MSFT close 99.23",
+   "id": "bar:131",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 99.23,
+    "high": 100.23,
+    "low": 98.23,
+    "open": 99.23,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:MSFT"
+   ],
+   "title": "US:MSFT close 99.23",
+   "ts": "2026-08-22T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:AAPL close 219.60",
+   "id": "bar:51",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 219.6,
+    "high": 220.6,
+    "low": 218.6,
+    "open": 219.6,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "US:AAPL close 219.60",
+   "ts": "2026-08-22T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:MSFT close 99.91",
+   "id": "bar:130",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 99.91,
+    "high": 100.91,
+    "low": 98.91,
+    "open": 99.91,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:MSFT"
+   ],
+   "title": "US:MSFT close 99.91",
+   "ts": "2026-08-21T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:AAPL close 217.73",
+   "id": "bar:50",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 217.73,
+    "high": 218.73,
+    "low": 216.73,
+    "open": 217.73,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "US:AAPL close 217.73",
+   "ts": "2026-08-21T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:MSFT close 100.85",
+   "id": "bar:129",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 100.85,
+    "high": 101.85,
+    "low": 99.85,
+    "open": 100.85,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:MSFT"
+   ],
+   "title": "US:MSFT close 100.85",
+   "ts": "2026-08-20T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:AAPL close 215.98",
+   "id": "bar:49",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 215.98,
+    "high": 216.98,
+    "low": 214.98,
+    "open": 215.98,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "US:AAPL close 215.98",
+   "ts": "2026-08-20T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:MSFT close 101.92",
+   "id": "bar:128",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 101.92,
+    "high": 102.92,
+    "low": 100.92,
+    "open": 101.92,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:MSFT"
+   ],
+   "title": "US:MSFT close 101.92",
+   "ts": "2026-08-19T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:AAPL close 214.43",
+   "id": "bar:48",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 214.43,
+    "high": 215.43,
+    "low": 213.43,
+    "open": 214.43,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "US:AAPL close 214.43",
+   "ts": "2026-08-19T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:MSFT close 102.96",
+   "id": "bar:127",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 102.96,
+    "high": 103.96,
+    "low": 101.96,
+    "open": 102.96,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:MSFT"
+   ],
+   "title": "US:MSFT close 102.96",
+   "ts": "2026-08-18T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:AAPL close 213.15",
+   "id": "bar:47",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 213.15,
+    "high": 214.15,
+    "low": 212.15,
+    "open": 213.15,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "US:AAPL close 213.15",
+   "ts": "2026-08-18T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:MSFT close 103.85",
+   "id": "bar:126",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 103.85,
+    "high": 104.85,
+    "low": 102.85,
+    "open": 103.85,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:MSFT"
+   ],
+   "title": "US:MSFT close 103.85",
+   "ts": "2026-08-17T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:AAPL close 212.19",
+   "id": "bar:46",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 212.19,
+    "high": 213.19,
+    "low": 211.19,
+    "open": 212.19,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "US:AAPL close 212.19",
+   "ts": "2026-08-17T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:MSFT close 104.45",
+   "id": "bar:125",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 104.45,
+    "high": 105.45,
+    "low": 103.45,
+    "open": 104.45,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:MSFT"
+   ],
+   "title": "US:MSFT close 104.45",
+   "ts": "2026-08-16T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:AAPL close 211.60",
+   "id": "bar:45",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 211.6,
+    "high": 212.6,
+    "low": 210.6,
+    "open": 211.6,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "US:AAPL close 211.60",
+   "ts": "2026-08-16T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:MSFT close 104.67",
+   "id": "bar:124",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 104.67,
+    "high": 105.67,
+    "low": 103.67,
+    "open": 104.67,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:MSFT"
+   ],
+   "title": "US:MSFT close 104.67",
+   "ts": "2026-08-15T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:AAPL close 211.38",
+   "id": "bar:44",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 211.38,
+    "high": 212.38,
+    "low": 210.38,
+    "open": 211.38,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "US:AAPL close 211.38",
+   "ts": "2026-08-15T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:MSFT close 104.46",
+   "id": "bar:123",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 104.46,
+    "high": 105.46,
+    "low": 103.46,
+    "open": 104.46,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:MSFT"
+   ],
+   "title": "US:MSFT close 104.46",
+   "ts": "2026-08-14T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:AAPL close 211.52",
+   "id": "bar:43",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 211.52,
+    "high": 212.52,
+    "low": 210.52,
+    "open": 211.52,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "US:AAPL close 211.52",
+   "ts": "2026-08-14T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:MSFT close 103.82",
+   "id": "bar:122",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 103.82,
+    "high": 104.82,
+    "low": 102.82,
+    "open": 103.82,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:MSFT"
+   ],
+   "title": "US:MSFT close 103.82",
+   "ts": "2026-08-13T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:AAPL close 211.99",
+   "id": "bar:42",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 211.99,
+    "high": 212.99,
+    "low": 210.99,
+    "open": 211.99,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "US:AAPL close 211.99",
+   "ts": "2026-08-13T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:MSFT close 102.78",
+   "id": "bar:121",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 102.78,
+    "high": 103.78,
+    "low": 101.78,
+    "open": 102.78,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:MSFT"
+   ],
+   "title": "US:MSFT close 102.78",
+   "ts": "2026-08-12T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:AAPL close 212.74",
+   "id": "bar:41",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 212.74,
+    "high": 213.74,
+    "low": 211.74,
+    "open": 212.74,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "US:AAPL close 212.74",
+   "ts": "2026-08-12T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:MSFT close 101.43",
+   "id": "bar:120",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 101.43,
+    "high": 102.43,
+    "low": 100.43,
+    "open": 101.43,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:MSFT"
+   ],
+   "title": "US:MSFT close 101.43",
+   "ts": "2026-08-11T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:AAPL close 213.68",
+   "id": "bar:40",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 213.68,
+    "high": 214.68,
+    "low": 212.68,
+    "open": 213.68,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "US:AAPL close 213.68",
+   "ts": "2026-08-11T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:MSFT close 99.90",
+   "id": "bar:119",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 99.9,
+    "high": 100.9,
+    "low": 98.9,
+    "open": 99.9,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:MSFT"
+   ],
+   "title": "US:MSFT close 99.90",
+   "ts": "2026-08-10T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:AAPL close 214.75",
+   "id": "bar:39",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 214.75,
+    "high": 215.75,
+    "low": 213.75,
+    "open": 214.75,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "US:AAPL close 214.75",
+   "ts": "2026-08-10T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:MSFT close 98.33",
+   "id": "bar:118",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 98.33,
+    "high": 99.33,
+    "low": 97.33,
+    "open": 98.33,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:MSFT"
+   ],
+   "title": "US:MSFT close 98.33",
+   "ts": "2026-08-09T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:AAPL close 215.84",
+   "id": "bar:38",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 215.84,
+    "high": 216.84,
+    "low": 214.84,
+    "open": 215.84,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "US:AAPL close 215.84",
+   "ts": "2026-08-09T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:MSFT close 96.85",
+   "id": "bar:117",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 96.85,
+    "high": 97.85,
+    "low": 95.85,
+    "open": 96.85,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:MSFT"
+   ],
+   "title": "US:MSFT close 96.85",
+   "ts": "2026-08-08T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:AAPL close 216.87",
+   "id": "bar:37",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 216.87,
+    "high": 217.87,
+    "low": 215.87,
+    "open": 216.87,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "US:AAPL close 216.87",
+   "ts": "2026-08-08T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:MSFT close 95.62",
+   "id": "bar:116",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 95.62,
+    "high": 96.62,
+    "low": 94.62,
+    "open": 95.62,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:MSFT"
+   ],
+   "title": "US:MSFT close 95.62",
+   "ts": "2026-08-07T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:AAPL close 217.75",
+   "id": "bar:36",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 217.75,
+    "high": 218.75,
+    "low": 216.75,
+    "open": 217.75,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "US:AAPL close 217.75",
+   "ts": "2026-08-07T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:MSFT close 94.73",
+   "id": "bar:115",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 94.73,
+    "high": 95.73,
+    "low": 93.73,
+    "open": 94.73,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:MSFT"
+   ],
+   "title": "US:MSFT close 94.73",
+   "ts": "2026-08-06T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:AAPL close 218.39",
+   "id": "bar:35",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 218.39,
+    "high": 219.39,
+    "low": 217.39,
+    "open": 218.39,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "US:AAPL close 218.39",
+   "ts": "2026-08-06T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:MSFT close 94.25",
+   "id": "bar:114",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 94.25,
+    "high": 95.25,
+    "low": 93.25,
+    "open": 94.25,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:MSFT"
+   ],
+   "title": "US:MSFT close 94.25",
+   "ts": "2026-08-05T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:AAPL close 218.74",
+   "id": "bar:34",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 218.74,
+    "high": 219.74,
+    "low": 217.74,
+    "open": 218.74,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "US:AAPL close 218.74",
+   "ts": "2026-08-05T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:MSFT close 94.21",
+   "id": "bar:113",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 94.21,
+    "high": 95.21,
+    "low": 93.21,
+    "open": 94.21,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:MSFT"
+   ],
+   "title": "US:MSFT close 94.21",
+   "ts": "2026-08-04T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:AAPL close 218.74",
+   "id": "bar:33",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 218.74,
+    "high": 219.74,
+    "low": 217.74,
+    "open": 218.74,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "US:AAPL close 218.74",
+   "ts": "2026-08-04T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:MSFT close 94.60",
+   "id": "bar:112",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 94.6,
+    "high": 95.6,
+    "low": 93.6,
+    "open": 94.6,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:MSFT"
+   ],
+   "title": "US:MSFT close 94.60",
+   "ts": "2026-08-03T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:AAPL close 218.37",
+   "id": "bar:32",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 218.37,
+    "high": 219.37,
+    "low": 217.37,
+    "open": 218.37,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "US:AAPL close 218.37",
+   "ts": "2026-08-03T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:MSFT close 95.32",
+   "id": "bar:111",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 95.32,
+    "high": 96.32,
+    "low": 94.32,
+    "open": 95.32,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:MSFT"
+   ],
+   "title": "US:MSFT close 95.32",
+   "ts": "2026-08-02T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:AAPL close 217.63",
+   "id": "bar:31",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 217.63,
+    "high": 218.63,
+    "low": 216.63,
+    "open": 217.63,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "US:AAPL close 217.63",
+   "ts": "2026-08-02T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:MSFT close 96.29",
+   "id": "bar:110",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 96.29,
+    "high": 97.29,
+    "low": 95.29,
+    "open": 96.29,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:MSFT"
+   ],
+   "title": "US:MSFT close 96.29",
+   "ts": "2026-08-01T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:AAPL close 216.54",
+   "id": "bar:30",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 216.54,
+    "high": 217.54,
+    "low": 215.54,
+    "open": 216.54,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "US:AAPL close 216.54",
+   "ts": "2026-08-01T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:MSFT close 97.37",
+   "id": "bar:109",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 97.37,
+    "high": 98.37,
+    "low": 96.37,
+    "open": 97.37,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:MSFT"
+   ],
+   "title": "US:MSFT close 97.37",
+   "ts": "2026-07-31T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:AAPL close 215.14",
+   "id": "bar:29",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 215.14,
+    "high": 216.14,
+    "low": 214.14,
+    "open": 215.14,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "US:AAPL close 215.14",
+   "ts": "2026-07-31T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:MSFT close 98.40",
+   "id": "bar:108",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 98.4,
+    "high": 99.4,
+    "low": 97.4,
+    "open": 98.4,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:MSFT"
+   ],
+   "title": "US:MSFT close 98.40",
+   "ts": "2026-07-30T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:AAPL close 213.50",
+   "id": "bar:28",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 213.5,
+    "high": 214.5,
+    "low": 212.5,
+    "open": 213.5,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "US:AAPL close 213.50",
+   "ts": "2026-07-30T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:MSFT close 99.25",
+   "id": "bar:107",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 99.25,
+    "high": 100.25,
+    "low": 98.25,
+    "open": 99.25,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:MSFT"
+   ],
+   "title": "US:MSFT close 99.25",
+   "ts": "2026-07-29T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:AAPL close 211.69",
+   "id": "bar:27",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 211.69,
+    "high": 212.69,
+    "low": 210.69,
+    "open": 211.69,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "US:AAPL close 211.69",
+   "ts": "2026-07-29T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:MSFT close 99.80",
+   "id": "bar:106",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 99.8,
+    "high": 100.8,
+    "low": 98.8,
+    "open": 99.8,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:MSFT"
+   ],
+   "title": "US:MSFT close 99.80",
+   "ts": "2026-07-28T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:AAPL close 209.80",
+   "id": "bar:26",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 209.8,
+    "high": 210.8,
+    "low": 208.8,
+    "open": 209.8,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "US:AAPL close 209.80",
+   "ts": "2026-07-28T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:MSFT close 99.96",
+   "id": "bar:105",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 99.96,
+    "high": 100.96,
+    "low": 98.96,
+    "open": 99.96,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:MSFT"
+   ],
+   "title": "US:MSFT close 99.96",
+   "ts": "2026-07-27T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:AAPL close 207.92",
+   "id": "bar:25",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 207.92,
+    "high": 208.92,
+    "low": 206.92,
+    "open": 207.92,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "US:AAPL close 207.92",
+   "ts": "2026-07-27T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:MSFT close 99.68",
+   "id": "bar:104",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 99.68,
+    "high": 100.68,
+    "low": 98.68,
+    "open": 99.68,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:MSFT"
+   ],
+   "title": "US:MSFT close 99.68",
+   "ts": "2026-07-26T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:AAPL close 206.15",
+   "id": "bar:24",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 206.15,
+    "high": 207.15,
+    "low": 205.15,
+    "open": 206.15,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "US:AAPL close 206.15",
+   "ts": "2026-07-26T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:MSFT close 98.97",
+   "id": "bar:103",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 98.97,
+    "high": 99.97,
+    "low": 97.97,
+    "open": 98.97,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:MSFT"
+   ],
+   "title": "US:MSFT close 98.97",
+   "ts": "2026-07-25T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:AAPL close 204.57",
+   "id": "bar:23",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 204.57,
+    "high": 205.57,
+    "low": 203.57,
+    "open": 204.57,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "US:AAPL close 204.57",
+   "ts": "2026-07-25T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:MSFT close 97.88",
+   "id": "bar:102",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 97.88,
+    "high": 98.88,
+    "low": 96.88,
+    "open": 97.88,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:MSFT"
+   ],
+   "title": "US:MSFT close 97.88",
+   "ts": "2026-07-24T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:AAPL close 203.25",
+   "id": "bar:22",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 203.25,
+    "high": 204.25,
+    "low": 202.25,
+    "open": 203.25,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "US:AAPL close 203.25",
+   "ts": "2026-07-24T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:MSFT close 96.50",
+   "id": "bar:101",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 96.5,
+    "high": 97.5,
+    "low": 95.5,
+    "open": 96.5,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:MSFT"
+   ],
+   "title": "US:MSFT close 96.50",
+   "ts": "2026-07-23T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:AAPL close 202.25",
+   "id": "bar:21",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 202.25,
+    "high": 203.25,
+    "low": 201.25,
+    "open": 202.25,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "US:AAPL close 202.25",
+   "ts": "2026-07-23T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:MSFT close 94.95",
+   "id": "bar:100",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 94.95,
+    "high": 95.95,
+    "low": 93.95,
+    "open": 94.95,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:MSFT"
+   ],
+   "title": "US:MSFT close 94.95",
+   "ts": "2026-07-22T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:AAPL close 201.60",
+   "id": "bar:20",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 201.6,
+    "high": 202.6,
+    "low": 200.6,
+    "open": 201.6,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "US:AAPL close 201.60",
+   "ts": "2026-07-22T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:AAPL close 201.33",
+   "id": "bar:19",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 201.33,
+    "high": 202.33,
+    "low": 200.33,
+    "open": 201.33,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "US:AAPL close 201.33",
+   "ts": "2026-07-21T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:MSFT close 93.38",
+   "id": "bar:99",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 93.38,
+    "high": 94.38,
+    "low": 92.38,
+    "open": 93.38,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:MSFT"
+   ],
+   "title": "US:MSFT close 93.38",
+   "ts": "2026-07-21T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:AAPL close 201.43",
+   "id": "bar:18",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 201.43,
+    "high": 202.43,
+    "low": 200.43,
+    "open": 201.43,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "US:AAPL close 201.43",
+   "ts": "2026-07-20T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:MSFT close 91.94",
+   "id": "bar:98",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 91.94,
+    "high": 92.94,
+    "low": 90.94,
+    "open": 91.94,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:MSFT"
+   ],
+   "title": "US:MSFT close 91.94",
+   "ts": "2026-07-20T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:AAPL close 201.86",
+   "id": "bar:17",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 201.86,
+    "high": 202.86,
+    "low": 200.86,
+    "open": 201.86,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "US:AAPL close 201.86",
+   "ts": "2026-07-19T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:MSFT close 90.75",
+   "id": "bar:97",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 90.75,
+    "high": 91.75,
+    "low": 89.75,
+    "open": 90.75,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:MSFT"
+   ],
+   "title": "US:MSFT close 90.75",
+   "ts": "2026-07-19T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:AAPL close 202.57",
+   "id": "bar:16",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 202.57,
+    "high": 203.57,
+    "low": 201.57,
+    "open": 202.57,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "US:AAPL close 202.57",
+   "ts": "2026-07-18T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:MSFT close 89.91",
+   "id": "bar:96",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 89.91,
+    "high": 90.91,
+    "low": 88.91,
+    "open": 89.91,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:MSFT"
+   ],
+   "title": "US:MSFT close 89.91",
+   "ts": "2026-07-18T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:AAPL close 203.50",
+   "id": "bar:15",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 203.5,
+    "high": 204.5,
+    "low": 202.5,
+    "open": 203.5,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "US:AAPL close 203.50",
+   "ts": "2026-07-17T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:MSFT close 89.50",
+   "id": "bar:95",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 89.5,
+    "high": 90.5,
+    "low": 88.5,
+    "open": 89.5,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:MSFT"
+   ],
+   "title": "US:MSFT close 89.50",
+   "ts": "2026-07-17T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:AAPL close 204.55",
+   "id": "bar:14",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 204.55,
+    "high": 205.55,
+    "low": 203.55,
+    "open": 204.55,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "US:AAPL close 204.55",
+   "ts": "2026-07-16T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:MSFT close 89.53",
+   "id": "bar:94",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 89.53,
+    "high": 90.53,
+    "low": 88.53,
+    "open": 89.53,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:MSFT"
+   ],
+   "title": "US:MSFT close 89.53",
+   "ts": "2026-07-16T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:AAPL close 205.65",
+   "id": "bar:13",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 205.65,
+    "high": 206.65,
+    "low": 204.65,
+    "open": 205.65,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "US:AAPL close 205.65",
+   "ts": "2026-07-15T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:MSFT close 89.97",
+   "id": "bar:93",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 89.97,
+    "high": 90.97,
+    "low": 88.97,
+    "open": 89.97,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:MSFT"
+   ],
+   "title": "US:MSFT close 89.97",
+   "ts": "2026-07-15T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:AAPL close 206.69",
+   "id": "bar:12",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 206.69,
+    "high": 207.69,
+    "low": 205.69,
+    "open": 206.69,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "US:AAPL close 206.69",
+   "ts": "2026-07-14T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:MSFT close 90.74",
+   "id": "bar:92",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 90.74,
+    "high": 91.74,
+    "low": 89.74,
+    "open": 90.74,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:MSFT"
+   ],
+   "title": "US:MSFT close 90.74",
+   "ts": "2026-07-14T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:AAPL close 207.59",
+   "id": "bar:11",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 207.59,
+    "high": 208.59,
+    "low": 206.59,
+    "open": 207.59,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "US:AAPL close 207.59",
+   "ts": "2026-07-13T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:MSFT close 91.74",
+   "id": "bar:91",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 91.74,
+    "high": 92.74,
+    "low": 90.74,
+    "open": 91.74,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:MSFT"
+   ],
+   "title": "US:MSFT close 91.74",
+   "ts": "2026-07-13T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:AAPL close 208.27",
+   "id": "bar:10",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 208.27,
+    "high": 209.27,
+    "low": 207.27,
+    "open": 208.27,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "US:AAPL close 208.27",
+   "ts": "2026-07-12T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:MSFT close 92.81",
+   "id": "bar:90",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 92.81,
+    "high": 93.81,
+    "low": 91.81,
+    "open": 92.81,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:MSFT"
+   ],
+   "title": "US:MSFT close 92.81",
+   "ts": "2026-07-12T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:MSFT close 93.83",
+   "id": "bar:89",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 93.83,
+    "high": 94.83,
+    "low": 92.83,
+    "open": 93.83,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:MSFT"
+   ],
+   "title": "US:MSFT close 93.83",
+   "ts": "2026-07-11T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:AAPL close 208.66",
+   "id": "bar:9",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 208.66,
+    "high": 209.66,
+    "low": 207.66,
+    "open": 208.66,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "US:AAPL close 208.66",
+   "ts": "2026-07-11T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:AAPL close 208.70",
+   "id": "bar:8",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 208.7,
+    "high": 209.7,
+    "low": 207.7,
+    "open": 208.7,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "US:AAPL close 208.70",
+   "ts": "2026-07-10T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:MSFT close 94.64",
+   "id": "bar:88",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 94.64,
+    "high": 95.64,
+    "low": 93.64,
+    "open": 94.64,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:MSFT"
+   ],
+   "title": "US:MSFT close 94.64",
+   "ts": "2026-07-10T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:AAPL close 208.38",
+   "id": "bar:7",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 208.38,
+    "high": 209.38,
+    "low": 207.38,
+    "open": 208.38,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "US:AAPL close 208.38",
+   "ts": "2026-07-09T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:MSFT close 95.14",
+   "id": "bar:87",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 95.14,
+    "high": 96.14,
+    "low": 94.14,
+    "open": 95.14,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:MSFT"
+   ],
+   "title": "US:MSFT close 95.14",
+   "ts": "2026-07-09T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:AAPL close 207.69",
+   "id": "bar:6",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 207.69,
+    "high": 208.69,
+    "low": 206.69,
+    "open": 207.69,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "US:AAPL close 207.69",
+   "ts": "2026-07-08T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:MSFT close 95.23",
+   "id": "bar:86",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 95.23,
+    "high": 96.23,
+    "low": 94.23,
+    "open": 95.23,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:MSFT"
+   ],
+   "title": "US:MSFT close 95.23",
+   "ts": "2026-07-08T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:AAPL close 206.65",
+   "id": "bar:5",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 206.65,
+    "high": 207.65,
+    "low": 205.65,
+    "open": 206.65,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "US:AAPL close 206.65",
+   "ts": "2026-07-07T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:MSFT close 94.89",
+   "id": "bar:85",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 94.89,
+    "high": 95.89,
+    "low": 93.89,
+    "open": 94.89,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:MSFT"
+   ],
+   "title": "US:MSFT close 94.89",
+   "ts": "2026-07-07T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:AAPL close 205.29",
+   "id": "bar:4",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 205.29,
+    "high": 206.29,
+    "low": 204.29,
+    "open": 205.29,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "US:AAPL close 205.29",
+   "ts": "2026-07-06T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:MSFT close 94.12",
+   "id": "bar:84",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 94.12,
+    "high": 95.12,
+    "low": 93.12,
+    "open": 94.12,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:MSFT"
+   ],
+   "title": "US:MSFT close 94.12",
+   "ts": "2026-07-06T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:AAPL close 203.68",
+   "id": "bar:3",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 203.68,
+    "high": 204.68,
+    "low": 202.68,
+    "open": 203.68,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "US:AAPL close 203.68",
+   "ts": "2026-07-05T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:MSFT close 92.97",
+   "id": "bar:83",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 92.97,
+    "high": 93.97,
+    "low": 91.97,
+    "open": 92.97,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:MSFT"
+   ],
+   "title": "US:MSFT close 92.97",
+   "ts": "2026-07-05T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:AAPL close 201.88",
+   "id": "bar:2",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 201.88,
+    "high": 202.88,
+    "low": 200.88,
+    "open": 201.88,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "US:AAPL close 201.88",
+   "ts": "2026-07-04T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:MSFT close 91.56",
+   "id": "bar:82",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 91.56,
+    "high": 92.56,
+    "low": 90.56,
+    "open": 91.56,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:MSFT"
+   ],
+   "title": "US:MSFT close 91.56",
+   "ts": "2026-07-04T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:AAPL close 200.00",
+   "id": "bar:1",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 200.0,
+    "high": 201.0,
+    "low": 199.0,
+    "open": 200.0,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "US:AAPL close 200.00",
+   "ts": "2026-07-03T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[test] US:MSFT close 90.00",
+   "id": "bar:81",
+   "kind": "bar",
+   "quality": "secondary",
+   "raw": {
+    "close": 90.0,
+    "high": 91.0,
+    "low": 89.0,
+    "open": 90.0,
+    "volume": 1000.0
+   },
+   "sentiment": null,
+   "source": "test",
+   "target_ids": [
+    "US:MSFT"
+   ],
+   "title": "US:MSFT close 90.00",
+   "ts": "2026-07-03T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[yahoo] Market cap: 3400000000000.00 (2026-06-30, yahoo)",
+   "id": "fundamental:1",
+   "kind": "fundamental",
+   "quality": "secondary",
+   "raw": {
+    "as_of": "2026-06-30",
+    "metric": "Market cap",
+    "value": 3400000000000.0
+   },
+   "sentiment": null,
+   "source": "yahoo",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "Market cap: 3400000000000.00 (2026-06-30, yahoo)",
+   "ts": "2026-06-30T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[yahoo] P/E: 31.20 (2026-06-30, yahoo)",
+   "id": "fundamental:2",
+   "kind": "fundamental",
+   "quality": "secondary",
+   "raw": {
+    "as_of": "2026-06-30",
+    "metric": "P/E",
+    "value": 31.2
+   },
+   "sentiment": null,
+   "source": "yahoo",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "P/E: 31.20 (2026-06-30, yahoo)",
+   "ts": "2026-06-30T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[yahoo] Gross margin: 48.70 (2026-06-30, yahoo)",
+   "id": "fundamental:3",
+   "kind": "fundamental",
+   "quality": "secondary",
+   "raw": {
+    "as_of": "2026-06-30",
+    "metric": "Gross margin",
+    "value": 48.7
+   },
+   "sentiment": null,
+   "source": "yahoo",
+   "target_ids": [
+    "US:AAPL"
+   ],
+   "title": "Gross margin: 48.70 (2026-06-30, yahoo)",
+   "ts": "2026-06-30T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[yahoo] Market cap: 3100000000000.00 (2026-06-30, yahoo)",
+   "id": "fundamental:4",
+   "kind": "fundamental",
+   "quality": "secondary",
+   "raw": {
+    "as_of": "2026-06-30",
+    "metric": "Market cap",
+    "value": 3100000000000.0
+   },
+   "sentiment": null,
+   "source": "yahoo",
+   "target_ids": [
+    "US:MSFT"
+   ],
+   "title": "Market cap: 3100000000000.00 (2026-06-30, yahoo)",
+   "ts": "2026-06-30T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[yahoo] P/E: 33.90 (2026-06-30, yahoo)",
+   "id": "fundamental:5",
+   "kind": "fundamental",
+   "quality": "secondary",
+   "raw": {
+    "as_of": "2026-06-30",
+    "metric": "P/E",
+    "value": 33.9
+   },
+   "sentiment": null,
+   "source": "yahoo",
+   "target_ids": [
+    "US:MSFT"
+   ],
+   "title": "P/E: 33.90 (2026-06-30, yahoo)",
+   "ts": "2026-06-30T00:00:00",
+   "url": null
+  },
+  {
+   "body": null,
+   "cite": "[yahoo] Gross margin: 69.80 (2026-06-30, yahoo)",
+   "id": "fundamental:6",
+   "kind": "fundamental",
+   "quality": "secondary",
+   "raw": {
+    "as_of": "2026-06-30",
+    "metric": "Gross margin",
+    "value": 69.8
+   },
+   "sentiment": null,
+   "source": "yahoo",
+   "target_ids": [
+    "US:MSFT"
+   ],
+   "title": "Gross margin: 69.80 (2026-06-30, yahoo)",
+   "ts": "2026-06-30T00:00:00",
+   "url": null
+  }
+ ],
+ "evidence_by_ids": [
+  "event:event-aapl-earnings",
+  "filing:news-aapl-10q",
+  "news:news-aapl-chip",
+  "bar:1",
+  "fundamental:1"
+ ],
+ "evidence_combined": [
+  "news:news-aapl-chip"
+ ],
+ "evidence_kind_bar": [
+  "bar:160",
+  "bar:80",
+  "bar:159",
+  "bar:79",
+  "bar:158",
+  "bar:78",
+  "bar:157",
+  "bar:77",
+  "bar:156",
+  "bar:76",
+  "bar:155",
+  "bar:75",
+  "bar:154",
+  "bar:74",
+  "bar:153",
+  "bar:73",
+  "bar:152",
+  "bar:72",
+  "bar:151",
+  "bar:71",
+  "bar:150",
+  "bar:70",
+  "bar:149",
+  "bar:69",
+  "bar:148",
+  "bar:68",
+  "bar:147",
+  "bar:67",
+  "bar:146",
+  "bar:66",
+  "bar:145",
+  "bar:65",
+  "bar:144",
+  "bar:64",
+  "bar:143",
+  "bar:63",
+  "bar:142",
+  "bar:62",
+  "bar:141",
+  "bar:61",
+  "bar:140",
+  "bar:60",
+  "bar:139",
+  "bar:59",
+  "bar:138",
+  "bar:58",
+  "bar:137",
+  "bar:57",
+  "bar:136",
+  "bar:56",
+  "bar:135",
+  "bar:55",
+  "bar:134",
+  "bar:54",
+  "bar:133",
+  "bar:53",
+  "bar:132",
+  "bar:52",
+  "bar:131",
+  "bar:51",
+  "bar:130",
+  "bar:50",
+  "bar:129",
+  "bar:49",
+  "bar:128",
+  "bar:48",
+  "bar:127",
+  "bar:47",
+  "bar:126",
+  "bar:46",
+  "bar:125",
+  "bar:45",
+  "bar:124",
+  "bar:44",
+  "bar:123",
+  "bar:43",
+  "bar:122",
+  "bar:42",
+  "bar:121",
+  "bar:41",
+  "bar:120",
+  "bar:40",
+  "bar:119",
+  "bar:39",
+  "bar:118",
+  "bar:38",
+  "bar:117",
+  "bar:37",
+  "bar:116",
+  "bar:36",
+  "bar:115",
+  "bar:35",
+  "bar:114",
+  "bar:34",
+  "bar:113",
+  "bar:33",
+  "bar:112",
+  "bar:32",
+  "bar:111",
+  "bar:31",
+  "bar:110",
+  "bar:30",
+  "bar:109",
+  "bar:29",
+  "bar:108",
+  "bar:28",
+  "bar:107",
+  "bar:27",
+  "bar:106",
+  "bar:26",
+  "bar:105",
+  "bar:25",
+  "bar:104",
+  "bar:24",
+  "bar:103",
+  "bar:23",
+  "bar:102",
+  "bar:22",
+  "bar:101",
+  "bar:21",
+  "bar:100",
+  "bar:20",
+  "bar:19",
+  "bar:99",
+  "bar:18",
+  "bar:98",
+  "bar:17",
+  "bar:97",
+  "bar:16",
+  "bar:96",
+  "bar:15",
+  "bar:95",
+  "bar:14",
+  "bar:94",
+  "bar:13",
+  "bar:93",
+  "bar:12",
+  "bar:92",
+  "bar:11",
+  "bar:91",
+  "bar:10",
+  "bar:90",
+  "bar:89",
+  "bar:9",
+  "bar:8",
+  "bar:88",
+  "bar:7",
+  "bar:87",
+  "bar:6",
+  "bar:86",
+  "bar:5",
+  "bar:85",
+  "bar:4",
+  "bar:84",
+  "bar:3",
+  "bar:83",
+  "bar:2",
+  "bar:82",
+  "bar:1",
+  "bar:81"
+ ],
+ "evidence_kind_event": [
+  "event:event-msft-earnings",
+  "event:event-aapl-earnings"
+ ],
+ "evidence_kind_filing": [
+  "filing:news-aapl-10q"
+ ],
+ "evidence_kind_fundamental": [
+  "fundamental:1",
+  "fundamental:2",
+  "fundamental:3",
+  "fundamental:4",
+  "fundamental:5",
+  "fundamental:6"
+ ],
+ "evidence_kind_news": [
+  "news:news-msft-cloud",
+  "news:news-aapl-chip",
+  "news:news-msft-capex",
+  "news:news-aapl-supply"
+ ],
+ "evidence_kind_web": [],
+ "evidence_limit_0": [],
+ "evidence_limit_3": [
+  "event:event-msft-earnings",
+  "event:event-aapl-earnings",
+  "bar:160"
+ ],
+ "evidence_msft": [
+  "event:event-msft-earnings",
+  "bar:160",
+  "bar:159",
+  "bar:158",
+  "bar:157",
+  "news:news-msft-cloud",
+  "bar:156",
+  "bar:155",
+  "bar:154",
+  "bar:153",
+  "bar:152",
+  "bar:151",
+  "news:news-msft-capex",
+  "bar:150",
+  "bar:149",
+  "bar:148",
+  "bar:147",
+  "bar:146",
+  "bar:145",
+  "bar:144",
+  "bar:143",
+  "bar:142",
+  "bar:141",
+  "bar:140",
+  "bar:139",
+  "bar:138",
+  "bar:137",
+  "bar:136",
+  "bar:135",
+  "bar:134",
+  "bar:133",
+  "bar:132",
+  "bar:131",
+  "bar:130",
+  "bar:129",
+  "bar:128",
+  "bar:127",
+  "bar:126",
+  "bar:125",
+  "bar:124",
+  "bar:123",
+  "bar:122",
+  "bar:121",
+  "bar:120",
+  "bar:119",
+  "bar:118",
+  "bar:117",
+  "bar:116",
+  "bar:115",
+  "bar:114",
+  "bar:113",
+  "bar:112",
+  "bar:111",
+  "bar:110",
+  "bar:109",
+  "bar:108",
+  "bar:107",
+  "bar:106",
+  "bar:105",
+  "bar:104",
+  "bar:103",
+  "bar:102",
+  "bar:101",
+  "bar:100",
+  "bar:99",
+  "bar:98",
+  "bar:97",
+  "bar:96",
+  "bar:95",
+  "bar:94",
+  "bar:93",
+  "bar:92",
+  "bar:91",
+  "bar:90",
+  "bar:89",
+  "bar:88",
+  "bar:87",
+  "bar:86",
+  "bar:85",
+  "bar:84",
+  "bar:83",
+  "bar:82",
+  "bar:81",
+  "fundamental:4",
+  "fundamental:5",
+  "fundamental:6"
+ ],
+ "evidence_search_services": [
+  "filing:news-aapl-10q"
+ ],
+ "evidence_search_upper": [
+  "news:news-msft-cloud"
+ ],
+ "evidence_since": [
+  "event:event-msft-earnings",
+  "event:event-aapl-earnings",
+  "bar:160",
+  "bar:80",
+  "bar:159",
+  "bar:79",
+  "filing:news-aapl-10q",
+  "bar:158",
+  "bar:78",
+  "bar:157",
+  "bar:77",
+  "news:news-msft-cloud",
+  "bar:156",
+  "bar:76",
+  "news:news-aapl-chip",
+  "bar:155",
+  "bar:75",
+  "bar:154",
+  "bar:74"
+ ],
+ "now": "2026-09-21T09:30:00",
+ "raw": {
+  "decision": {
+   "columns": [
+    "id",
+    "instrument_id",
+    "rationale",
+    "valuation_context",
+    "time_horizon",
+    "review_date",
+    "invalidation_criteria",
+    "thesis_id",
+    "thesis_claim_snapshot",
+    "created_at",
+    "status"
+   ],
+   "rows": [
+    [
+     "dec-seed-aapl",
+     "US:AAPL",
+     "Chip cycle into the earnings print; services carry the multiple.",
+     "32x forward earnings",
+     "3m",
+     "2026-09-21",
+     "Supply warnings escalate or services growth misses",
+     "da2334aea9b42284dcf9d62870e57631239bb7396a39773a8915c53f314e14fe",
+     "Apple's services line sustains double-digit growth",
+     "2026-09-11 09:30:00.000000",
+     "open"
+    ],
+    [
+     "dec-seed-msft",
+     "US:MSFT",
+     "Cloud demand durable; capex narrative needs watching.",
+     "30x forward earnings",
+     "6m",
+     "2026-10-27",
+     "Cloud bookings roll over",
+     "aea0f54851f323b039d57f40cf8b8a73cfec514ce5e3db6d8d6713400223e0ef",
+     "Cloud capex compresses margins into next year",
+     "2026-09-18 09:30:00.000000",
+     "open"
+    ]
+   ]
+  },
+  "decision_review": {
+   "columns": [
+    "id",
+    "decision_id",
+    "note",
+    "created_at",
+    "status"
+   ],
+   "rows": [
+    [
+     1,
+     "dec-seed-aapl",
+     "Tracking plan; chip cycle on schedule.",
+     "2026-08-21 09:30:00.000000",
+     null
+    ]
+   ]
+  },
+  "thesis": {
+   "columns": [
+    "id",
+    "claim",
+    "scope",
+    "assumptions",
+    "falsifiers",
+    "targets",
+    "time_horizon",
+    "created_at",
+    "status"
+   ],
+   "rows": [
+    [
+     "aea0f54851f323b039d57f40cf8b8a73cfec514ce5e3db6d8d6713400223e0ef",
+     "Cloud capex compresses margins into next year",
+     "US:MSFT",
+     "[\"Capex guidance is credible\", \"Pricing holds\"]",
+     "[\"Free-cash margin expands despite the capex step-up\"]",
+     "[\"US:MSFT\"]",
+     "6m",
+     "2026-09-21 09:30:00.000000",
+     "active"
+    ],
+    [
+     "da2334aea9b42284dcf9d62870e57631239bb7396a39773a8915c53f314e14fe",
+     "Apple's services line sustains double-digit growth",
+     "US:AAPL",
+     "[\"Services mix keeps rising\", \"Churn stays flat\"]",
+     "[\"Two consecutive quarters of single-digit services growth\"]",
+     "[\"US:AAPL\"]",
+     "12m",
+     "2026-09-21 09:30:00.000000",
+     "active"
+    ]
+   ]
+  },
+  "thesis_evidence": {
+   "columns": [
+    "thesis_id",
+    "evidence_id",
+    "side",
+    "note",
+    "accepted"
+   ],
+   "rows": [
+    [
+     "aea0f54851f323b039d57f40cf8b8a73cfec514ce5e3db6d8d6713400223e0ef",
+     "news:news-msft-capex",
+     "support",
+     "Guidance implies margin pressure.",
+     1
+    ],
+    [
+     "da2334aea9b42284dcf9d62870e57631239bb7396a39773a8915c53f314e14fe",
+     "news:news-aapl-10q",
+     "support",
+     "Filing confirms the growth rate.",
+     1
+    ],
+    [
+     "da2334aea9b42284dcf9d62870e57631239bb7396a39773a8915c53f314e14fe",
+     "news:news-aapl-supply",
+     "against",
+     "Candidate: shortages would slow device attach.",
+     0
+    ]
+   ]
+  }
+ },
+ "review_queue": [
+  {
+   "detail": "sec_edgar",
+   "evidence_id": "filing:news-aapl-10q",
+   "instrument_id": "US:AAPL",
+   "kind": "primary_disclosure",
+   "thesis_id": null,
+   "title": "Apple 10-Q: services revenue up 12% year on year",
+   "ts": "2026-09-18T16:05:00"
+  },
+  {
+   "detail": "no primary disclosure found",
+   "evidence_id": null,
+   "instrument_id": "US:MSFT",
+   "kind": "stale",
+   "thesis_id": null,
+   "title": "Coverage needs review",
+   "ts": null
+  },
+  {
+   "detail": "thin recent evidence; low source diversity",
+   "evidence_id": null,
+   "instrument_id": "US:MSFT",
+   "kind": "thin_evidence",
+   "thesis_id": null,
+   "title": "Evidence coverage is thin",
+   "ts": null
+  }
+ ],
+ "seed": "fixtures/golden_seed.db",
+ "setup_checks": [
+  {
+   "fix": "Set OPENROUTER_API_KEY in .env or press p on the Config screen",
+   "name": "LLM provider (openrouter)",
+   "ok": false
+  },
+  {
+   "fix": "Create config.toml",
+   "name": "Config file",
+   "ok": false
+  },
+  {
+   "fix": "Check db_path in config.toml",
+   "name": "Database",
+   "ok": true
+  },
+  {
+   "fix": "Set [plugins.sec_edgar].contact",
+   "name": "SEC EDGAR contact",
+   "ok": false
+  },
+  {
+   "fix": "Gather evidence",
+   "name": "Price history",
+   "ok": true
+  }
+ ],
+ "theses": [
+  {
+   "assumptions": [
+    "Capex guidance is credible",
+    "Pricing holds"
+   ],
+   "claim": "Cloud capex compresses margins into next year",
+   "created_at": "2026-09-21T09:30:00",
+   "falsifiers": [
+    "Free-cash margin expands despite the capex step-up"
+   ],
+   "id": "aea0f54851f323b039d57f40cf8b8a73cfec514ce5e3db6d8d6713400223e0ef",
+   "scope": "US:MSFT",
+   "status": "active",
+   "targets": [
+    "US:MSFT"
+   ],
+   "time_horizon": "6m"
+  },
+  {
+   "assumptions": [
+    "Services mix keeps rising",
+    "Churn stays flat"
+   ],
+   "claim": "Apple's services line sustains double-digit growth",
+   "created_at": "2026-09-21T09:30:00",
+   "falsifiers": [
+    "Two consecutive quarters of single-digit services growth"
+   ],
+   "id": "da2334aea9b42284dcf9d62870e57631239bb7396a39773a8915c53f314e14fe",
+   "scope": "US:AAPL",
+   "status": "active",
+   "targets": [
+    "US:AAPL"
+   ],
+   "time_horizon": "12m"
+  }
+ ],
+ "thesis_evidence": {
+  "aea0f54851f323b039d57f40cf8b8a73cfec514ce5e3db6d8d6713400223e0ef": [
+   {
+    "accepted": true,
+    "evidence_id": "news:news-msft-capex",
+    "note": "Guidance implies margin pressure.",
+    "side": "support",
+    "thesis_id": "aea0f54851f323b039d57f40cf8b8a73cfec514ce5e3db6d8d6713400223e0ef"
+   }
+  ],
+  "da2334aea9b42284dcf9d62870e57631239bb7396a39773a8915c53f314e14fe": [
+   {
+    "accepted": true,
+    "evidence_id": "news:news-aapl-10q",
+    "note": "Filing confirms the growth rate.",
+    "side": "support",
+    "thesis_id": "da2334aea9b42284dcf9d62870e57631239bb7396a39773a8915c53f314e14fe"
+   },
+   {
+    "accepted": false,
+    "evidence_id": "news:news-aapl-supply",
+    "note": "Candidate: shortages would slow device attach.",
+    "side": "against",
+    "thesis_id": "da2334aea9b42284dcf9d62870e57631239bb7396a39773a8915c53f314e14fe"
+   }
+  ]
+ }
+}
