@@ -12,7 +12,9 @@ use delta_core::models::{AssetClass, Bar, Instrument};
 use delta_services::{analytics, asset_metrics::AssetMetrics};
 
 use crate::braille::BrailleGraph;
-use crate::screens::{grouped, HomeFeed, HomeState, MetricsData, WatchEntry, WatchlistState};
+use crate::screens::{
+    grouped, Footer, HomeFeed, HomeState, MetricsData, SettingsData, WatchEntry, WatchlistState,
+};
 
 /// Golden-exporter constants: 80 seeded bars.
 pub const BAR_COUNT: usize = 80;
@@ -103,6 +105,12 @@ pub struct Desk {
     pub last_ingest: Option<BTreeMap<String, usize>>,
     /// Live Home overview values (headline, pulse, upcoming, staleness).
     pub feed: HomeFeed,
+    /// The Settings screen's data (config, providers, diagnostics).
+    pub settings: SettingsData,
+    /// The footer cells implied by `settings` at load time.
+    pub settings_footer: Footer,
+    /// Where edits write (`config.toml`); `None` in the offline environment.
+    pub config_path: Option<PathBuf>,
 }
 
 impl Default for Desk {
@@ -116,23 +124,13 @@ impl Desk {
     /// offline seed when either is missing or empty.
     pub fn open() -> Desk {
         match Self::try_real(Path::new("config.toml")) {
-            Some((instruments, db_path, feed)) => Desk {
-                instruments,
-                selected: 0,
-                range_index: 2, // "1m"
-                scrub: None,
-                live: BTreeMap::new(),
-                metrics: BTreeMap::new(),
-                asset_metrics: BTreeMap::new(),
-                source: Source::Real(db_path),
-                last_ingest: None,
-                feed,
-            },
+            Some(desk) => desk,
+
             None => Self::offline(),
         }
     }
 
-    fn try_real(config_path: &Path) -> Option<(Vec<InstrumentDesk>, PathBuf, HomeFeed)> {
+    fn try_real(config_path: &Path) -> Option<Desk> {
         if !config_path.exists() {
             return None;
         }
@@ -151,16 +149,34 @@ impl Desk {
             .map(|d| d.instrument.id.clone())
             .collect();
         let feed = load_feed(&db, &ids);
-        Some((instruments, db_path, feed))
+        let env_path = PathBuf::from(".env");
+        let now = now_naive();
+        let settings = SettingsData::load(&app, &db_path, &env_path, now);
+        let settings_footer = settings.footer(now);
+        Some(Desk {
+            instruments,
+            selected: 0,
+            range_index: 2, // "1m"
+            scrub: None,
+            live: BTreeMap::new(),
+            metrics: BTreeMap::new(),
+            asset_metrics: BTreeMap::new(),
+            source: Source::Real(db_path),
+            last_ingest: None,
+            feed,
+            settings,
+            settings_footer,
+            config_path: Some(config_path.to_path_buf()),
+        })
     }
 
     /// Reload the configured targets after an add/remove operation. The
     /// service owns persistence; this only rebuilds the displayed universe.
     pub fn reload_targets_from(&mut self, config_path: &Path) -> Result<(), String> {
-        let (instruments, db_path, feed) = Self::try_real(config_path)
+        let refreshed = Self::try_real(config_path)
             .ok_or_else(|| "unable to load targets from config and database".to_string())?;
         let selected_id = self.current().map(|current| current.instrument.id.clone());
-        self.instruments = instruments;
+        self.instruments = refreshed.instruments;
         self.selected = selected_id
             .and_then(|id| {
                 self.instruments
@@ -175,13 +191,18 @@ impl Desk {
             .retain(|id, _| self.instruments.iter().any(|row| row.instrument.id == *id));
         self.asset_metrics
             .retain(|(id, _), _| self.instruments.iter().any(|row| row.instrument.id == *id));
-        self.source = Source::Real(db_path);
-        self.feed = feed;
+        self.source = refreshed.source;
+        self.feed = refreshed.feed;
+        self.settings = refreshed.settings;
+        self.settings_footer = refreshed.settings_footer;
+        self.config_path = refreshed.config_path;
         Ok(())
     }
 
     /// The offline golden environment (in-memory; nothing touches disk).
     pub fn offline() -> Desk {
+        let settings = crate::screens::exporter_world();
+        let settings_footer = settings.footer(now_naive());
         Desk {
             instruments: vec![InstrumentDesk::offline("AAPL")],
             selected: 0,
@@ -193,7 +214,24 @@ impl Desk {
             source: Source::Offline,
             last_ingest: None,
             feed: HomeFeed::seed(),
+            settings,
+            settings_footer,
+            config_path: None,
         }
+    }
+
+    /// Reload the Settings data (after `r` or an edit).
+    pub fn reload_settings(&mut self) {
+        let Some(config_path) = self.config_path.clone() else {
+            return;
+        };
+        let Ok((_, app)) = load_config(&config_path) else {
+            return;
+        };
+        let db_path = PathBuf::from(&app.db_path);
+        let now = now_naive();
+        self.settings = SettingsData::load(&app, &db_path, Path::new(".env"), now);
+        self.settings_footer = self.settings.footer(now);
     }
 
     /// The instrument the inspector shows.

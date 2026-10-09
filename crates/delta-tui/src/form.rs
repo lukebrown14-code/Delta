@@ -26,6 +26,8 @@ pub struct Field {
     pub validator: Option<Validator>,
     /// The validation error currently shown under the field.
     pub error: Option<String>,
+    /// Secrets are held for submission but painted as bullets.
+    pub secret: bool,
 }
 
 impl Field {
@@ -35,7 +37,13 @@ impl Field {
             input: DeltaInput::new(placeholder),
             validator,
             error: None,
+            secret: false,
         }
+    }
+
+    pub fn secret(mut self) -> Self {
+        self.secret = true;
+        self
     }
 
     pub fn value(&self) -> &str {
@@ -159,7 +167,9 @@ impl Form {
                 Style::fg(if focused { color::BLUE } else { color::MUTED }).bold(),
             );
             y += 1;
-            field.input.draw_screen(screen, x, y, w, focused);
+            field
+                .input
+                .draw_screen_masked(screen, x, y, w, focused, field.secret);
             y += 3;
             if let Some(error) = &field.error {
                 screen.text(x, y, error, Style::fg(color::RED));
@@ -208,6 +218,17 @@ pub fn required(value: &str) -> Result<(), String> {
 mod tests {
     use super::*;
     use crossterm::event::KeyModifiers;
+
+    #[test]
+    fn secret_field_never_paints_its_value() {
+        let mut form = Form::new("connect", vec![Field::new("API key", "key", None).secret()]);
+        form.fields[0].input.set_value("secret-value");
+        let mut screen = Screen::new(60, 10);
+        form.draw_screen(&mut screen, 1, 1, 40);
+        let visible: String = screen.cells.iter().map(|cell| cell.ch).collect();
+        assert!(!visible.contains("secret-value"));
+        assert!(visible.contains("••••••••••••"));
+    }
 
     fn form() -> Form {
         Form::new(

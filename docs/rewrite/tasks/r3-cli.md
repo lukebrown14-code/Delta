@@ -26,6 +26,21 @@ All commands use the same config, `.env` and DB as the TUI, and log to stderr.
 
 ## Done
 
-- [ ] Integration tests run the binary against a temp copy of `golden_seed.db` + FakeLLM + wiremock.
-- [ ] `delta --version` launch benchmark unchanged.
-- [ ] Release workflow still builds the `delta` binary.
+- [x] Integration tests run the binary against a temp copy of `golden_seed.db` + FakeLLM + wiremock.
+- [x] `delta --version` launch benchmark unchanged.
+- [x] Release workflow still builds the `delta` binary.
+
+## Notes (implementation, Oct 2026)
+
+- Per the spec #26 sequencing note, the subcommands were rebuilt on the base
+  binary instead of a new `crates/delta/`: `delta-tui/src/main.rs` dispatches
+  to `delta-tui/src/cli.rs` before the TUI launches, so no new crate or `clap`
+  dependency was needed and the release/dist target is unchanged.
+- `report` required the reports service early: `delta-services/src/reports.rs`
+  + `schemas.rs` are faithful donor ports (adapted to base's `evidence`
+  signature and `sentiment_in_range`), with the donor's service tests; the
+  r3-research stream (#30) reviews and owns them from here.
+- Gather exit codes: base `ingest` is fail-fast per Python parity (any hard
+  source failure exits 1), and the offline-configurable sources skip failing
+  feeds by design — the card's "exit 1 if every source failed" is therefore
+  the stronger "exit 1 if the ingest stage failed".

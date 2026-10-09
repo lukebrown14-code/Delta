@@ -7,6 +7,7 @@
 mod ask;
 mod decisions;
 mod home;
+pub mod live;
 mod research;
 mod settings;
 mod status_bar;
@@ -17,8 +18,12 @@ pub use ask::{draw_ask, draw_ask_narrow, draw_ask_wide};
 pub use decisions::{draw_decisions, draw_decisions_narrow, draw_decisions_wide};
 pub use home::{draw_home, draw_home_narrow, draw_home_wide, feed_seed, HomeFeed, HomeState};
 pub use research::{draw_research, draw_research_narrow, draw_research_wide};
-pub use settings::{draw_settings, draw_settings_narrow, draw_settings_wide};
-pub use status_bar::NarrowTab;
+pub use settings::{
+    comma, draw_settings, draw_settings_narrow, draw_settings_wide, exporter_world, human_size,
+    stamp, SettingsData, SettingsDiagnostics, SettingsFocus, SettingsMarket, SettingsSource,
+    SettingsState, SettingsView,
+};
+pub use status_bar::{Footer, NarrowTab};
 pub use theses::{draw_theses, draw_theses_narrow, draw_theses_wide};
 pub use watchlist::{
     chart_window, draw_glossary_overlay, draw_watchlist, draw_watchlist_narrow,

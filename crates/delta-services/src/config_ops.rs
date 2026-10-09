@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use delta_core::config::{load_toml, update_config, AppConfig};
-use delta_core::models::AssetClass;
+use delta_core::models::{AssetClass, Instrument};
 use serde_json::{json, Value};
 
 use crate::error::ServiceError;
@@ -295,6 +295,71 @@ pub fn add_target(
     Ok(())
 }
 
+/// Edit an existing target's kind, market and instruments while preserving
+/// its label, tags, notes and asset class. The update stays in the target's
+/// original section (including legacy watchlists).
+pub fn update_target(
+    config_path: &Path,
+    name: &str,
+    kind: &str,
+    market: &str,
+    tickers: &[String],
+) -> Result<(), ServiceError> {
+    let kind = kind.trim().to_lowercase();
+    if !KNOWN_KINDS.contains(&kind.as_str()) {
+        return Err(ServiceError::invalid(format!(
+            "unknown target kind {kind:?}"
+        )));
+    }
+    let market = market.trim().to_lowercase();
+    if !market_profiles(config_path)?.contains_key(&market) {
+        return Err(ServiceError::invalid(format!("unknown market {market:?}")));
+    }
+    let tickers: Vec<String> = tickers
+        .iter()
+        .map(|ticker| ticker.trim().to_uppercase())
+        .filter(|ticker| !ticker.is_empty())
+        .collect();
+    if kind == "market" && !tickers.is_empty() {
+        return Err(ServiceError::invalid("market target takes no instruments"));
+    }
+    if kind != "market" && tickers.is_empty() {
+        return Err(ServiceError::invalid(format!(
+            "{kind} target requires instruments"
+        )));
+    }
+    let raw = load_toml(config_path).map_err(|e| ServiceError::invalid(e.to_string()))?;
+    let section = ["targets", "watchlists"]
+        .into_iter()
+        .find(|section| {
+            raw.get(*section)
+                .and_then(Value::as_object)
+                .is_some_and(|targets| targets.contains_key(name))
+        })
+        .ok_or_else(|| ServiceError::invalid(format!("unknown target: {name}")))?;
+    update_config(
+        |raw| {
+            if let Some(spec) = raw
+                .get_mut(section)
+                .and_then(Value::as_object_mut)
+                .and_then(|targets| targets.get_mut(name))
+                .and_then(Value::as_object_mut)
+            {
+                spec.insert("kind".to_string(), Value::from(kind));
+                spec.insert("market".to_string(), Value::from(market));
+                if tickers.is_empty() {
+                    spec.remove("tickers");
+                } else {
+                    spec.insert("tickers".to_string(), json!(tickers));
+                }
+            }
+        },
+        config_path,
+    )
+    .map_err(|e| ServiceError::invalid(e.to_string()))?;
+    Ok(())
+}
+
 /// Remove a watch target from whichever section holds it (`remove_target`).
 pub fn remove_target(config_path: &Path, name: &str) -> Result<(), ServiceError> {
     let raw = load_toml(config_path).map_err(|e| ServiceError::invalid(e.to_string()))?;
@@ -323,6 +388,49 @@ pub fn remove_target(config_path: &Path, name: &str) -> Result<(), ServiceError>
 /// Placeholder so LEGACY_KIND is referenced from this module's public surface.
 pub fn legacy_kind() -> &'static str {
     LEGACY_KIND
+}
+
+/// Resolve the full runtime universe, including legacy shim targets, and merge
+/// overlapping memberships before subscribing or gathering.
+pub fn configured_universe(config_path: &Path) -> Result<Vec<Instrument>, ServiceError> {
+    let (_, cfg) = delta_core::config::load_config(config_path)
+        .map_err(|e| ServiceError::invalid(e.to_string()))?;
+    let mut merged: BTreeMap<String, Instrument> = BTreeMap::new();
+    for (name, spec) in &cfg.targets {
+        let target = target_from_spec(name, spec, false)?;
+        for mut instrument in target.instruments() {
+            let mut memberships = Vec::new();
+            instrument.watchlists.retain(|membership| {
+                if memberships.contains(membership) {
+                    false
+                } else {
+                    memberships.push(membership.clone());
+                    true
+                }
+            });
+            let profile = cfg.markets.get(&instrument.market).ok_or_else(|| {
+                ServiceError::invalid(format!(
+                    "target {name:?} names unknown market {:?}",
+                    instrument.market
+                ))
+            })?;
+            instrument.currency.clone_from(&profile.currency);
+            if let Some(existing) = merged.get_mut(&instrument.id) {
+                for membership in instrument.watchlists {
+                    if !existing.watchlists.contains(&membership) {
+                        existing.watchlists.push(membership);
+                    }
+                }
+                existing.tags.extend(instrument.tags);
+                if instrument.asset_class != AssetClass::Equity {
+                    existing.asset_class = instrument.asset_class;
+                }
+            } else {
+                merged.insert(instrument.id.clone(), instrument);
+            }
+        }
+    }
+    Ok(merged.into_values().collect())
 }
 
 fn regex_ok(pattern: &str, value: &str) -> bool {

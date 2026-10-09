@@ -1,0 +1,26 @@
+{
+  "scenarios": [
+    {
+      "file": "live-settings-80x24.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "80x24",
+      "state": "live-settings",
+      "tier": "A"
+    },
+    {
+      "file": "live-settings-120x40.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "120x40",
+      "state": "live-settings",
+      "tier": "A"
+    },
+    {
+      "file": "live-settings-200x50.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "200x50",
+      "state": "live-settings",
+      "tier": "A"
+    }
+  ],
+  "seed": "fixtures/golden_seed.db"
+}
