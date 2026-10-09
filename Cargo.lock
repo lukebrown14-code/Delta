@@ -471,6 +471,7 @@ dependencies = [
  "pulldown-cmark",
  "ratatui",
  "serde_json",
+ "tempfile",
  "tokio",
  "tokio-tungstenite",
  "tui-textarea",

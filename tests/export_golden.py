@@ -40,7 +40,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent))  # conftest / test_tui imports
 
 from conftest import seed_bars  # noqa: E402
-from golden_scenarios import SCENARIOS, Scenario  # noqa: E402
+from golden_scenarios import LIVE_SCENARIOS, SCENARIOS, Scenario  # noqa: E402
 from test_tui import AAPL, FakeRig  # noqa: E402
 
 from delta.asset_metrics import AssetMetrics  # noqa: E402
@@ -53,6 +53,25 @@ BAR_COUNT = 80
 
 #: The seed DB every scenario renders against (repo-relative manifest path).
 SEED = "fixtures/golden_seed.db"
+
+#: The populated (``live-*``) world's config: both built-in markets, a chosen
+#: model, the SEC plugin configured — everything the Settings screen shows.
+POPULATED_CONFIG = {
+    "base_currency": "AUD",
+    "db_path": "delta.db",
+    "reports_dir": "reports",
+    "targets": {"apple": {"kind": "company", "market": "us", "tickers": ["AAPL"]}},
+    "llm": {"provider": "openrouter", "model": "test-model"},
+    "plugins": {"sec_edgar": {"enabled": True, "contact": "oracle@example.test"}},
+    "markets": {
+        "us": {"label": "United States", "currency": "USD", "yahoo_suffix": ""},
+        "asx": {
+            "label": "Australian Securities Exchange",
+            "currency": "AUD",
+            "yahoo_suffix": ".AX",
+        },
+    },
+}
 
 #: rich.Style boolean attributes recorded per cell (sorted in the output).
 _STYLE_ATTRS = (
@@ -121,16 +140,21 @@ def _capture_screen(app: DeltaApp) -> list[list[dict]]:
 
 
 def export_scenario(scenario: Scenario, tmp_path: Path, out_dir: Path) -> Path:
+    import shutil
     import time_machine
     import tomli_w
 
     from delta import tui
+    from delta.core.config import build_config
+    from delta.plugins.data.sec_edgar import SECEdgar
     from delta.quotes import YahooQuotes
 
     async def offline(self):
         self.on_state("offline test")
         await asyncio.Event().wait()
 
+    populated = scenario.name.startswith("live-")
+    seed_block: dict | None = None
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(YahooQuotes, "run", offline)
         mp.setattr(tui.screens.targets, "fetch_asset_metrics", lambda *a, **k: _metric())
@@ -138,15 +162,33 @@ def export_scenario(scenario: Scenario, tmp_path: Path, out_dir: Path) -> Path:
             "delta.tui.screens.config.read_env_value", lambda name: "test-key" if name else ""
         )
         mp.setattr("delta.tui.screens.config._human_size", lambda size: "4 KB")
-        tmp_path.joinpath("config.toml").write_text(
-            tomli_w.dumps(
-                {"targets": {"apple": {"kind": "company", "market": "us", "tickers": ["AAPL"]}}}
-            ),
-            encoding="utf-8",
-        )
-        engine = init_engine(tmp_path / "delta.db")
-        seed_bars(engine, AAPL.id, n=BAR_COUNT, start=BAR_START, price_fn=_price)
-        rig = FakeRig(engine, [AAPL])
+        if populated:
+            # The populated world: the shared seed DB is the store, and the
+            # config carries every section the Settings screen renders.
+            config = POPULATED_CONFIG
+            tmp_path.joinpath("config.toml").write_text(tomli_w.dumps(config), "utf-8")
+            shutil.copy2(Path(__file__).resolve().parent.parent / SEED, tmp_path / "delta.db")
+            engine = init_engine(tmp_path / "delta.db")
+            rig = FakeRig(engine, [AAPL.model_copy(update={"watchlists": ("apple",)})])
+            rig.cfg = build_config(config)
+            rig.plugins = {"sec_edgar": SECEdgar()}
+            seed_block = {
+                "version": 1,
+                "now": NOW.isoformat(),
+                "config": config,
+                "provider_connected": True,
+                "database_size": "delta.db · 4 KB",
+            }
+        else:
+            tmp_path.joinpath("config.toml").write_text(
+                tomli_w.dumps(
+                    {"targets": {"apple": {"kind": "company", "market": "us", "tickers": ["AAPL"]}}}
+                ),
+                encoding="utf-8",
+            )
+            engine = init_engine(tmp_path / "delta.db")
+            seed_bars(engine, AAPL.id, n=BAR_COUNT, start=BAR_START, price_fn=_price)
+            rig = FakeRig(engine, [AAPL])
         rig.cfg.db_path = "delta.db"
         rig.cfg.reports_dir = "reports"
         import os
@@ -175,6 +217,14 @@ def export_scenario(scenario: Scenario, tmp_path: Path, out_dir: Path) -> Path:
         "tier": scenario.gate_tier,
         "rows": rows,
     }
+    if seed_block is not None:
+        payload["seed"] = seed_block
+        payload["ui"] = {
+            "keys": list(scenario.keys),
+            "diagnostics_open": scenario.size[0] >= 100,
+            "focus": "model",
+            "selected_index": 0,
+        }
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / scenario.filename
     path.write_text(
@@ -186,10 +236,12 @@ def export_scenario(scenario: Scenario, tmp_path: Path, out_dir: Path) -> Path:
 def export_all(out_dir: Path, state: str | None = None, size: str | None = None) -> None:
     import tempfile
 
+    everything = SCENARIOS + LIVE_SCENARIOS
     selected = [
         s
-        for s in SCENARIOS
-        if (state is None or s.name == state) and (size is None or s.size_label == size)
+        for s in everything
+        if (state is None or s.name == state or (state == "live" and s.name.startswith("live-")))
+        and (size is None or s.size_label == size)
     ]
     if not selected:
         raise SystemExit(f"no scenario matches state={state!r} size={size!r}")
@@ -209,10 +261,16 @@ def export_all(out_dir: Path, state: str | None = None, size: str | None = None)
                 "seed": SEED,
             }
             for s in selected
-        ]
+        ],
     }
     out_dir.mkdir(parents=True, exist_ok=True)
-    (out_dir / "manifest.json").write_text(
+    # Populated scenarios are listed in their own manifest; the Rust harness
+    # discovers screen states from it (a state is manifest + fixture, never
+    # new harness code).
+    manifest_name = (
+        "live-manifest.json" if all(s.name.startswith("live-") for s in selected) else "manifest.json"
+    )
+    (out_dir / manifest_name).write_text(
         json.dumps(manifest, ensure_ascii=False, sort_keys=True, indent=2) + "\n", encoding="utf-8"
     )
     for f in files:
@@ -228,6 +286,45 @@ def test_golden_export_is_deterministic(tmp_path):
     assert a == b and a
     for name in a:
         assert (tmp_path / "a" / name).read_bytes() == (tmp_path / "b" / name).read_bytes(), name
+
+
+def test_live_settings_export_is_deterministic(tmp_path):
+    """The populated Settings export is reproducible (seed block and rows)."""
+    export_all(tmp_path / "a", state="live-settings", size="120x40")
+    export_all(tmp_path / "b", state="live-settings", size="120x40")
+    for name in ("live-settings-120x40.json", "live-manifest.json"):
+        assert (tmp_path / "a" / name).read_bytes() == (tmp_path / "b" / name).read_bytes(), name
+
+
+def test_live_settings_seed_describes_the_shared_world(tmp_path):
+    """The populated fixture carries its config and points at the shared seed DB.
+
+    The Rust live harness (crates/delta-tui/tests/live_golden.rs) rebuilds the
+    screen state from the shared seed DB plus this seed block; everything the
+    DB cannot hold (the config the exporter booted with, the frozen clock, the
+    pinned database size) must therefore be embedded here.
+    """
+    export_all(tmp_path, state="live-settings", size="120x40")
+    payload = json.loads((tmp_path / "live-settings-120x40.json").read_text(encoding="utf-8"))
+    assert payload["state"] == "live-settings"
+    assert payload["size"] == [120, 40]
+    seed = payload["seed"]
+    assert seed["version"] == 1
+    assert seed["now"] == NOW.isoformat()
+    assert seed["config"]["llm"] == {"provider": "openrouter", "model": "test-model"}
+    assert seed["config"]["markets"]["asx"]["yahoo_suffix"] == ".AX"
+    assert seed["config"]["plugins"]["sec_edgar"] == {
+        "enabled": True,
+        "contact": "oracle@example.test",
+    }
+    assert seed["provider_connected"] is True
+    assert seed["database_size"] == "delta.db · 4 KB"
+    assert payload["ui"]["keys"] == ["c"]
+    assert payload["ui"]["diagnostics_open"] is True
+    manifest = json.loads((tmp_path / "live-manifest.json").read_text(encoding="utf-8"))
+    assert manifest["scenarios"] == [
+        {"state": "live-settings", "size": "120x40", "tier": "A", "file": "live-settings-120x40.json", "seed": SEED}
+    ]
 
 
 def main() -> None:

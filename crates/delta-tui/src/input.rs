@@ -84,6 +84,20 @@ impl DeltaInput {
     /// `$text-disabled`, and a block cursor over the character at the
     /// caret (styled by `input-cursor-*`: value colours inverted).
     pub fn draw_screen(&self, screen: &mut Screen, x: usize, y: usize, w: usize, focused: bool) {
+        self.draw_screen_masked(screen, x, y, w, focused, false);
+    }
+
+    /// Draw a secret input with one bullet per character. The underlying
+    /// value remains available to the form on submit but never enters cells.
+    pub fn draw_screen_masked(
+        &self,
+        screen: &mut Screen,
+        x: usize,
+        y: usize,
+        w: usize,
+        focused: bool,
+        masked: bool,
+    ) {
         let border = if focused {
             color::BLUE
         } else {
@@ -106,7 +120,12 @@ impl DeltaInput {
             screen.put(x + w - 1, cy, '│', edge);
         }
         screen.fill(x + 1, y + 1, x + w - 1, y + 2, bg);
-        let value = self.value();
+        let rendered = if masked {
+            "•".repeat(self.value().chars().count())
+        } else {
+            self.value().to_string()
+        };
+        let value = rendered.as_str();
         let content_width = w.saturating_sub(2 + 2 * PADDING);
         if value.is_empty() {
             let placeholder = self.placeholder.as_str();
