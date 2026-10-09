@@ -211,6 +211,7 @@ pub async fn extract_events(
                     "body": r.body.clone().unwrap_or_default(),
                 })).collect::<Vec<_>>(),
             });
+            let schema = crate::schemas::event_batch();
             let (draft, _result) = match delta_llm::structured::structured::<EventBatch>(
                 client,
                 db,
@@ -218,7 +219,7 @@ pub async fn extract_events(
                 model,
                 "extract_v1.j2",
                 &vars,
-                None,
+                Some(&schema),
             )
             .await
             {
