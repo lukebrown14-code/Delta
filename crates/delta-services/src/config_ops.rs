@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use delta_core::config::{load_toml, update_config, AppConfig};
-use delta_core::models::AssetClass;
+use delta_core::models::{AssetClass, Instrument};
 use serde_json::{json, Value};
 
 use crate::error::ServiceError;
@@ -323,6 +323,49 @@ pub fn remove_target(config_path: &Path, name: &str) -> Result<(), ServiceError>
 /// Placeholder so LEGACY_KIND is referenced from this module's public surface.
 pub fn legacy_kind() -> &'static str {
     LEGACY_KIND
+}
+
+/// Resolve the full runtime universe, including legacy shim targets, and merge
+/// overlapping memberships before subscribing or gathering.
+pub fn configured_universe(config_path: &Path) -> Result<Vec<Instrument>, ServiceError> {
+    let (_, cfg) = delta_core::config::load_config(config_path)
+        .map_err(|e| ServiceError::invalid(e.to_string()))?;
+    let mut merged: BTreeMap<String, Instrument> = BTreeMap::new();
+    for (name, spec) in &cfg.targets {
+        let target = target_from_spec(name, spec, false)?;
+        for mut instrument in target.instruments() {
+            let mut memberships = Vec::new();
+            instrument.watchlists.retain(|membership| {
+                if memberships.contains(membership) {
+                    false
+                } else {
+                    memberships.push(membership.clone());
+                    true
+                }
+            });
+            let profile = cfg.markets.get(&instrument.market).ok_or_else(|| {
+                ServiceError::invalid(format!(
+                    "target {name:?} names unknown market {:?}",
+                    instrument.market
+                ))
+            })?;
+            instrument.currency.clone_from(&profile.currency);
+            if let Some(existing) = merged.get_mut(&instrument.id) {
+                for membership in instrument.watchlists {
+                    if !existing.watchlists.contains(&membership) {
+                        existing.watchlists.push(membership);
+                    }
+                }
+                existing.tags.extend(instrument.tags);
+                if instrument.asset_class != AssetClass::Equity {
+                    existing.asset_class = instrument.asset_class;
+                }
+            } else {
+                merged.insert(instrument.id.clone(), instrument);
+            }
+        }
+    }
+    Ok(merged.into_values().collect())
 }
 
 fn regex_ok(pattern: &str, value: &str) -> bool {
