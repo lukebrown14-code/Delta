@@ -1,6 +1,7 @@
 //! Pipeline services shared by the TUI (port of `delta/services.py`).
 
 pub mod analytics;
+pub mod asset_metrics;
 pub mod brief;
 pub mod chat;
 pub mod config_ops;
@@ -11,6 +12,7 @@ pub mod fixture;
 pub mod pipeline;
 pub mod reports;
 pub mod review;
+pub mod schemas;
 pub mod sentiment;
 pub mod setup;
 pub mod targets;
@@ -22,10 +24,14 @@ pub use analytics::{
     data_health, latest_headline, latest_report, llm_costs, pulse, recent_closes, total_spend,
     upcoming_events, CostRow, DataHealth, Headline, Pulse, ReportStamp, Upcoming, FILING_SOURCE,
 };
+pub use asset_metrics::{
+    fetch_asset_metrics, fetch_asset_metrics_configured, group_values, groups_for, metric_help,
+    normalize_asset_metrics, profile_for, range_spec, AssetMetrics, MetricGroups,
+};
 pub use brief::{brief_for, build_brief, Brief, Section, PRIMARY_FILING_SOURCES};
 pub use config_ops::{
-    add_target, legacy_kind, market_profiles, remove_market, remove_target, save_market,
-    set_plugin_enabled, target_specs,
+    add_target, configured_universe, legacy_kind, market_profiles, remove_market, remove_target,
+    save_market, set_plugin_enabled, target_specs,
 };
 pub use decisions::{
     append_review, create_decision, delete_decision, due_reviews, get_decision, list_decisions,
@@ -37,7 +43,14 @@ pub use evidence::{
     cite, evidence, evidence_by_ids, falsifier_hit, source_quality, EvidenceItem,
     PRIMARY_DISCLOSURE_SOURCES,
 };
-pub use pipeline::{default_since, event_id, extract_events, ingest, ExtractResult, IngestResult};
+pub use pipeline::{
+    default_since, event_id, extract_events, gather, gather_configured, ingest, ExtractResult,
+    GatherResult, IngestResult,
+};
+pub use reports::{
+    build_report, generate_report_configured, read_report, render_markdown, report_history,
+    write_report, Claim, Report, ReportDraft,
+};
 pub use review::{
     evidence_audit, primary_sources, primary_sources_for, review_queue, EvidenceAudit, PluginInfo,
     ReviewItem, EVIDENCE_WINDOW, MIN_NON_PRICE_ITEMS, MIN_SOURCES, NEWS_STALE_AFTER,
