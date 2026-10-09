@@ -5,6 +5,10 @@
 use serde_json::Value;
 use std::collections::BTreeMap;
 
+#[path = "metrics_profiles.rs"]
+pub mod profiles;
+pub use profiles::{groups_for, keys_for, METRIC_HELP};
+
 /// `(label, info key, format)` in card order (equity profile).
 pub const EQUITY_KEYS: &[(&str, &str, &str)] = &[
     ("Revenue growth", "revenueGrowth", "ratio"),

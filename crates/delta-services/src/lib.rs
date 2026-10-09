@@ -1,6 +1,7 @@
 //! Pipeline services shared by the TUI (port of `delta/services.py`).
 
 pub mod analytics;
+pub mod asset_metrics;
 pub mod brief;
 pub mod chat;
 pub mod config_ops;
@@ -11,6 +12,7 @@ pub mod fixture;
 pub mod pipeline;
 pub mod reports;
 pub mod review;
+pub mod schemas;
 pub mod sentiment;
 pub mod setup;
 pub mod targets;
@@ -21,6 +23,10 @@ pub mod thesis_summary;
 pub use analytics::{
     data_health, latest_headline, latest_report, llm_costs, pulse, recent_closes, total_spend,
     upcoming_events, CostRow, DataHealth, Headline, Pulse, ReportStamp, Upcoming, FILING_SOURCE,
+};
+pub use asset_metrics::{
+    fetch_asset_metrics, fetch_asset_metrics_configured, group_values, groups_for, metric_help,
+    normalize_asset_metrics, profile_for, range_spec, AssetMetrics, MetricGroups,
 };
 pub use brief::{brief_for, build_brief, Brief, Section, PRIMARY_FILING_SOURCES};
 pub use config_ops::{

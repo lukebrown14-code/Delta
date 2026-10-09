@@ -231,3 +231,60 @@ async fn extract_events_persists_cited_events_only() {
         "covered items are not re-sent"
     );
 }
+
+/// Records each call's `response_format` so tests can assert provider-side
+/// schema enforcement without a network.
+struct CapturingProvider {
+    formats: std::sync::Mutex<Vec<serde_json::Value>>,
+}
+
+#[async_trait::async_trait]
+impl Provider for CapturingProvider {
+    fn name(&self) -> &'static str {
+        "capturing"
+    }
+    async fn complete(&self, req: CompletionRequest<'_>) -> Result<ProviderResult, ProviderError> {
+        self.formats.lock().unwrap().push(
+            req.response_format
+                .cloned()
+                .unwrap_or(serde_json::Value::Null),
+        );
+        Ok(ProviderResult {
+            text: r#"{"events": []}"#.to_string(),
+            input_tokens: 1,
+            output_tokens: 1,
+            cost_usd: 0.0,
+        })
+    }
+}
+
+#[tokio::test]
+async fn extract_enforces_the_canonical_event_batch_schema() {
+    let mut db = Db::open_memory().unwrap();
+    db.store_items(&[StoreItem::News(NewsItem {
+        id: "n1".to_string(),
+        instrument_ids: vec!["US:AAPL".to_string()],
+        published: since() + Duration::days(1),
+        title: "Apple beats earnings".to_string(),
+        url: "https://x/1".to_string(),
+        body: None,
+        source: "rss".to_string(),
+    })])
+    .unwrap();
+    let provider = Arc::new(CapturingProvider {
+        formats: std::sync::Mutex::new(Vec::new()),
+    });
+    let client = LlmClient::new(provider.clone());
+    let universe = vec![inst("US:AAPL", "us", "AAPL", None)];
+    extract_events(&mut db, &client, "test/model", &universe, since(), 20)
+        .await
+        .unwrap();
+    let formats = provider.formats.lock().unwrap();
+    assert!(!formats.is_empty(), "one batch was sent to the model");
+    assert!(
+        formats
+            .iter()
+            .all(|f| f == &delta_services::schemas::event_batch()),
+        "every extract call must carry the canonical EventBatch schema"
+    );
+}
