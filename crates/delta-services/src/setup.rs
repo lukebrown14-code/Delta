@@ -10,7 +10,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use delta_core::config::{read_env_value_named, update_config, AppConfig, Settings};
+use delta_core::config::{read_env_value_named, set_env_value, update_config, AppConfig, Settings};
 use delta_core::db::Db;
 use delta_plugins::DataProviderSpec;
 use rusqlite::OptionalExtension;
@@ -195,6 +195,81 @@ pub fn data_provider_status(
     }
     result.sort_by(|a, b| a.label.cmp(&b.label));
     result
+}
+
+/// The Settings screen's provider dot: the provider's key is readable from
+/// `.env` (`config.py::_refresh_ai`'s `connected`). A secret is only ever
+/// read, never drawn or logged.
+pub fn provider_connected(cfg: &AppConfig, env_path: &Path) -> bool {
+    delta_llm::providers::provider_spec(cfg.llm_provider.as_str())
+        .map(|spec| {
+            let env_var = if cfg.llm_api_key_env.is_empty() {
+                spec.env_var
+            } else {
+                &cfg.llm_api_key_env
+            };
+            !read_env_value_named(env_var, env_path).trim().is_empty()
+        })
+        .unwrap_or(false)
+}
+
+/// Save an LLM provider selection and optional key through the same config
+/// and environment write paths used by the Python setup flow. A custom
+/// endpoint requires a URL; its key can be empty for local servers.
+pub fn save_provider_choice(
+    config_path: &Path,
+    env_path: &Path,
+    name: &str,
+    key: &str,
+    base_url: &str,
+    api_key_env: &str,
+) -> Result<(), ServiceError> {
+    let spec = delta_llm::providers::provider_spec(name)
+        .ok_or_else(|| ServiceError::invalid(format!("unknown provider {name:?}")))?;
+    let key = key.trim();
+    if key.chars().any(|ch| ch == '\n' || ch == '\r') {
+        return Err(ServiceError::invalid("API key must be a single line"));
+    }
+    if name == "custom" {
+        if base_url.trim().is_empty() {
+            return Err(ServiceError::invalid("base URL is required"));
+        }
+        let env_var = if api_key_env.trim().is_empty() {
+            spec.env_var
+        } else {
+            api_key_env.trim()
+        };
+        if !env_var
+            .chars()
+            .all(|ch| ch.is_ascii_uppercase() || ch == '_' || ch.is_ascii_digit())
+            || env_var.starts_with(|ch: char| ch.is_ascii_digit())
+        {
+            return Err(ServiceError::invalid(
+                "invalid API key environment variable",
+            ));
+        }
+        delta_llm::catalog::set_llm_custom(config_path, base_url.trim(), env_var)
+            .map_err(ServiceError::invalid)?;
+        if !key.is_empty() {
+            set_env_value(env_var, key, env_path);
+        }
+    } else {
+        delta_llm::catalog::set_llm_provider(config_path, name).map_err(ServiceError::invalid)?;
+        if !key.is_empty() {
+            set_env_value(spec.env_var, key, env_path);
+        }
+    }
+    Ok(())
+}
+
+/// Select the model used for all tasks; the catalog is advisory and a
+/// free-text ID remains valid when offline.
+pub fn save_model_choice(config_path: &Path, model: &str) -> Result<(), ServiceError> {
+    let model = model.trim();
+    if model.is_empty() {
+        return Err(ServiceError::invalid("model ID is required"));
+    }
+    delta_llm::catalog::set_llm_model(config_path, model).map_err(ServiceError::invalid)
 }
 
 /// Persist adapter settings and activate the source

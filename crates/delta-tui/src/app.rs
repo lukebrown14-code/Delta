@@ -15,13 +15,14 @@ use tokio::sync::mpsc;
 use delta_tui::components::CommandPalette;
 use delta_tui::desk::Desk;
 use delta_tui::dialog::{GoPicker, HelpDialog};
+use delta_tui::form::Form;
 use delta_tui::screen::{color, Screen, Style};
 use delta_tui::screens::{
     draw_ask, draw_ask_narrow, draw_ask_wide, draw_decisions, draw_decisions_narrow,
     draw_decisions_wide, draw_glossary_overlay, draw_home, draw_home_narrow, draw_home_wide,
     draw_research, draw_research_narrow, draw_research_wide, draw_settings, draw_settings_narrow,
     draw_settings_wide, draw_theses, draw_theses_narrow, draw_theses_wide, draw_watchlist,
-    draw_watchlist_narrow, draw_watchlist_wide,
+    draw_watchlist_narrow, draw_watchlist_wide, SettingsFocus, SettingsState, SettingsView,
 };
 use delta_tui::theme::Palette;
 use delta_tui::{is_quit_key, workers, Action, Breakpoint, Component};
@@ -34,6 +35,36 @@ enum Overlay {
     Help(HelpDialog),
     /// ctrl+k / ctrl+p: the command palette (`app.py::DeltaCommands`).
     Palette(CommandPalette),
+    /// A Settings form modal (market add/edit, source setup).
+    SettingsForm(FormModal),
+    /// Provider choices, with key entry after a choice.
+    ProviderPicker(usize),
+    /// Names from the target service, shown on request from Settings.
+    TargetPicker(Vec<String>, usize),
+}
+
+const PROVIDER_CHOICES: [&str; 4] = ["openrouter", "openai", "anthropic", "custom"];
+
+/// One Settings form and what submitting it does.
+struct FormModal {
+    form: Form,
+    mode: FormMode,
+}
+
+/// The services call a submitted Settings form performs.
+#[derive(Clone, PartialEq)]
+enum FormMode {
+    /// `a`: `services.save_market` on a new id.
+    AddMarket,
+    /// `e`/enter: `services.save_market` on an existing id.
+    EditMarket(String),
+    /// `s`/enter: `services.configure_data_provider` for one source.
+    Source(String),
+    Provider(String),
+    Model,
+    AddTarget,
+    EditTarget(String),
+    RemoveTarget,
 }
 
 /// The seven panes: 1-6 plus `c`.
@@ -104,6 +135,10 @@ pub(crate) struct App {
     palette: Palette,
     /// The floating shell modal, if any.
     overlay: Option<Overlay>,
+    /// The Settings screen's interaction state.
+    settings: SettingsState,
+    /// The terminal size the last frame painted (breakpoint decisions).
+    viewport: (u16, u16),
 }
 
 impl App {
@@ -155,11 +190,18 @@ impl App {
                 draw_decisions(screen),
                 draw_decisions_narrow(screen)
             ),
-            Tab::Settings => route!(
-                draw_settings_wide(screen),
-                draw_settings(screen),
-                draw_settings_narrow(screen)
-            ),
+            Tab::Settings => {
+                let view = SettingsView {
+                    data: &self.desk.settings,
+                    state: &self.settings,
+                    footer: &self.desk.settings_footer,
+                };
+                route!(
+                    draw_settings_wide(screen, &view),
+                    draw_settings(screen, &view),
+                    draw_settings_narrow(screen, &view)
+                )
+            }
         }
         if self.glossary && self.tab == Tab::Watchlist {
             draw_glossary_overlay(screen, &self.desk.watch_state());
@@ -168,6 +210,56 @@ impl App {
             Some(Overlay::Go) => GoPicker::draw_screen(screen),
             Some(Overlay::Help(help)) => help.draw_screen(screen),
             Some(Overlay::Palette(palette)) => palette.draw_screen(screen),
+            Some(Overlay::SettingsForm(modal)) => {
+                let width = delta_tui::dialog::MODAL_WIDTH.min(screen.w.saturating_sub(4));
+                let height = (modal.form.height(width) + 5).min(screen.h.saturating_sub(2));
+                let (x, y, w, _h) = delta_tui::dialog::dialog_frame(screen, width, height);
+                screen.text(x, y, &modal.form.title, Style::fg(color::BLUE).bold());
+                modal.form.draw_screen(screen, x, y + 2, w);
+            }
+            Some(Overlay::ProviderPicker(selected)) => {
+                let (x, y, w, _) = delta_tui::dialog::dialog_frame(screen, 58, 11);
+                screen.text(x, y, "select a provider", Style::fg(color::BLUE).bold());
+                screen.text(x, y + 2, "Provider", Style::fg(color::MUTED).bold());
+                for (index, name) in PROVIDER_CHOICES.iter().enumerate() {
+                    let style = if index == *selected {
+                        Style::fg(color::WHITE).bg(color::BLUE_BG).bold()
+                    } else {
+                        Style::fg(color::FG)
+                    };
+                    screen.fill(x, y + 3 + index, x + w, y + 4 + index, style);
+                    screen.text(x + 1, y + 3 + index, name, style);
+                }
+                screen.text(
+                    x,
+                    y + 8,
+                    "enter connect · esc cancel",
+                    Style::fg(color::MUTED),
+                );
+            }
+            Some(Overlay::TargetPicker(targets, selected)) => {
+                let height = (targets.len() + 7).min(screen.h.saturating_sub(2));
+                let (x, y, w, _) = delta_tui::dialog::dialog_frame(screen, 58, height);
+                screen.text(x, y, "targets", Style::fg(color::BLUE).bold());
+                if targets.is_empty() {
+                    screen.text(x, y + 2, "no targets", Style::fg(color::MUTED));
+                }
+                for (index, name) in targets.iter().take(height.saturating_sub(6)).enumerate() {
+                    let style = if index == *selected {
+                        Style::fg(color::WHITE).bg(color::BLUE_BG).bold()
+                    } else {
+                        Style::fg(color::FG)
+                    };
+                    screen.fill(x, y + 2 + index, x + w, y + 3 + index, style);
+                    screen.text(x + 1, y + 2 + index, name, style);
+                }
+                screen.text(
+                    x,
+                    y + height - 3,
+                    "enter edit · n add · x remove · esc close",
+                    Style::fg(color::MUTED),
+                );
+            }
             None => {}
         }
         self.paint_status_overlay(screen);
@@ -264,14 +356,559 @@ impl App {
     }
 }
 
+impl App {
+    /// The Settings screen's keys (`config.py::BINDINGS`): `d` diagnostics,
+    /// `r` refresh, `l` plugins, `s` configure source, `a`/`e`/`x`
+    /// add/edit/remove market, `esc` back; plus the table keys (↑↓/tab/
+    /// enter) and `t` to toggle a plugin.
+    fn handle_settings_key(&mut self, key: KeyEvent) -> Option<Action> {
+        let data = &self.desk.settings;
+        let counts = (data.plugins.len(), data.sources.len(), data.markets.len());
+        match key.code {
+            KeyCode::Esc => {
+                self.settings.close_diagnostics(self.viewport_width());
+                Some(Action::Noop)
+            }
+            KeyCode::Up => {
+                self.settings
+                    .move_selection(-1, counts.0, counts.1, counts.2);
+                Some(Action::Noop)
+            }
+            KeyCode::Down => {
+                self.settings
+                    .move_selection(1, counts.0, counts.1, counts.2);
+                Some(Action::Noop)
+            }
+            KeyCode::Tab => {
+                self.settings.cycle_focus(false);
+                Some(Action::Noop)
+            }
+            KeyCode::BackTab => {
+                self.settings.cycle_focus(true);
+                Some(Action::Noop)
+            }
+            KeyCode::Enter => Some(self.settings_enter()),
+            KeyCode::Char('d') => {
+                self.settings.toggle_diagnostics(self.viewport_width());
+                Some(Action::Noop)
+            }
+            KeyCode::Char('r') => {
+                self.desk.reload_settings();
+                let refreshed = self
+                    .desk
+                    .settings
+                    .diagnostics
+                    .as_ref()
+                    .map(|d| d.refreshed.clone())
+                    .unwrap_or_default();
+                self.status = format!("diagnostics refreshed {refreshed}");
+                Some(Action::Noop)
+            }
+            KeyCode::Char('l') => {
+                self.settings.focus = SettingsFocus::Plugins;
+                Some(Action::Noop)
+            }
+            KeyCode::Char('s') => Some(self.open_source_form()),
+            KeyCode::Char('a') => {
+                self.overlay = Some(Overlay::SettingsForm(market_form(None)));
+                Some(Action::Noop)
+            }
+            KeyCode::Char('e') => Some(self.edit_market()),
+            KeyCode::Char('x') => Some(self.remove_market()),
+            KeyCode::Char('t') => Some(self.toggle_plugin()),
+            KeyCode::Char('n') => {
+                self.overlay = Some(Overlay::SettingsForm(target_form(None)));
+                Some(Action::Noop)
+            }
+            KeyCode::Char('X') => {
+                self.overlay = Some(Overlay::SettingsForm(remove_target_form()));
+                Some(Action::Noop)
+            }
+            KeyCode::Char('w') => Some(self.open_target_picker()),
+            _ => None,
+        }
+    }
+
+    /// `enter` on the focused table's row (`on_data_table_row_selected`).
+    fn settings_enter(&mut self) -> Action {
+        match self.settings.focus {
+            SettingsFocus::Provider => {
+                if self.settings.provider_selected == 0 {
+                    Action::ShowProviderPicker
+                } else {
+                    Action::ShowModelPicker
+                }
+            }
+            SettingsFocus::Plugins => {
+                let data = &self.desk.settings;
+                match data.plugins.get(self.settings.plugin_selected) {
+                    Some((id, enabled)) => Action::Status(format!(
+                        "{id}: {} · t toggle",
+                        if *enabled { "enabled" } else { "disabled" }
+                    )),
+                    None => Action::Noop,
+                }
+            }
+            SettingsFocus::Sources => self.open_source_form(),
+            SettingsFocus::Markets => self.edit_market(),
+            SettingsFocus::Diagnostics => Action::Noop,
+        }
+    }
+
+    /// `s`/enter on a source: the setup form for its provider fields.
+    fn open_source_form(&mut self) -> Action {
+        let Some(id) = self
+            .desk
+            .settings
+            .sources
+            .get(self.settings.source_selected)
+            .map(|s| s.id.clone())
+        else {
+            return Action::Status("no data source selected".to_string());
+        };
+        let current = self
+            .desk
+            .settings
+            .sources
+            .get(self.settings.source_selected)
+            .map(|source| source.contact.clone());
+        self.overlay = Some(Overlay::SettingsForm(source_form(&id, current)));
+        Action::Noop
+    }
+
+    /// `e`/enter on a market: the prefilled edit form.
+    fn edit_market(&mut self) -> Action {
+        let Some(market) = self
+            .desk
+            .settings
+            .markets
+            .get(self.settings.market_selected)
+            .cloned()
+        else {
+            return Action::Status("no market selected".to_string());
+        };
+        self.overlay = Some(Overlay::SettingsForm(market_form(Some(&market))));
+        Action::Noop
+    }
+
+    /// `x`: remove the selected market through the services layer.
+    fn remove_market(&mut self) -> Action {
+        let Some(id) = self
+            .settings
+            .selected_market_id(&self.desk.settings)
+            .map(str::to_string)
+        else {
+            return Action::Status("no market selected".to_string());
+        };
+        let Some(config) = self.desk.config_path.clone() else {
+            return Action::Status("offline: no config.toml".to_string());
+        };
+        match delta_services::config_ops::remove_market(&config, &id) {
+            Ok(()) => {
+                self.desk.reload_settings();
+                let data = &self.desk.settings;
+                self.settings
+                    .reconcile(data.plugins.len(), data.sources.len(), data.markets.len());
+                Action::Status(format!("market {id} removed"))
+            }
+            Err(e) => Action::Status(e.to_string()),
+        }
+    }
+
+    /// `t`: flip the selected plugin's enabled flag in `config.toml`.
+    fn toggle_plugin(&mut self) -> Action {
+        let Some(id) = self
+            .settings
+            .selected_plugin_id(&self.desk.settings)
+            .map(str::to_string)
+        else {
+            return Action::Status("no plugin selected".to_string());
+        };
+        let enabled = self
+            .desk
+            .settings
+            .plugins
+            .get(self.settings.plugin_selected)
+            .map(|(_, on)| *on)
+            .unwrap_or(true);
+        let Some(config) = self.desk.config_path.clone() else {
+            return Action::Status("offline: no config.toml".to_string());
+        };
+        match delta_services::config_ops::set_plugin_enabled(&config, &id, !enabled) {
+            Ok(()) => {
+                self.desk.reload_settings();
+                Action::Status(format!(
+                    "{id} {}",
+                    if !enabled { "enabled" } else { "disabled" }
+                ))
+            }
+            Err(e) => Action::Status(e.to_string()),
+        }
+    }
+
+    /// Run the form's services call on submit; returns the action and
+    /// whether the form should close (a rejected submit stays open).
+    fn submit_settings_form(&mut self, modal: &mut FormModal) -> (Action, bool) {
+        let values: std::collections::BTreeMap<String, String> = match modal.form.submit() {
+            Ok(values) => values.into_iter().collect(),
+            Err(errors) => {
+                let message = errors
+                    .first()
+                    .map(|(_, m)| m.clone())
+                    .unwrap_or_else(|| "invalid input".to_string());
+                return (Action::Status(message), false);
+            }
+        };
+        let Some(config) = self.desk.config_path.clone() else {
+            return (Action::Status("offline: no config.toml".to_string()), false);
+        };
+        let result = match &modal.mode {
+            FormMode::AddMarket | FormMode::EditMarket(_) => {
+                let id = values.get("ID").cloned().unwrap_or_default();
+                delta_services::config_ops::save_market(
+                    &config,
+                    &id,
+                    values.get("Name").map(String::as_str).unwrap_or(""),
+                    values.get("Currency").map(String::as_str).unwrap_or(""),
+                    values.get("Yahoo suffix").map(String::as_str).unwrap_or(""),
+                )
+            }
+            FormMode::Source(id) => {
+                let mut fields = std::collections::BTreeMap::new();
+                if let Some(value) = values.get("Contact email") {
+                    fields.insert("contact".to_string(), value.clone());
+                }
+                delta_services::setup::configure_data_provider(
+                    &config,
+                    &self.env_path(),
+                    &delta_plugins::provider_specs(),
+                    id,
+                    &fields,
+                    None,
+                )
+            }
+            FormMode::Provider(name) => delta_services::setup::save_provider_choice(
+                &config,
+                &self.env_path(),
+                name,
+                values.get("API key").map(String::as_str).unwrap_or(""),
+                values.get("Base URL").map(String::as_str).unwrap_or(""),
+                values
+                    .get("Key environment variable")
+                    .map(String::as_str)
+                    .unwrap_or(""),
+            ),
+            FormMode::Model => delta_services::setup::save_model_choice(
+                &config,
+                values.get("Model ID").map(String::as_str).unwrap_or(""),
+            ),
+            FormMode::AddTarget => {
+                let symbols = values
+                    .get("Instruments")
+                    .map(|s| {
+                        s.split(',')
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty())
+                            .map(str::to_string)
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                delta_services::config_ops::add_target(
+                    &config,
+                    values.get("Name").map(String::as_str).unwrap_or(""),
+                    values.get("Kind").map(String::as_str).unwrap_or("company"),
+                    values.get("Market").map(String::as_str).unwrap_or("us"),
+                    &symbols,
+                    &[],
+                    "",
+                    None,
+                    "equity",
+                )
+            }
+            FormMode::EditTarget(name) => {
+                if values.get("Name").is_none_or(|value| value != name) {
+                    return (
+                        Action::Status("target ID cannot be changed".to_string()),
+                        false,
+                    );
+                }
+                let symbols = values
+                    .get("Instruments")
+                    .map(|s| {
+                        s.split(',')
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty())
+                            .map(str::to_string)
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                delta_services::config_ops::update_target(
+                    &config,
+                    name,
+                    values.get("Kind").map(String::as_str).unwrap_or("company"),
+                    values.get("Market").map(String::as_str).unwrap_or("us"),
+                    &symbols,
+                )
+            }
+            FormMode::RemoveTarget => delta_services::config_ops::remove_target(
+                &config,
+                values.get("Name").map(String::as_str).unwrap_or(""),
+            ),
+        };
+        match result {
+            Ok(()) => {
+                let message = match &modal.mode {
+                    FormMode::AddMarket | FormMode::EditMarket(_) => "market saved".to_string(),
+                    FormMode::Source(_) => "source saved".to_string(),
+                    FormMode::Provider(name) => format!("{name} selected"),
+                    FormMode::Model => "model saved".to_string(),
+                    FormMode::AddTarget => "target added".to_string(),
+                    FormMode::EditTarget(_) => "target saved".to_string(),
+                    FormMode::RemoveTarget => "target removed".to_string(),
+                };
+                self.desk.reload_settings();
+                let data = &self.desk.settings;
+                self.settings
+                    .reconcile(data.plugins.len(), data.sources.len(), data.markets.len());
+                (Action::Status(message), true)
+            }
+            Err(e) => (Action::Status(e.to_string()), false),
+        }
+    }
+
+    fn viewport_width(&self) -> usize {
+        self.viewport.0 as usize
+    }
+
+    fn env_path(&self) -> std::path::PathBuf {
+        self.desk
+            .config_path
+            .as_ref()
+            .and_then(|path| path.parent())
+            .unwrap_or_else(|| std::path::Path::new("."))
+            .join(".env")
+    }
+
+    fn open_target_picker(&mut self) -> Action {
+        let Some(config) = &self.desk.config_path else {
+            return Action::Status("offline: no config.toml".to_string());
+        };
+        match delta_services::config_ops::target_specs(config) {
+            Ok(targets) => {
+                self.overlay = Some(Overlay::TargetPicker(targets.into_keys().collect(), 0));
+                Action::Noop
+            }
+            Err(e) => Action::Status(e.to_string()),
+        }
+    }
+}
+
+fn provider_form(name: &str) -> FormModal {
+    let fields = if name == "custom" {
+        vec![
+            delta_tui::form::Field::new(
+                "Base URL",
+                "http://localhost:11434/v1",
+                Some(delta_tui::form::required),
+            ),
+            delta_tui::form::Field::new("Key environment variable", "CUSTOM_API_KEY", None),
+            delta_tui::form::Field::new("API key", "optional for local servers", None).secret(),
+        ]
+    } else {
+        vec![delta_tui::form::Field::new("API key", "leave blank to use existing", None).secret()]
+    };
+    FormModal {
+        form: Form::new(&format!("connect {name}"), fields),
+        mode: FormMode::Provider(name.to_string()),
+    }
+}
+
+fn model_form(current: &str) -> FormModal {
+    let mut form = Form::new(
+        "select a model",
+        vec![delta_tui::form::Field::new(
+            "Model ID",
+            "provider/model-id",
+            Some(delta_tui::form::required),
+        )],
+    );
+    form.fields[0].input.set_value(current);
+    FormModal {
+        form,
+        mode: FormMode::Model,
+    }
+}
+
+fn target_form(current: Option<&delta_services::targets::WatchTarget>) -> FormModal {
+    let mut form = Form::new(
+        if current.is_some() {
+            "edit target"
+        } else {
+            "add target"
+        },
+        vec![
+            delta_tui::form::Field::new("Name", "e.g. apple", Some(delta_tui::form::required)),
+            delta_tui::form::Field::new(
+                "Kind",
+                "company, theme, market…",
+                Some(delta_tui::form::required),
+            ),
+            delta_tui::form::Field::new("Market", "us, asx…", Some(delta_tui::form::required)),
+            delta_tui::form::Field::new("Instruments", "AAPL,MSFT", None),
+        ],
+    );
+    let mut mode = FormMode::AddTarget;
+    if let Some(target) = current {
+        mode = FormMode::EditTarget(target.id.clone());
+        for (field, value) in form.fields.iter_mut().zip([
+            target.id.clone(),
+            target.kind.clone(),
+            target.markets.first().cloned().unwrap_or_default(),
+            target.tickers.join(","),
+        ]) {
+            field.input.set_value(&value);
+        }
+    }
+    FormModal { form, mode }
+}
+
+fn remove_target_form() -> FormModal {
+    FormModal {
+        form: Form::new(
+            "remove target",
+            vec![delta_tui::form::Field::new(
+                "Name",
+                "target id",
+                Some(delta_tui::form::required),
+            )],
+        ),
+        mode: FormMode::RemoveTarget,
+    }
+}
+
+/// The market form (`market_setup.py::MarketSetupModal`): ID, name,
+/// currency, Yahoo suffix.
+fn market_form(current: Option<&delta_tui::screens::SettingsMarket>) -> FormModal {
+    let mut form = Form::new(
+        if current.is_some() {
+            "edit market"
+        } else {
+            "add market"
+        },
+        vec![
+            delta_tui::form::Field::new("ID", "e.g. lse", Some(delta_tui::form::required)),
+            delta_tui::form::Field::new("Name", "Exchange name", Some(delta_tui::form::required)),
+            delta_tui::form::Field::new("Currency", "GBP", Some(delta_tui::form::required)),
+            delta_tui::form::Field::new("Yahoo suffix", ".L", None),
+        ],
+    );
+    let mut mode = FormMode::AddMarket;
+    if let Some(market) = current {
+        mode = FormMode::EditMarket(market.id.clone());
+        let prefill = [
+            ("ID", market.id.as_str()),
+            ("Name", market.label.as_str()),
+            ("Currency", market.currency.as_str()),
+            ("Yahoo suffix", market.yahoo_suffix.as_str()),
+        ];
+        for field in form.fields.iter_mut() {
+            if let Some((_, value)) = prefill.iter().find(|(label, _)| *label == field.label) {
+                field.input.set_value(value);
+            }
+        }
+    }
+    FormModal { form, mode }
+}
+
+/// The source setup form (`source_setup.py`): the provider's non-secret
+/// fields; secrets stay in `configure_data_provider`.
+fn source_form(id: &str, current: Option<String>) -> FormModal {
+    let mut form = Form::new(
+        "configure source",
+        vec![delta_tui::form::Field::new(
+            "Contact email",
+            "you@example.com",
+            Some(delta_tui::form::required),
+        )],
+    );
+    if let Some(current) = current {
+        form.fields[0].input.set_value(&current);
+    }
+    FormModal {
+        form,
+        mode: FormMode::Source(id.to_string()),
+    }
+}
+
 impl Component for App {
     fn handle_key(&mut self, key: KeyEvent) -> Option<Action> {
+        if let Some(Overlay::ProviderPicker(selected)) = &mut self.overlay {
+            match key.code {
+                KeyCode::Esc => self.overlay = None,
+                KeyCode::Up => *selected = selected.saturating_sub(1),
+                KeyCode::Down => *selected = (*selected + 1).min(PROVIDER_CHOICES.len() - 1),
+                KeyCode::Enter => {
+                    let name = PROVIDER_CHOICES[*selected];
+                    self.overlay = Some(Overlay::SettingsForm(provider_form(name)));
+                }
+                _ => {}
+            }
+            return None;
+        }
+        if let Some(Overlay::TargetPicker(targets, selected)) = &mut self.overlay {
+            match key.code {
+                KeyCode::Esc => self.overlay = None,
+                KeyCode::Up => *selected = selected.saturating_sub(1),
+                KeyCode::Down => *selected = (*selected + 1).min(targets.len().saturating_sub(1)),
+                KeyCode::Char('n') => self.overlay = Some(Overlay::SettingsForm(target_form(None))),
+                KeyCode::Enter => {
+                    if let (Some(name), Some(config)) =
+                        (targets.get(*selected), &self.desk.config_path)
+                    {
+                        if let Ok(specs) = delta_services::config_ops::target_specs(config) {
+                            if let Some(target) = specs.get(name) {
+                                self.overlay =
+                                    Some(Overlay::SettingsForm(target_form(Some(target))));
+                            }
+                        }
+                    }
+                }
+                KeyCode::Char('x') => {
+                    if let Some(name) = targets.get(*selected) {
+                        let mut modal = remove_target_form();
+                        modal.form.fields[0].input.set_value(name);
+                        self.overlay = Some(Overlay::SettingsForm(modal));
+                    }
+                }
+                _ => {}
+            }
+            return None;
+        }
+        // The Settings form manages its own submit cycle: a rejected
+        // submit keeps the modal open, the message on the status line.
+        if key.code == KeyCode::Enter && matches!(self.overlay, Some(Overlay::SettingsForm(_))) {
+            let Some(Overlay::SettingsForm(mut modal)) = self.overlay.take() else {
+                unreachable!("checked the variant above");
+            };
+            let (action, saved) = self.submit_settings_form(&mut modal);
+            if !saved {
+                self.overlay = Some(Overlay::SettingsForm(modal));
+            }
+            self.update(action);
+            return None;
+        }
         // Modals take the key first (a Textual modal stops propagation).
         if let Some(overlay) = &mut self.overlay {
             let action = match overlay {
                 Overlay::Go => delta_tui::dialog::go_picker_key(key),
                 Overlay::Help(help) => help.handle_key(key),
                 Overlay::Palette(palette) => palette.handle_key(key),
+                Overlay::SettingsForm(modal) => match key.code {
+                    KeyCode::Esc => Some(Action::CloseDialog),
+                    _ => modal.form.handle_key(key),
+                },
+                Overlay::ProviderPicker(_) => unreachable!("handled above"),
+                Overlay::TargetPicker(_, _) => unreachable!("handled above"),
             };
             let action = action.unwrap_or(Action::Noop);
             match action {
@@ -281,8 +918,16 @@ impl Component for App {
             }
             return None;
         }
+        if self.tab == Tab::Settings && key.code == KeyCode::Esc {
+            return self.handle_settings_key(key);
+        }
         if let Some(action) = self.handle_shell_key(key) {
             return Some(action);
+        }
+        if self.tab == Tab::Settings {
+            if let Some(action) = self.handle_settings_key(key) {
+                return Some(action);
+            }
         }
         None
     }
@@ -331,12 +976,14 @@ impl Component for App {
             }
             Action::ShowHelp => self.overlay = Some(Overlay::Help(HelpDialog::default())),
             Action::ShowModelPicker => {
-                // The picker screen lands with R3.2 (settings stream); the
-                // binding is live now so the keymap cannot drift.
-                self.status = "model picker: lands with R3.2 settings".to_string();
+                self.overlay = Some(Overlay::SettingsForm(model_form(&self.desk.settings.model)));
             }
             Action::ShowProviderPicker => {
-                self.status = "provider picker: lands with R3.2 settings".to_string();
+                let selected = PROVIDER_CHOICES
+                    .iter()
+                    .position(|name| *name == self.desk.settings.provider)
+                    .unwrap_or(0);
+                self.overlay = Some(Overlay::ProviderPicker(selected));
             }
             Action::FormSubmitted(title) => {
                 self.overlay = None;
@@ -354,6 +1001,7 @@ impl Component for App {
         if area.width < 4 || area.height < 4 {
             return; // degenerate terminal; the painters assume a status bar
         }
+        self.viewport = (area.width, area.height);
         let mut screen = Screen::themed(self.palette, area.width as usize, area.height as usize);
         self.paint(&mut screen);
         delta_tui::screen::blit(frame, &screen, area);
@@ -385,6 +1033,8 @@ pub(crate) async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> st
         quit: false,
         palette: Palette::Dark,
         overlay: None,
+        settings: SettingsState::default(),
+        viewport: (120, 40),
     };
 
     let mut events = EventStream::new();
@@ -472,6 +1122,8 @@ mod tests {
             quit: false,
             palette: Palette::Dark,
             overlay: None,
+            settings: SettingsState::default(),
+            viewport: (120, 40),
         }
     }
 
@@ -553,13 +1205,14 @@ mod tests {
             Some(Action::ShowModelPicker)
         );
         a.update(Action::ShowModelPicker);
-        assert!(!a.status.is_empty());
+        assert!(matches!(a.overlay, Some(Overlay::SettingsForm(_))));
+        a.handle_key(key(KeyCode::Esc));
         assert_eq!(
             a.handle_key(key(KeyCode::Char('p'))),
             Some(Action::ShowProviderPicker)
         );
         a.update(Action::ShowProviderPicker);
-        assert!(!a.status.is_empty());
+        assert!(matches!(a.overlay, Some(Overlay::ProviderPicker(_))));
     }
 
     #[test]
@@ -829,5 +1482,387 @@ mod home_feed_tests {
                 assert!(text.contains(probe), "missing {probe} at {w}x{h}");
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod settings_tests {
+    use super::tests::app;
+    use super::*;
+    use delta_tui::screens::SettingsState;
+    use ratatui::backend::TestBackend;
+
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, crossterm::event::KeyModifiers::NONE)
+    }
+
+    fn settings_app() -> App {
+        let mut a = app();
+        a.handle_key(key(KeyCode::Char('c')));
+        a
+    }
+
+    fn screen_text(a: &mut App, w: u16, h: u16) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
+        terminal.draw(|f| a.draw(f, f.area())).unwrap();
+        terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(ratatui::buffer::Cell::symbol)
+            .collect()
+    }
+
+    #[test]
+    fn settings_tab_paints_live_data_at_all_sizes() {
+        let mut a = settings_app();
+        for &(w, h) in &[(80u16, 24u16), (120, 40), (200, 50)] {
+            let text = screen_text(&mut a, w, h);
+            for probe in [
+                "provider: ● openrouter",
+                "model: ",
+                "sec_edgar  enabled",
+                "diagnostics",
+            ] {
+                assert!(text.contains(probe), "missing {probe:?} at {w}x{h}");
+            }
+            if w >= 100 {
+                assert!(text.contains("delta.db · 4 KB"), "db size at {w}x{h}");
+                assert!(text.contains("latest bar US:AAPL 20 Sep 00:00 UTC"));
+            } else {
+                assert!(
+                    text.contains("80 rows · latest bar 20 Sep 00:00 UTC · spend $0.00"),
+                    "folded summary at {w}x{h}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn diagnostics_toggle_follows_the_breakpoint_and_pins() {
+        let mut a = settings_app();
+        a.viewport = (80, 24); // narrow: folded by default
+        a.handle_key(key(KeyCode::Char('d')));
+        assert_eq!(a.settings.focus, SettingsFocus::Diagnostics);
+        assert!(a.settings.diagnostics_expanded(80));
+        let text = screen_text(&mut a, 80, 24);
+        assert!(
+            text.contains("esc"),
+            "the expanded narrow pane offers esc to close"
+        );
+        a.handle_key(key(KeyCode::Esc));
+        assert!(!a.settings.diagnostics_expanded(80));
+        assert_eq!(a.settings.focus, SettingsFocus::Provider);
+        // Wide stays expanded and esc leaves it open.
+        a.viewport = (120, 40);
+        a.handle_key(key(KeyCode::Char('d')));
+        assert!(a.settings.diagnostics_expanded(120));
+        a.handle_key(key(KeyCode::Esc));
+        assert!(a.settings.diagnostics_expanded(120));
+    }
+
+    #[test]
+    fn focus_keys_and_selections_move() {
+        let mut a = settings_app();
+        a.handle_key(key(KeyCode::Char('l')));
+        assert_eq!(a.settings.focus, SettingsFocus::Plugins);
+        a.handle_key(key(KeyCode::Tab));
+        assert_eq!(a.settings.focus, SettingsFocus::Sources);
+        a.handle_key(key(KeyCode::Tab));
+        assert_eq!(a.settings.focus, SettingsFocus::Markets);
+        a.handle_key(key(KeyCode::BackTab));
+        assert_eq!(a.settings.focus, SettingsFocus::Sources);
+        // The provider table has two rows; the model row is the second.
+        a.handle_key(key(KeyCode::Tab));
+        a.handle_key(key(KeyCode::Tab));
+        a.handle_key(key(KeyCode::Tab));
+        assert_eq!(a.settings.focus, SettingsFocus::Provider);
+        a.handle_key(key(KeyCode::Down));
+        assert_eq!(a.settings.provider_selected, 1);
+        // Enter on the model row opens the model picker action.
+        assert_eq!(
+            a.handle_key(key(KeyCode::Enter)),
+            Some(Action::ShowModelPicker)
+        );
+        a.handle_key(key(KeyCode::Up));
+        assert_eq!(
+            a.handle_key(key(KeyCode::Enter)),
+            Some(Action::ShowProviderPicker)
+        );
+    }
+
+    #[test]
+    fn plugin_detail_and_refresh_status() {
+        let mut a = settings_app();
+        a.handle_key(key(KeyCode::Char('l')));
+        let action = a.handle_key(key(KeyCode::Enter)).expect("action");
+        match action {
+            Action::Status(msg) => {
+                assert!(msg.starts_with("sec_edgar: enabled"), "{msg}");
+            }
+            other => panic!("expected a status line, got {other:?}"),
+        }
+        a.handle_key(key(KeyCode::Char('r')));
+        assert!(
+            a.status.starts_with("diagnostics refreshed "),
+            "{}",
+            a.status
+        );
+    }
+
+    /// A desk over a real temp config + DB, like the live app.
+    fn real_desk_app(dir: &std::path::Path) -> App {
+        std::fs::write(
+            dir.join("config.toml"),
+            format!("db_path = {:?}\n[targets.apple]\nkind = \"company\"\nmarket = \"us\"\ntickers = [\"AAPL\"]\n\
+             [llm]\nprovider = \"openrouter\"\nmodel = \"test-model\"\n\
+             [plugins.sec_edgar]\nenabled = true\ncontact = \"oracle@example.test\"\n", dir.join("delta.db").display().to_string()),
+        )
+        .unwrap();
+        let mut a = app();
+        let now = delta_tui::desk::now_naive();
+        let (_, mut config) = delta_core::config::load_config(&dir.join("config.toml")).unwrap();
+        config.db_path = dir.join("delta.db").display().to_string();
+        // The DB file is created by the settings loader on first open.
+        a.desk.settings = delta_tui::screens::SettingsData::load(
+            &config,
+            &dir.join("delta.db"),
+            &dir.join(".env"),
+            now,
+        );
+        a.desk.settings_footer = a.desk.settings.footer(now);
+        a.desk.config_path = Some(dir.join("config.toml"));
+        a.handle_key(key(KeyCode::Char('c')));
+        a
+    }
+
+    fn type_into(form_keys: &[&str], a: &mut App) {
+        for text in form_keys {
+            for ch in text.chars() {
+                a.handle_key(key(KeyCode::Char(ch)));
+            }
+            a.handle_key(key(KeyCode::Tab));
+        }
+    }
+
+    #[test]
+    fn add_market_edit_flows_through_the_services_layer() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut a = real_desk_app(dir.path());
+        // The default config has the built-in markets only.
+        let ids: Vec<&str> = a
+            .desk
+            .settings
+            .markets
+            .iter()
+            .map(|m| m.id.as_str())
+            .collect();
+        assert_eq!(ids, ["asx", "us"], "the built-in markets before the edit");
+        a.handle_key(key(KeyCode::Char('a')));
+        assert!(matches!(a.overlay, Some(Overlay::SettingsForm(_))));
+        type_into(&["lse", "London Stock Exchange", "GBP", ".L"], &mut a);
+        a.handle_key(key(KeyCode::Enter));
+        assert!(a.overlay.is_none(), "the form closes on save");
+        assert_eq!(a.status, "market saved");
+        let raw = delta_core::config::load_toml(&dir.path().join("config.toml")).unwrap();
+        assert_eq!(raw["markets"]["lse"]["currency"], "GBP");
+        assert_eq!(raw["markets"]["lse"]["yahoo_suffix"], ".L");
+        // The reloaded screen shows the new market.
+        let ids: Vec<&str> = a
+            .desk
+            .settings
+            .markets
+            .iter()
+            .map(|m| m.id.as_str())
+            .collect();
+        assert_eq!(ids, ["asx", "lse", "us"]);
+        let text = screen_text(&mut a, 120, 40);
+        assert!(text.contains("London Stock Exchange"));
+        assert!(text.contains(".L"));
+    }
+
+    #[test]
+    fn edit_market_prefills_and_saves() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut a = real_desk_app(dir.path());
+        delta_services::config_ops::save_market(
+            &dir.path().join("config.toml"),
+            "lse",
+            "London Stock Exchange",
+            "GBP",
+            ".L",
+        )
+        .unwrap();
+        a.desk.reload_settings();
+        a.settings.market_selected = 1;
+        a.handle_key(key(KeyCode::Char('e')));
+        let Some(Overlay::SettingsForm(modal)) = &a.overlay else {
+            panic!("edit form open");
+        };
+        assert_eq!(modal.form.title, "edit market");
+        assert_eq!(modal.form.fields[0].value(), "lse");
+        a.handle_key(key(KeyCode::Enter));
+        assert!(a.overlay.is_none());
+        assert_eq!(a.status, "market saved");
+    }
+
+    #[test]
+    fn remove_market_is_blocked_for_builtins() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut a = real_desk_app(dir.path());
+        if let Some(action) = a.handle_key(key(KeyCode::Char('x'))) {
+            a.update(action);
+        }
+        assert_eq!(a.status, "only user-defined markets can be removed");
+    }
+
+    #[test]
+    fn plugin_toggle_flips_the_config_and_the_row() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut a = real_desk_app(dir.path());
+        if let Some(action) = a.handle_key(key(KeyCode::Char('t'))) {
+            a.update(action);
+        }
+        assert_eq!(a.status, "sec_edgar disabled");
+        let raw = delta_core::config::load_toml(&dir.path().join("config.toml")).unwrap();
+        assert_eq!(raw["plugins"]["sec_edgar"]["enabled"], false);
+        let text = screen_text(&mut a, 120, 40);
+        assert!(text.contains("○  sec_edgar  disabled"), "{text}");
+        if let Some(action) = a.handle_key(key(KeyCode::Char('t'))) {
+            a.update(action);
+        }
+        assert_eq!(a.status, "sec_edgar enabled");
+    }
+
+    #[test]
+    fn source_setup_persists_the_contact_field() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut a = real_desk_app(dir.path());
+        // The configured contact makes the source ready.
+        assert_eq!(a.desk.settings.sources.len(), 1);
+        assert!(a.desk.settings.sources[0].ready);
+        a.handle_key(key(KeyCode::Char('s')));
+        assert!(matches!(a.overlay, Some(Overlay::SettingsForm(_))));
+        if let Some(Overlay::SettingsForm(modal)) = &a.overlay {
+            assert_eq!(modal.form.fields[0].value(), "oracle@example.test");
+        }
+        for _ in "oracle@example.test".chars() {
+            a.handle_key(key(KeyCode::Backspace));
+        }
+        for ch in "next@example.test".chars() {
+            a.handle_key(key(KeyCode::Char(ch)));
+        }
+        a.handle_key(key(KeyCode::Enter));
+        assert!(a.overlay.is_none());
+        assert_eq!(a.status, "source saved");
+        let raw = delta_core::config::load_toml(&dir.path().join("config.toml")).unwrap();
+        assert_eq!(raw["plugins"]["sec_edgar"]["contact"], "next@example.test");
+    }
+
+    #[test]
+    fn settings_adds_and_removes_a_target_through_services() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut a = real_desk_app(dir.path());
+        a.handle_key(key(KeyCode::Char('n')));
+        assert!(matches!(a.overlay, Some(Overlay::SettingsForm(_))));
+        type_into(&["chips", "theme", "us", "NVDA,AMD"], &mut a);
+        a.handle_key(key(KeyCode::Enter));
+        assert_eq!(a.status, "target added");
+        let specs =
+            delta_services::config_ops::target_specs(&dir.path().join("config.toml")).unwrap();
+        assert_eq!(specs["chips"].tickers, ["NVDA", "AMD"]);
+
+        a.handle_key(key(KeyCode::Char('w')));
+        if let Some(Overlay::TargetPicker(targets, _)) = &a.overlay {
+            assert_eq!(targets, &["apple", "chips"]);
+        } else {
+            panic!("target picker did not open");
+        }
+        a.handle_key(key(KeyCode::Down));
+        a.handle_key(key(KeyCode::Enter));
+        if let Some(Overlay::SettingsForm(modal)) = &a.overlay {
+            assert_eq!(modal.form.fields[0].value(), "chips");
+            assert_eq!(modal.form.fields[3].value(), "NVDA,AMD");
+        } else {
+            panic!("edit form did not open");
+        }
+        for _ in 0..3 {
+            a.handle_key(key(KeyCode::Tab));
+        }
+        for _ in "NVDA,AMD".chars() {
+            a.handle_key(key(KeyCode::Backspace));
+        }
+        for ch in "NVDA,INTC".chars() {
+            a.handle_key(key(KeyCode::Char(ch)));
+        }
+        a.handle_key(key(KeyCode::Enter));
+        assert_eq!(a.status, "target saved");
+        let specs =
+            delta_services::config_ops::target_specs(&dir.path().join("config.toml")).unwrap();
+        assert_eq!(specs["chips"].tickers, ["NVDA", "INTC"]);
+        a.handle_key(key(KeyCode::Char('w')));
+        a.handle_key(key(KeyCode::Down));
+        a.handle_key(key(KeyCode::Char('x')));
+        if let Some(Overlay::SettingsForm(modal)) = &a.overlay {
+            assert_eq!(modal.form.fields[0].value(), "chips");
+        } else {
+            panic!("remove form did not open");
+        }
+        a.handle_key(key(KeyCode::Enter));
+        assert_eq!(a.status, "target removed");
+        let specs =
+            delta_services::config_ops::target_specs(&dir.path().join("config.toml")).unwrap();
+        assert!(!specs.contains_key("chips"));
+    }
+
+    #[test]
+    fn rejected_submits_keep_the_form_open() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut a = real_desk_app(dir.path());
+        a.handle_key(key(KeyCode::Char('a')));
+        // Submit with empty fields: the required validator rejects.
+        a.handle_key(key(KeyCode::Enter));
+        assert!(
+            matches!(a.overlay, Some(Overlay::SettingsForm(_))),
+            "the form stays open on a rejected submit"
+        );
+        // A bad market id reaches the service and surfaces its message.
+        type_into(&["No ID", "London", "GBP", ""], &mut a);
+        a.handle_key(key(KeyCode::Enter));
+        assert_eq!(
+            a.status,
+            "market ID must use lowercase letters, numbers, or underscores"
+        );
+        assert!(matches!(a.overlay, Some(Overlay::SettingsForm(_))));
+    }
+
+    #[test]
+    fn offline_edits_explain_themselves() {
+        let mut a = settings_app();
+        assert_eq!(a.desk.config_path, None);
+        match a.handle_key(key(KeyCode::Char('t'))).unwrap() {
+            Action::Status(msg) => assert_eq!(msg, "offline: no config.toml"),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn settings_form_paints_over_the_screen() {
+        let mut a = settings_app();
+        a.handle_key(key(KeyCode::Char('a')));
+        let text = screen_text(&mut a, 120, 40);
+        assert!(text.contains("add market"), "{text}");
+        assert!(text.contains("ID"));
+        a.handle_key(key(KeyCode::Esc));
+        assert!(a.overlay.is_none());
+    }
+
+    #[test]
+    fn settings_state_default_matches_the_golden_world() {
+        let state = SettingsState::default();
+        assert_eq!(state.focus, SettingsFocus::Provider);
+        assert_eq!(state.provider_selected, 0);
+        assert_eq!(state.diagnostics_open, None);
     }
 }
