@@ -107,6 +107,12 @@ impl Seed {
         };
         WatchlistState {
             range,
+            scrub: None,
+            entries: vec![delta_tui::screens::WatchEntry {
+                symbol: "AAPL".into(),
+                asset_class: "equity".into(),
+            }],
+            selected: 0,
             metric: Some(MetricsData {
                 symbol: "AAPL".to_string(),
                 market: "us".to_string(),

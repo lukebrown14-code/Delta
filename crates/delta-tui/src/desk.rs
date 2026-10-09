@@ -9,10 +9,10 @@ use chrono::{Duration, NaiveDateTime, Utc};
 use delta_core::config::load_config;
 use delta_core::db::Db;
 use delta_core::models::{AssetClass, Bar, Instrument};
-use delta_services::analytics;
+use delta_services::{analytics, asset_metrics::AssetMetrics};
 
 use crate::braille::BrailleGraph;
-use crate::screens::{grouped, HomeFeed, HomeState, MetricsData, WatchlistState};
+use crate::screens::{grouped, HomeFeed, HomeState, MetricsData, WatchEntry, WatchlistState};
 
 /// Golden-exporter constants: 80 seeded bars.
 pub const BAR_COUNT: usize = 80;
@@ -92,10 +92,12 @@ pub struct Desk {
     pub instruments: Vec<InstrumentDesk>,
     pub selected: usize,
     pub range_index: usize,
+    pub scrub: Option<usize>,
     /// Live quotes keyed by instrument id (`regularMarketPrice`).
     pub live: BTreeMap<String, f64>,
     /// Inspector metric rows keyed by instrument id (metrics worker).
     pub metrics: BTreeMap<String, Vec<(String, String)>>,
+    pub asset_metrics: BTreeMap<(String, String), AssetMetrics>,
     pub source: Source,
     /// Last ingest counts, when a gather has run this session.
     pub last_ingest: Option<BTreeMap<String, usize>>,
@@ -113,13 +115,15 @@ impl Desk {
     /// Load the real desk from `config.toml` + its DB; fall back to the
     /// offline seed when either is missing or empty.
     pub fn open() -> Desk {
-        match Self::try_real() {
+        match Self::try_real(Path::new("config.toml")) {
             Some((instruments, db_path, feed)) => Desk {
                 instruments,
                 selected: 0,
                 range_index: 2, // "1m"
+                scrub: None,
                 live: BTreeMap::new(),
                 metrics: BTreeMap::new(),
+                asset_metrics: BTreeMap::new(),
                 source: Source::Real(db_path),
                 last_ingest: None,
                 feed,
@@ -128,28 +132,19 @@ impl Desk {
         }
     }
 
-    fn try_real() -> Option<(Vec<InstrumentDesk>, PathBuf, HomeFeed)> {
-        let config_path = PathBuf::from("config.toml");
+    fn try_real(config_path: &Path) -> Option<(Vec<InstrumentDesk>, PathBuf, HomeFeed)> {
         if !config_path.exists() {
             return None;
         }
-        let (_, app) = load_config(&config_path).ok()?;
+        let (_, app) = load_config(config_path).ok()?;
         let db_path = PathBuf::from(&app.db_path);
-        let specs = delta_services::config_ops::target_specs(&config_path).ok()?;
+        let specs = delta_services::config_ops::target_specs(config_path).ok()?;
         let universe: Vec<Instrument> = specs.into_values().flat_map(|t| t.instruments()).collect();
-        if universe.is_empty() {
-            return None;
-        }
         let db = Db::open(&db_path).ok()?;
         let mut instruments: Vec<InstrumentDesk> = Vec::new();
         for inst in universe {
             let bars = db.bars(&inst.id).ok()?;
-            if !bars.is_empty() {
-                instruments.push(InstrumentDesk::from_db(inst, bars));
-            }
-        }
-        if instruments.is_empty() {
-            return None;
+            instruments.push(InstrumentDesk::from_db(inst, bars));
         }
         let ids: Vec<String> = instruments
             .iter()
@@ -159,14 +154,42 @@ impl Desk {
         Some((instruments, db_path, feed))
     }
 
+    /// Reload the configured targets after an add/remove operation. The
+    /// service owns persistence; this only rebuilds the displayed universe.
+    pub fn reload_targets_from(&mut self, config_path: &Path) -> Result<(), String> {
+        let (instruments, db_path, feed) = Self::try_real(config_path)
+            .ok_or_else(|| "unable to load targets from config and database".to_string())?;
+        let selected_id = self.current().map(|current| current.instrument.id.clone());
+        self.instruments = instruments;
+        self.selected = selected_id
+            .and_then(|id| {
+                self.instruments
+                    .iter()
+                    .position(|row| row.instrument.id == id)
+            })
+            .unwrap_or(0);
+        self.scrub = None;
+        self.live
+            .retain(|id, _| self.instruments.iter().any(|row| row.instrument.id == *id));
+        self.metrics
+            .retain(|id, _| self.instruments.iter().any(|row| row.instrument.id == *id));
+        self.asset_metrics
+            .retain(|(id, _), _| self.instruments.iter().any(|row| row.instrument.id == *id));
+        self.source = Source::Real(db_path);
+        self.feed = feed;
+        Ok(())
+    }
+
     /// The offline golden environment (in-memory; nothing touches disk).
     pub fn offline() -> Desk {
         Desk {
             instruments: vec![InstrumentDesk::offline("AAPL")],
             selected: 0,
             range_index: 2, // "1m"
+            scrub: None,
             live: BTreeMap::new(),
             metrics: BTreeMap::new(),
+            asset_metrics: BTreeMap::new(),
             source: Source::Offline,
             last_ingest: None,
             feed: HomeFeed::seed(),
@@ -174,8 +197,8 @@ impl Desk {
     }
 
     /// The instrument the inspector shows.
-    pub fn current(&self) -> &InstrumentDesk {
-        &self.instruments[self.selected.min(self.instruments.len() - 1)]
+    pub fn current(&self) -> Option<&InstrumentDesk> {
+        self.instruments.get(self.selected)
     }
 
     pub fn cycle_instrument(&mut self, delta: isize) {
@@ -184,6 +207,7 @@ impl Desk {
         }
         let n = self.instruments.len() as isize;
         self.selected = ((self.selected as isize + delta).rem_euclid(n)) as usize;
+        self.scrub = None;
     }
 
     /// The watchlist `RANGES` entry currently selected.
@@ -194,18 +218,102 @@ impl Desk {
     pub fn cycle_range(&mut self, delta: isize) {
         let n = crate::screens::RANGES.len() as isize;
         self.range_index = ((self.range_index as isize + delta).rem_euclid(n)) as usize;
+        self.scrub = None;
+    }
+
+    /// Move the chart cursor over the selected range. A left move from the
+    /// first point dismisses it; a right move from the inactive state lands
+    /// on the most recent point.
+    pub fn move_scrub(&mut self, delta: isize) {
+        let n = self
+            .watch_state()
+            .metric
+            .as_ref()
+            .map_or(0, |m| m.series.len());
+        if n == 0 {
+            self.scrub = None;
+            return;
+        }
+        self.scrub = match (self.scrub, delta) {
+            (None, d) if d < 0 => Some(0),
+            (None, _) => Some(n - 1),
+            (Some(0), d) if d < 0 => None,
+            (Some(index), d) => Some(index.saturating_add_signed(d).min(n - 1)),
+        };
     }
 
     /// The live quote for the current instrument, when a quote worker has
     /// reported one.
     pub fn live_price(&self) -> Option<f64> {
-        self.live.get(&self.current().instrument.id).copied()
+        self.current()
+            .and_then(|current| self.live.get(&current.instrument.id).copied())
     }
 
     /// The inspector state for the current instrument and range.
     pub fn watch_state(&self) -> WatchlistState {
-        let cur = self.current();
         let range = self.range();
+        let entries = self
+            .instruments
+            .iter()
+            .map(|row| WatchEntry {
+                symbol: row.instrument.symbol.clone(),
+                asset_class: row.instrument.asset_class.as_str().to_string(),
+            })
+            .collect();
+        let Some(cur) = self.current() else {
+            return WatchlistState {
+                range,
+                scrub: None,
+                entries,
+                selected: 0,
+                metric: None,
+            };
+        };
+        if let Some(provider) = self
+            .asset_metrics
+            .get(&(cur.instrument.id.clone(), range.to_string()))
+        {
+            let (series, times) = if provider.series.is_empty() {
+                let closes: Vec<f64> = cur.bars.iter().map(|(close, _)| *close).collect();
+                let stamps: Vec<String> = cur.bars.iter().map(|(_, stamp)| stamp.clone()).collect();
+                crate::screens::chart_window(&closes, crate::screens::range_window(range), &stamps)
+            } else {
+                crate::screens::chart_window(
+                    &provider.series,
+                    crate::screens::range_window(range),
+                    &provider.series_times,
+                )
+            };
+            let current = series.last().copied();
+            return WatchlistState {
+                range,
+                scrub: self.scrub,
+                entries,
+                selected: self.selected,
+                metric: Some(MetricsData {
+                    symbol: cur.instrument.symbol.clone(),
+                    market: cur.instrument.market.clone(),
+                    asset_class: provider.profile.clone(),
+                    currency: cur.instrument.currency.clone(),
+                    current: current.map(grouped).unwrap_or_else(|| "—".into()),
+                    change_label: (!provider.change_label.is_empty())
+                        .then(|| provider.change_label.clone()),
+                    period_high: provider.period_high,
+                    period_low: provider.period_low,
+                    history_start: times.first().cloned(),
+                    history_end: times.last().cloned(),
+                    series,
+                    series_times: times,
+                    source: provider.source.clone(),
+                    values: provider
+                        .groups
+                        .iter()
+                        .flat_map(|(_, rows)| rows.iter().cloned())
+                        .take(24)
+                        .collect(),
+                }),
+            };
+        }
         let window = crate::screens::range_window(range);
         let start = window.map_or(0, |n| cur.bars.len().saturating_sub(n));
         let picked: Vec<(f64, String)> = cur.bars[start..].to_vec();
@@ -216,7 +324,30 @@ impl Desk {
         if let Some(px) = live {
             series.push(px);
         }
-        let last = series[series.len() - 1];
+        let Some(&last) = series.last() else {
+            return WatchlistState {
+                range,
+                scrub: None,
+                entries,
+                selected: self.selected,
+                metric: Some(MetricsData {
+                    symbol: cur.instrument.symbol.clone(),
+                    market: cur.instrument.market.clone(),
+                    asset_class: cur.instrument.asset_class.as_str().to_string(),
+                    currency: cur.instrument.currency.clone(),
+                    current: "—".to_string(),
+                    change_label: None,
+                    period_high: None,
+                    period_low: None,
+                    history_start: None,
+                    history_end: None,
+                    series: Vec::new(),
+                    series_times: Vec::new(),
+                    source: "No history yet".to_string(),
+                    values: Vec::new(),
+                }),
+            };
+        };
         let first = series[0];
         let change = if first != 0.0 {
             (last / first - 1.0) * 100.0
@@ -225,7 +356,13 @@ impl Desk {
         };
         let hi = series.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
         let lo = series.iter().cloned().fold(f64::INFINITY, f64::min);
-        let mut values = vec![("Current price".to_string(), grouped(last))];
+        let bond = cur.instrument.asset_class == AssetClass::Bond;
+        let current_label = if bond {
+            "Current yield"
+        } else {
+            "Current price"
+        };
+        let mut values = vec![(current_label.to_string(), grouped(last))];
         if live.is_some() {
             values.push(("Source".to_string(), "live quote".to_string()));
         }
@@ -236,13 +373,20 @@ impl Desk {
         }
         WatchlistState {
             range,
+            scrub: self.scrub,
+            entries,
+            selected: self.selected,
             metric: Some(MetricsData {
                 symbol: cur.instrument.symbol.clone(),
                 market: cur.instrument.market.clone(),
-                asset_class: "equity".to_string(),
+                asset_class: cur.instrument.asset_class.as_str().to_string(),
                 currency: cur.instrument.currency.clone(),
                 current: grouped(last),
-                change_label: Some(format!("{change:+.1}%")),
+                change_label: Some(if bond {
+                    format!("{:+.1} bps", (last - first) * 100.0)
+                } else {
+                    format!("{change:+.1}%")
+                }),
                 period_high: Some(hi),
                 period_low: Some(lo),
                 history_start: times.first().cloned(),
@@ -261,20 +405,44 @@ impl Desk {
 
     /// The home screen state (clock, headline quote, sparkline).
     pub fn home_state(&self) -> HomeState {
-        let cur = self.current();
+        let Some(cur) = self.current() else {
+            return HomeState {
+                clock: Utc::now().format("%A %d %B %Y · %H:%M:%S UTC").to_string(),
+                symbol: "—".to_string(),
+                last: "—".to_string(),
+                chg_label: "—".to_string(),
+                spark: String::new(),
+                since_stamp: String::new(),
+                closes: Vec::new(),
+                feed: self.feed.clone(),
+            };
+        };
         let mut closes: Vec<f64> = cur.bars.iter().map(|(c, _)| *c).collect();
         if let Some(px) = self.live_price() {
             closes.push(px);
         }
-        let last = closes[closes.len() - 1];
-        let prev = closes[closes.len() - 2];
-        let chg_label = format!("{:+.2}%", (last / prev - 1.0) * 100.0);
-        let spark = BrailleGraph::filled(closes.clone()).rows(17, 1)[0].clone();
+        let last = closes
+            .last()
+            .map(|value| grouped(*value))
+            .unwrap_or_else(|| "—".into());
+        let chg_label = if closes.len() > 1 && closes[closes.len() - 2] != 0.0 {
+            format!(
+                "{:+.2}%",
+                (closes[closes.len() - 1] / closes[closes.len() - 2] - 1.0) * 100.0
+            )
+        } else {
+            "—".into()
+        };
+        let spark = if closes.is_empty() {
+            String::new()
+        } else {
+            BrailleGraph::filled(closes.clone()).rows(17, 1)[0].clone()
+        };
         let now = Utc::now();
         HomeState {
             clock: now.format("%A %d %B %Y · %H:%M:%S UTC").to_string(),
             symbol: cur.instrument.symbol.clone(),
-            last: grouped(last),
+            last,
             chg_label,
             spark,
             since_stamp: format!("since {}", now.format("%a %H:%M")),

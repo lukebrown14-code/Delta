@@ -4,6 +4,7 @@
 //! modals (Go, help, palette) and the theme switch.
 
 use std::io::Stdout;
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use crossterm::event::{Event, EventStream, KeyCode, KeyEvent};
@@ -34,6 +35,7 @@ enum Overlay {
     Help(HelpDialog),
     /// ctrl+k / ctrl+p: the command palette (`app.py::DeltaCommands`).
     Palette(CommandPalette),
+    AddTarget(String),
 }
 
 /// The seven panes: 1-6 plus `c`.
@@ -168,6 +170,32 @@ impl App {
             Some(Overlay::Go) => GoPicker::draw_screen(screen),
             Some(Overlay::Help(help)) => help.draw_screen(screen),
             Some(Overlay::Palette(palette)) => palette.draw_screen(screen),
+            Some(Overlay::AddTarget(query)) => {
+                let left = screen.w.saturating_sub(62) / 2;
+                let top = screen.h.saturating_sub(12) / 2;
+                screen.pane(
+                    left,
+                    top,
+                    left + 61,
+                    top + 11,
+                    true,
+                    &[("add to watchlist", Style::fg(color::BLUE).bold())],
+                    &[],
+                );
+                screen.text(left + 3, top + 2, "Instrument", Style::fg(color::MUTED));
+                screen.text(
+                    left + 3,
+                    top + 3,
+                    &format!("> {query}_"),
+                    Style::fg(color::FG),
+                );
+                screen.text(
+                    left + 3,
+                    top + 6,
+                    "Enter US:AAPL or ASX:BHP",
+                    Style::fg(color::MUTED),
+                );
+            }
             None => {}
         }
         self.paint_status_overlay(screen);
@@ -197,6 +225,59 @@ impl App {
 }
 
 impl App {
+    /// Persist a watched instrument using the config service, then reload the
+    /// desk from the resulting config and database.
+    fn add_instrument_at(&mut self, config: &Path, input: &str) -> Result<(), String> {
+        let input = input.trim().to_uppercase();
+        let (market, symbol) = input.split_once(':').unwrap_or(("US", input.as_str()));
+        if symbol.is_empty()
+            || !symbol
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || ".-^".contains(ch))
+        {
+            return Err("enter a market and instrument, for example US:AAPL".into());
+        }
+        delta_services::config_ops::add_target(
+            config,
+            symbol,
+            "company",
+            &market.to_lowercase(),
+            &[symbol.to_string()],
+            &[],
+            "",
+            None,
+            "equity",
+        )
+        .map_err(|error| error.to_string())?;
+        self.desk.reload_targets_from(config)?;
+        self.desk.selected = self
+            .desk
+            .instruments
+            .iter()
+            .position(|row| row.instrument.symbol == symbol)
+            .unwrap_or(0);
+        self.status = format!("{market}:{symbol} added");
+        Ok(())
+    }
+
+    fn remove_instrument_at(&mut self, config: &Path) -> Result<(), String> {
+        let current = self
+            .desk
+            .current()
+            .ok_or_else(|| "nothing selected".to_string())?;
+        let name = current
+            .instrument
+            .watchlists
+            .first()
+            .ok_or_else(|| "target unavailable".to_string())?
+            .clone();
+        delta_services::config_ops::remove_target(config, &name)
+            .map_err(|error| error.to_string())?;
+        self.desk.reload_targets_from(config)?;
+        self.status = format!("{name} removed");
+        Ok(())
+    }
+
     /// The shell keys, in `DeltaApp.BINDINGS` order (plus the esc close and
     /// the palette keys Textual/the plan install). Per-screen keys (the
     /// watchlist's `r`/`R` range, `enter` inspect, ...) belong to their
@@ -267,11 +348,36 @@ impl App {
 impl Component for App {
     fn handle_key(&mut self, key: KeyEvent) -> Option<Action> {
         // Modals take the key first (a Textual modal stops propagation).
+        if let Some(Overlay::AddTarget(query)) = &mut self.overlay {
+            match key.code {
+                KeyCode::Esc => self.overlay = None,
+                KeyCode::Backspace => {
+                    query.pop();
+                }
+                KeyCode::Enter => {
+                    let input = query.clone();
+                    match self.add_instrument_at(Path::new("config.toml"), &input) {
+                        Ok(()) => self.overlay = None,
+                        Err(error) => self.status = error,
+                    }
+                }
+                KeyCode::Char(ch)
+                    if !key
+                        .modifiers
+                        .contains(crossterm::event::KeyModifiers::CONTROL) =>
+                {
+                    query.push(ch)
+                }
+                _ => {}
+            }
+            return Some(Action::Noop);
+        }
         if let Some(overlay) = &mut self.overlay {
             let action = match overlay {
                 Overlay::Go => delta_tui::dialog::go_picker_key(key),
                 Overlay::Help(help) => help.handle_key(key),
                 Overlay::Palette(palette) => palette.handle_key(key),
+                Overlay::AddTarget(_) => unreachable!(),
             };
             let action = action.unwrap_or(Action::Noop);
             match action {
@@ -280,6 +386,45 @@ impl Component for App {
                 other => self.update(other),
             }
             return None;
+        }
+        if self.tab == Tab::Watchlist {
+            match key.code {
+                KeyCode::Char('a') => {
+                    self.overlay = Some(Overlay::AddTarget(String::new()));
+                    return Some(Action::Noop);
+                }
+                KeyCode::Char('d') => {
+                    if let Err(error) = self.remove_instrument_at(Path::new("config.toml")) {
+                        self.status = error;
+                    }
+                    return Some(Action::Noop);
+                }
+                KeyCode::Char(']') => {
+                    self.desk.move_scrub(1);
+                    return Some(Action::Noop);
+                }
+                KeyCode::Char('[') => {
+                    self.desk.move_scrub(-1);
+                    return Some(Action::Noop);
+                }
+                KeyCode::Char('r') => {
+                    self.desk.cycle_range(1);
+                    return Some(Action::Noop);
+                }
+                KeyCode::Char('R') => {
+                    self.desk.cycle_range(-1);
+                    return Some(Action::Noop);
+                }
+                KeyCode::Down => {
+                    self.desk.cycle_instrument(1);
+                    return Some(Action::Noop);
+                }
+                KeyCode::Up => {
+                    self.desk.cycle_instrument(-1);
+                    return Some(Action::Noop);
+                }
+                _ => {}
+            }
         }
         if let Some(action) = self.handle_shell_key(key) {
             return Some(action);
@@ -293,6 +438,15 @@ impl Component for App {
             Action::Quotes(prices) => self.desk.live = prices,
             Action::Metrics { instrument, rows } => {
                 self.desk.metrics.insert(instrument, rows);
+            }
+            Action::AssetMetrics { range, data } => {
+                if let Some(error) = &data.error {
+                    self.status = format!("metrics unavailable: {error}");
+                } else {
+                    self.desk
+                        .asset_metrics
+                        .insert((data.instrument_id.clone(), range), *data);
+                }
             }
             Action::Ingested(counts) => {
                 // Per-source counts, RSS/SEC/bars each visible.
@@ -360,21 +514,24 @@ impl Component for App {
     }
 }
 
-pub(crate) async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> std::io::Result<()> {
-    let (bus_tx, mut bus_rx) = mpsc::unbounded_channel::<Action>();
-    let desk = Desk::open();
+fn start_workers(bus: mpsc::UnboundedSender<Action>, desk: &Desk) -> workers::Workers {
     let universe: Vec<delta_core::models::Instrument> = desk
         .instruments
         .iter()
-        .map(|d| d.instrument.clone())
+        .map(|row| row.instrument.clone())
         .collect();
     let db_path = match &desk.source {
         delta_tui::desk::Source::Real(db) => Some(db.clone()),
         delta_tui::desk::Source::Offline => None,
     };
-    // Quotes hit the network; opt in with DELTA_QUOTES=1.
-    let quotes_enabled = std::env::var("DELTA_QUOTES").as_deref() == Ok("1");
-    let gather_tx = workers::spawn(bus_tx.clone(), universe, db_path, quotes_enabled);
+    let quotes_enabled = matches!(&desk.source, delta_tui::desk::Source::Real(_));
+    workers::spawn(bus, universe, db_path, quotes_enabled)
+}
+
+pub(crate) async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> std::io::Result<()> {
+    let (bus_tx, mut bus_rx) = mpsc::unbounded_channel::<Action>();
+    let desk = Desk::open();
+    let mut active_workers = start_workers(bus_tx.clone(), &desk);
 
     let mut app = App {
         desk,
@@ -406,11 +563,26 @@ pub(crate) async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> st
                 match maybe_event {
                     Some(Ok(Event::Key(key))) => {
                         dirty = true;
+                        let previous_ids: Vec<_> = app.desk.instruments.iter().map(|row| row.instrument.id.clone()).collect();
+                        let previous_range = app.desk.range();
+                        let previous_selected = app.desk.current().map(|row| row.instrument.id.clone());
                         if let Some(action) = app.handle_key(key) {
                             if action == Action::Gather {
-                                let _ = gather_tx.send(());
+                                let _ = active_workers.gather_tx.send(());
                             } else {
                                 app.update(action);
+                            }
+                        }
+                        let current_ids: Vec<_> = app.desk.instruments.iter().map(|row| row.instrument.id.clone()).collect();
+                        if current_ids != previous_ids {
+                            active_workers = start_workers(bus_tx.clone(), &app.desk);
+                        }
+                        let selected = app.desk.current();
+                        let selection_changed = selected.map(|row| &row.instrument.id) != previous_selected.as_ref();
+                        if (app.desk.range() != previous_range || selection_changed || key.code == KeyCode::Enter)
+                            && app.tab == Tab::Watchlist && app.overlay.is_none() {
+                            if let Some(row) = selected {
+                                let _ = active_workers.metrics_tx.send((row.instrument.clone(), app.desk.range().to_string()));
                             }
                         }
                     }
@@ -617,6 +789,121 @@ mod tests {
             .values
             .iter()
             .any(|(l, v)| l == "Market cap" && v == "$3.40T"));
+    }
+
+    #[test]
+    fn add_dialog_accepts_instrument_text_and_esc_cancels() {
+        let mut a = app();
+        a.handle_key(key(KeyCode::Char('a')));
+        for ch in "ASX:BHP".chars() {
+            a.handle_key(key(KeyCode::Char(ch)));
+        }
+        assert!(matches!(&a.overlay, Some(Overlay::AddTarget(query)) if query == "ASX:BHP"));
+        a.handle_key(key(KeyCode::Esc));
+        assert!(a.overlay.is_none());
+    }
+
+    #[test]
+    fn watchlist_add_and_remove_persist_through_services() {
+        let dir = std::env::temp_dir().join(format!(
+            "delta-watchlist-{}-{}",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let config = dir.join("config.toml");
+        let db_path = dir.join("delta.db");
+        delta_core::db::Db::open(&db_path).unwrap();
+        std::fs::write(
+            &config,
+            format!("db_path = {:?}\n", db_path.display().to_string()),
+        )
+        .unwrap();
+        let mut a = app();
+        a.add_instrument_at(&config, "ASX:BHP").unwrap();
+        assert!(delta_services::config_ops::target_specs(&config)
+            .unwrap()
+            .contains_key("BHP"));
+        assert_eq!(a.desk.watch_state().entries[0].symbol, "BHP");
+        a.remove_instrument_at(&config).unwrap();
+        assert!(delta_services::config_ops::target_specs(&config)
+            .unwrap()
+            .is_empty());
+        assert!(a.desk.watch_state().entries.is_empty());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn empty_watchlist_renders_without_a_selected_instrument() {
+        let mut a = app();
+        a.desk.instruments.clear();
+        for &(w, h) in &[(80, 24), (120, 40), (200, 50)] {
+            let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
+            terminal.draw(|frame| a.draw(frame, frame.area())).unwrap();
+        }
+        assert!(a.desk.watch_state().metric.is_none());
+    }
+
+    #[test]
+    fn watchlist_scrub_moves_across_the_loaded_series() {
+        let mut a = app();
+        a.handle_key(key(KeyCode::Char(']')));
+        let state = a.desk.watch_state();
+        let count = state.metric.unwrap().series.len();
+        assert_eq!(state.scrub, Some(count - 1));
+        a.handle_key(key(KeyCode::Char('[')));
+        assert_eq!(a.desk.watch_state().scrub, Some(count - 2));
+    }
+
+    #[test]
+    fn scrubbed_watchlist_paints_a_date_value_and_cursor() {
+        let mut a = app();
+        a.handle_key(key(KeyCode::Char(']')));
+        let state = a.desk.watch_state();
+        let metric = state.metric.unwrap();
+        let stamp = delta_tui::screens::friendly_date(metric.series_times.last().unwrap());
+        let price = delta_tui::screens::grouped(*metric.series.last().unwrap());
+        let mut screen = Screen::new(120, 40);
+        a.paint(&mut screen);
+        let cells = &screen.cells;
+        let width = screen.w;
+        let chart_rows: String = (4..18)
+            .flat_map(|y| (50..116).map(move |x| cells[y * width + x].ch))
+            .collect();
+        assert!(chart_rows.contains("┊"));
+        assert!(chart_rows.contains(&stamp));
+        assert!(chart_rows.contains(&price));
+    }
+
+    #[test]
+    fn bond_metrics_from_service_reach_the_inspector() {
+        let mut a = app();
+        a.desk.instruments[0].instrument.asset_class = delta_core::models::AssetClass::Bond;
+        let inst = a.desk.instruments[0].instrument.clone();
+        let metrics = delta_services::asset_metrics::normalize_asset_metrics(
+            &inst,
+            &serde_json::json!({"couponRate": {"raw": 0.05}}),
+            vec![4.0, 4.25],
+            vec!["2026-10-08T00:00:00Z".into(), "2026-10-09T00:00:00Z".into()],
+        );
+        a.update(Action::AssetMetrics {
+            range: "1m".into(),
+            data: Box::new(metrics),
+        });
+        let inspector = a.desk.watch_state().metric.unwrap();
+        assert_eq!(inspector.asset_class, "bond");
+        assert_eq!(inspector.change_label.as_deref(), Some("+25.0 bps"));
+        assert!(inspector.values.iter().any(|(label, _)| label == "Coupon"));
+    }
+
+    #[test]
+    fn watchlist_metrics_use_the_instrument_asset_class() {
+        let mut a = app();
+        a.desk.instruments[0].instrument.asset_class = delta_core::models::AssetClass::Bond;
+        let metric = a.desk.watch_state().metric.unwrap();
+        assert_eq!(metric.asset_class, "bond");
+        assert!(metric.change_label.unwrap().ends_with("bps"));
+        assert_eq!(metric.values[0].0, "Current yield");
     }
 
     #[test]
