@@ -40,6 +40,16 @@ pub fn range_window(range: &str) -> Option<usize> {
 pub struct WatchlistState {
     pub range: &'static str,
     pub metric: Option<MetricsData>,
+    /// Selected loaded-series point, or no active chart cursor.
+    pub scrub: Option<usize>,
+    pub entries: Vec<WatchEntry>,
+    pub selected: usize,
+}
+
+#[derive(Clone)]
+pub struct WatchEntry {
+    pub symbol: String,
+    pub asset_class: String,
 }
 
 /// The gathered `AssetMetrics` fields the inspector renders.
@@ -142,7 +152,10 @@ pub fn draw_watchlist(screen: &mut Screen, state: &WatchlistState) {
         true,
         &[
             ("watchlist ", Style::fg(color::BLUE).bold()),
-            ("· ○ idle · 1", Style::fg(color::MUTED).bold()),
+            (
+                &format!("· ○ idle · {}", state.entries.len()),
+                Style::fg(color::MUTED).bold(),
+            ),
         ],
         &pane_hints(&[
             ("a", "add"),
@@ -165,14 +178,14 @@ pub fn draw_watchlist(screen: &mut Screen, state: &WatchlistState) {
         ]),
     );
 
-    draw_list_pane(screen, content_bottom);
+    draw_list_pane(screen, content_bottom, state);
     if let Some(metric) = &state.metric {
         draw_inspector(screen, state, metric);
     }
     draw_status_bar(screen, screen.h - 1, w, false);
 }
 
-fn draw_list_pane(screen: &mut Screen, content_bottom: usize) {
+fn draw_list_pane(screen: &mut Screen, content_bottom: usize, state: &WatchlistState) {
     // Blank OptionList rows carry the foreground style (cols 3..44).
     screen.fill(3, 2, 45, content_bottom, Style::fg(color::FG));
     // Column header (a disabled option): muted, prompt + python row string.
@@ -181,23 +194,103 @@ fn draw_list_pane(screen: &mut Screen, content_bottom: usize) {
         "Name", "Last", "Chg%", "Age"
     );
     screen.text(3, 1, &format!(" {header} "), Style::fg(color::MUTED));
-    // Group header: "▾ equity (1)".
-    let mut x = 3;
-    screen.put(x, 2, ' ', Style::fg(color::FG));
-    x += 1;
-    x = screen.text(x, 2, "▾ equity ", Style::fg(color::BLUE).bold());
-    screen.text(x, 2, "(1)", Style::fg(color::MUTED).bold());
-    // Selected instrument row: cursor row in $primary, quoteless dashes.
-    let y = 3usize;
-    let white = Style::fg(color::WHITE).bg(color::BLUE_BG).bold();
-    let muted = Style::fg(color::MUTED).bg(color::BLUE_BG).bold();
-    let row = format!("  {:<12}{:>10}  {:>8}  {:>4}", "AAPL", "—", "—", "");
-    screen.put(3, y, ' ', white);
-    let mut x = 4;
-    x = screen.text(x, y, &row[..14], white); // prompt + name column
-    x = screen.text(x, y, &row[14..], muted); // quote columns
-    screen.put(44, y, ' ', white);
-    let _ = x;
+    if state.entries.is_empty() {
+        screen.text(
+            4,
+            3,
+            "No instruments yet · press a to add",
+            Style::fg(color::MUTED),
+        );
+        return;
+    }
+    let mut y = 2;
+    let mut class = "";
+    for (index, entry) in state.entries.iter().enumerate() {
+        if entry.asset_class != class {
+            class = &entry.asset_class;
+            let count = state
+                .entries
+                .iter()
+                .filter(|item| item.asset_class == class)
+                .count();
+            let mut x = screen.text(4, y, &format!("▾ {class} "), Style::fg(color::BLUE).bold());
+            x = screen.text(x, y, &format!("({count})"), Style::fg(color::MUTED).bold());
+            let _ = x;
+            y += 1;
+        }
+        if y >= content_bottom {
+            break;
+        }
+        let selected = index == state.selected;
+        let white = Style::fg(color::WHITE).bg(color::BLUE_BG).bold();
+        let muted = Style::fg(color::MUTED).bg(color::BLUE_BG).bold();
+        let row = format!("  {:<12}{:>10}  {:>8}  {:>4}", entry.symbol, "—", "—", "");
+        if selected {
+            screen.put(3, y, ' ', white);
+        }
+        screen.text(
+            4,
+            y,
+            &row[..14],
+            if selected {
+                white
+            } else {
+                Style::fg(color::FG)
+            },
+        );
+        screen.text(
+            18,
+            y,
+            &row[14..],
+            if selected {
+                muted
+            } else {
+                Style::fg(color::MUTED)
+            },
+        );
+        if selected {
+            screen.put(44, y, ' ', white);
+        }
+        y += 1;
+    }
+}
+
+/// Overlay the selected point on the displayed series. The position is
+/// indexed in the loaded range, not in a down-sampled plot column.
+fn paint_scrub(
+    screen: &mut Screen,
+    state: &WatchlistState,
+    chart: &PriceChart,
+    x: usize,
+    y: usize,
+    width: usize,
+    height: usize,
+) {
+    let Some(index) = state.scrub else { return };
+    let Some(value) = chart.data.get(index) else {
+        return;
+    };
+    let plot_width = width.saturating_sub(10);
+    let column = if chart.data.len() > 1 {
+        index * plot_width.saturating_sub(1) / (chart.data.len() - 1)
+    } else {
+        0
+    };
+    let cursor_x = x + column;
+    for row in y + 1..y + height.saturating_sub(2) {
+        screen.put(cursor_x, row, '┊', Style::fg(color::AMBER));
+    }
+    let stamp = chart
+        .times
+        .get(index)
+        .map(|time| friendly_date(time))
+        .unwrap_or_default();
+    screen.text(
+        x,
+        y,
+        &format!("{stamp}  {}", grouped(*value)),
+        Style::fg(color::AMBER).bold(),
+    );
 }
 
 fn draw_inspector(screen: &mut Screen, state: &WatchlistState, metric: &MetricsData) {
@@ -292,6 +385,7 @@ fn draw_inspector(screen: &mut Screen, state: &WatchlistState, metric: &MetricsD
         _ => color::BLUE,
     };
     screen.price_chart(50, 4, &chart, 66, 16, line);
+    paint_scrub(screen, state, &chart, 50, 4, 66, 16);
 
     // Metric grid: muted-bold heading, then label/value pairs (J8). The Rich
     // table paints its full row width in the foreground style.
@@ -395,7 +489,11 @@ pub fn draw_watchlist_narrow(screen: &mut Screen, state: &WatchlistState) {
 
     let cx = 3usize; // pane border 1 + padding 1
     let right_edge = 77usize;
-    let Some(metric) = &state.metric else { return };
+    let Some(metric) = &state.metric else {
+        screen.text(cx, 2, "No instrument selected", Style::fg(color::MUTED));
+        draw_status_bar(screen, screen.h - 1, w, true);
+        return;
+    };
 
     // Row 1: name + meta.
     let mut x = cx;
@@ -485,6 +583,7 @@ pub fn draw_watchlist_narrow(screen: &mut Screen, state: &WatchlistState) {
         _ => color::BLUE,
     };
     screen.price_chart(cx + 1, 4, &chart, 72, 12, line);
+    paint_scrub(screen, state, &chart, cx + 1, 4, 72, 12);
 
     // Metric grid.
     screen.text(cx, 16, "Available Metrics", Style::fg(color::MUTED).bold());
@@ -753,7 +852,10 @@ pub fn draw_watchlist_wide(screen: &mut Screen, state: &WatchlistState) {
         true,
         &[
             ("watchlist ", Style::fg(color::BLUE).bold()),
-            ("· ○ idle · 1", Style::fg(color::MUTED).bold()),
+            (
+                &format!("· ○ idle · {}", state.entries.len()),
+                Style::fg(color::MUTED).bold(),
+            ),
         ],
         &pane_hints(&[
             ("a", "add"),
@@ -780,12 +882,16 @@ pub fn draw_watchlist_wide(screen: &mut Screen, state: &WatchlistState) {
     );
 
     // Left pane: identical rows to the 120 layout.
-    draw_list_pane(screen, content_bottom);
+    draw_list_pane(screen, content_bottom, state);
 
     // Inspector.
     let cx = 48usize;
     let right_edge = screen.w - 4; // 196 at w=200
-    let Some(metric) = &state.metric else { return };
+    let Some(metric) = &state.metric else {
+        screen.text(cx + 1, 2, "No instrument selected", Style::fg(color::MUTED));
+        draw_status_bar_wide(screen, screen.h - 1, w, "2 Watchlist");
+        return;
+    };
 
     let mut x = cx + 1;
     x = screen.text(x, 1, &metric.symbol, Style::fg(color::FG).bold());
@@ -871,6 +977,7 @@ pub fn draw_watchlist_wide(screen: &mut Screen, state: &WatchlistState) {
         _ => color::BLUE,
     };
     screen.price_chart(cx + 2, 4, &chart, 146, 16, line);
+    paint_scrub(screen, state, &chart, cx + 2, 4, 146, 16);
 
     // Metric grid at the captured 200-wide ratio positions.
     screen.text(
