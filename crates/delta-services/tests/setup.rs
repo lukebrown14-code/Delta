@@ -385,6 +385,13 @@ fn provider_connected_reads_the_env_file() {
         ..AppConfig::default()
     };
     assert!(!delta_services::setup::provider_connected(&unknown, &env));
+    std::fs::write(&env, "MY_LOCAL_KEY=custom-test-key\n").unwrap();
+    let custom = AppConfig {
+        llm_provider: "custom".to_string(),
+        llm_api_key_env: "MY_LOCAL_KEY".to_string(),
+        ..AppConfig::default()
+    };
+    assert!(delta_services::setup::provider_connected(&custom, &env));
 }
 
 #[test]

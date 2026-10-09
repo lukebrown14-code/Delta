@@ -219,6 +219,17 @@ mod tests {
     use super::*;
     use crossterm::event::KeyModifiers;
 
+    #[test]
+    fn secret_field_never_paints_its_value() {
+        let mut form = Form::new("connect", vec![Field::new("API key", "key", None).secret()]);
+        form.fields[0].input.set_value("secret-value");
+        let mut screen = Screen::new(60, 10);
+        form.draw_screen(&mut screen, 1, 1, 40);
+        let visible: String = screen.cells.iter().map(|cell| cell.ch).collect();
+        assert!(!visible.contains("secret-value"));
+        assert!(visible.contains("••••••••••••"));
+    }
+
     fn form() -> Form {
         Form::new(
             "new thesis",

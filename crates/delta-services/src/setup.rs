@@ -203,9 +203,12 @@ pub fn data_provider_status(
 pub fn provider_connected(cfg: &AppConfig, env_path: &Path) -> bool {
     delta_llm::providers::provider_spec(cfg.llm_provider.as_str())
         .map(|spec| {
-            !read_env_value_named(spec.env_var, env_path)
-                .trim()
-                .is_empty()
+            let env_var = if cfg.llm_api_key_env.is_empty() {
+                spec.env_var
+            } else {
+                &cfg.llm_api_key_env
+            };
+            !read_env_value_named(env_var, env_path).trim().is_empty()
         })
         .unwrap_or(false)
 }
