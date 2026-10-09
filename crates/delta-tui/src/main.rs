@@ -4,6 +4,7 @@
 //! app struct and event loop live in `app.rs`.
 
 mod app;
+mod cli;
 
 use std::io::Stdout;
 
@@ -16,9 +17,15 @@ use ratatui::Terminal;
 
 fn main() -> std::io::Result<()> {
     // R4 benchmark entry: `delta --version` never touches the terminal.
-    if std::env::args().any(|a| a == "--version" || a == "-V") {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.iter().any(|a| a == "--version" || a == "-V") {
         println!("delta {}", env!("CARGO_PKG_VERSION"));
         return Ok(());
+    }
+    // Headless subcommands (gather/report/review-due) run before the TUI.
+    if !args.is_empty() {
+        let runtime = tokio::runtime::Runtime::new()?;
+        std::process::exit(runtime.block_on(cli::run(&args)));
     }
     let mut terminal = setup()?;
     let runtime = tokio::runtime::Runtime::new()?;

@@ -1,0 +1,17 @@
+{
+  "cost_usd": 0.01,
+  "text": {
+    "summary": "A draft whose every claim cites ungathered evidence.",
+    "bull": [
+      {
+        "text": "Ghost claim.",
+        "evidence_ids": ["news:never-gathered"]
+      }
+    ],
+    "bear": [],
+    "risks": [],
+    "catalysts": [],
+    "unknowns": [],
+    "sentiment": 0.0
+  }
+}
