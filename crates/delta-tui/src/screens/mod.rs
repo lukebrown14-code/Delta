@@ -24,7 +24,9 @@ pub use settings::{
     SettingsState, SettingsView,
 };
 pub use status_bar::{Footer, NarrowTab};
-pub use theses::{draw_theses, draw_theses_narrow, draw_theses_wide};
+pub use theses::{
+    draw_theses, draw_theses_live, draw_theses_narrow, draw_theses_wide, ThesesPane, ThesesState,
+};
 pub use watchlist::{
     chart_window, draw_glossary_overlay, draw_watchlist, draw_watchlist_narrow,
     draw_watchlist_wide, friendly_date, friendly_date_range, grouped, range_label, range_window,

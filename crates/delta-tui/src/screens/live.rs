@@ -16,6 +16,7 @@ use crate::screens::settings::{
     draw_settings, draw_settings_narrow, draw_settings_wide, SettingsData, SettingsState,
     SettingsView,
 };
+use crate::screens::theses::{draw_theses_live, ThesesState};
 
 /// Render one live scenario at its manifest size, or `None` when no builder
 /// is registered for `state`.
@@ -26,8 +27,22 @@ pub fn render_live(state: &str, fixture: &serde_json::Value, db_path: &Path) -> 
         // One line per populated screen state; each later screen ticket
         // registers its builder here.
         "live-settings" => Some(live_settings(fixture, db_path, w, h)),
+        "live-theses" => Some(live_theses(fixture, db_path, w, h)),
         _ => None,
     }
+}
+
+fn live_theses(fixture: &serde_json::Value, db_path: &Path, w: usize, h: usize) -> Screen {
+    let db = delta_core::db::Db::open(db_path).expect("live theses seed db");
+    let now =
+        chrono::DateTime::parse_from_rfc3339(fixture["seed"]["now"].as_str().expect("fixture now"))
+            .expect("RFC 3339 now stamp")
+            .naive_utc();
+    let mut state = ThesesState::default();
+    state.load_at(&db, Some(now)).expect("load live theses");
+    let mut screen = Screen::new(w, h);
+    draw_theses_live(&mut screen, &state);
+    screen
 }
 
 /// The populated Settings screen: config, provider state and pinned sizes
