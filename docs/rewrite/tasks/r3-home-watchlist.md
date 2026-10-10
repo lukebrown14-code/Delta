@@ -32,6 +32,16 @@
 Home: populated, empty, first-run. Watchlist: populated list, inspector,
 range-cycled, scrubbed, add-modal at each search state, metric-help, filter.
 
+## Ticket #34 acceptance
+
+- [x] Watchlist add/remove persists through `delta-services` and reloads the selected universe.
+- [x] Chart scrub moves over the loaded series and paints its date, value and cursor.
+- [x] Non-equity profiles use asset-aware provider metrics and correct bond yield units.
+- [x] App/service tests, existing Home/Watchlist goldens, fmt, clippy and Rust workspace tests pass.
+
+The broader R3.2 screen scenarios and performance gates below remain for the
+full cutover validation (#35); the Python oracle has no scrub state yet.
+
 ## Done
 
 - [ ] All scenarios Tier A green at 3 sizes; existing 12 Home/Watchlist goldens still green.

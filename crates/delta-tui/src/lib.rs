@@ -92,6 +92,11 @@ pub enum Action {
         instrument: String,
         rows: Vec<(String, String)>,
     },
+    /// Asset-class-aware provider metrics and history for one instrument.
+    AssetMetrics {
+        range: String,
+        data: Box<delta_services::asset_metrics::AssetMetrics>,
+    },
     /// Ingest finished; carries per-source row counts.
     Ingested(BTreeMap<String, usize>),
     /// Refreshed Home overview values (headline, pulse, upcoming, health).

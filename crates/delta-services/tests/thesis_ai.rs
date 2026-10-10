@@ -80,7 +80,7 @@ async fn proposal_keeps_only_fresh_gathered_ids_unaccepted_and_health_waits_for_
     assert_eq!(proposed.len(), 1);
     assert_eq!(proposed[0].evidence_id, "news:n0");
     assert!(!proposed[0].accepted);
-    assert_eq!(thesis_fleet(&db, None).unwrap()[0].result.is_none(), true);
+    assert!(thesis_fleet(&db, None).unwrap()[0].result.is_none());
     set_accepted(&db, &id, "news:n0", true).unwrap();
     let health = thesis_fleet(&db, None).unwrap();
     assert_eq!(health[0].result.as_ref().unwrap().support, 1);
