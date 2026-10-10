@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use chrono::NaiveDate;
@@ -180,4 +181,19 @@ async fn report_prompt_preserves_target_label_timestamp_and_schema() {
     )
     .await
     .unwrap();
+}
+
+#[test]
+fn python_report_fixture_round_trips_byte_for_byte() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let fixture = root.join("fixtures/golden_reports/US:AAPL/2026-09-21.json");
+    let expected_sidecar = std::fs::read_to_string(&fixture).unwrap();
+    let expected_markdown = std::fs::read_to_string(fixture.with_extension("md")).unwrap();
+    let report = read_report(&fixture).expect("Python sidecar opens in Rust");
+    assert_eq!(render_markdown(&report, false), expected_markdown);
+
+    let temp = tempfile::tempdir().unwrap();
+    let path = write_report(&report, temp.path()).unwrap();
+    let actual_sidecar = std::fs::read_to_string(path.with_extension("json")).unwrap();
+    assert_eq!(actual_sidecar, expected_sidecar);
 }

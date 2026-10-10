@@ -1,14 +1,17 @@
 //! Cited research reports (port of `delta/reports.py`).
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
+use std::fmt;
 use std::path::{Path, PathBuf};
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, SecondsFormat, Utc};
 use delta_core::config::{read_env_value_named, AppConfig, ENV_PATH};
 use delta_core::db::Db;
 use delta_llm::client::LlmClient;
 use delta_llm::router::model_for;
-use serde::{Deserialize, Serialize};
+use serde::de::{MapAccess, Visitor};
+use serde::ser::SerializeMap;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::json;
 
 use crate::error::ServiceError;
@@ -55,12 +58,75 @@ pub struct ReportDraft {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Report {
-    pub target_id: String,
-    pub as_of: String,
-    pub prompt_version: String,
-    pub citations: BTreeMap<String, String>,
     #[serde(flatten)]
     pub draft: ReportDraft,
+    pub target_id: String,
+    #[serde(serialize_with = "serialize_as_of")]
+    pub as_of: String,
+    pub prompt_version: String,
+    pub citations: Citations,
+}
+
+/// Keep the evidence pool's newest-first order in persisted Python sidecars.
+/// A sorted map would reorder citations and break byte parity with Python.
+#[derive(Debug, Clone, Default)]
+pub struct Citations(Vec<(String, String)>);
+
+impl Citations {
+    fn get(&self, id: &str) -> Option<&String> {
+        self.0
+            .iter()
+            .find(|(key, _)| key == id)
+            .map(|(_, value)| value)
+    }
+
+    fn ids(&self) -> impl Iterator<Item = &String> {
+        self.0.iter().map(|(id, _)| id)
+    }
+}
+
+impl Serialize for Citations {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut map = serializer.serialize_map(Some(self.0.len()))?;
+        for (id, value) in &self.0 {
+            map.serialize_entry(id, value)?;
+        }
+        map.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for Citations {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct CitationVisitor;
+
+        impl<'de> Visitor<'de> for CitationVisitor {
+            type Value = Citations;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("an evidence id to citation map")
+            }
+
+            fn visit_map<M: MapAccess<'de>>(self, mut map: M) -> Result<Self::Value, M::Error> {
+                let mut entries = Vec::with_capacity(map.size_hint().unwrap_or(0));
+                while let Some(entry) = map.next_entry()? {
+                    entries.push(entry);
+                }
+                Ok(Citations(entries))
+            }
+        }
+
+        deserializer.deserialize_map(CitationVisitor)
+    }
+}
+
+fn serialize_as_of<S: Serializer>(value: &str, serializer: S) -> Result<S::Ok, S::Error> {
+    let normalized = DateTime::parse_from_rfc3339(value)
+        .map(|ts| {
+            ts.with_timezone(&Utc)
+                .to_rfc3339_opts(SecondsFormat::AutoSi, true)
+        })
+        .unwrap_or_else(|_| value.to_string());
+    serializer.serialize_str(&normalized)
 }
 
 fn supported(claims: &mut Vec<Claim>, gathered: &BTreeSet<String>) {
@@ -150,18 +216,20 @@ pub async fn build_report(
     )
     .await
     .map_err(|err| ServiceError::invalid(err.to_string()))?;
-    let citations: BTreeMap<String, String> = items
-        .iter()
-        .map(|item| (item.id.clone(), cite(item)))
-        .collect();
-    let gathered: BTreeSet<String> = citations.keys().cloned().collect();
+    let citations = Citations(
+        items
+            .iter()
+            .map(|item| (item.id.clone(), cite(item)))
+            .collect(),
+    );
+    let gathered: BTreeSet<String> = citations.ids().cloned().collect();
     validate_draft(&mut draft, &gathered)?;
     Ok(Report {
+        draft,
         target_id: target_id.to_string(),
         as_of: Utc::now().to_rfc3339(),
         prompt_version: PROMPT_VERSION.to_string(),
         citations,
-        draft,
     })
 }
 
