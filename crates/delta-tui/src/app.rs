@@ -85,6 +85,7 @@ enum FormMode {
     EditTarget(String),
     RemoveTarget,
     AddThesis,
+    AddThesisFromAsk(Vec<String>),
     EditThesis(String),
 }
 
@@ -417,7 +418,10 @@ impl App {
                 );
             }
             Some(Overlay::SettingsForm(modal)) => {
-                if matches!(modal.mode, FormMode::AddThesis | FormMode::EditThesis(_)) {
+                if matches!(
+                    modal.mode,
+                    FormMode::AddThesis | FormMode::AddThesisFromAsk(_) | FormMode::EditThesis(_)
+                ) {
                     draw_thesis_modal(screen, &modal.form);
                 } else {
                     let width = delta_tui::dialog::MODAL_WIDTH.min(screen.w.saturating_sub(4));
@@ -847,10 +851,10 @@ impl App {
                     .ask
                     .targets
                     .iter()
-                    .filter(|target| target_ids.contains(&target.id))
+                    .filter(|target| self.ask.scope.contains(&target.id))
                     .flat_map(|target| target.instruments())
+                    .find(|instrument| target_ids.contains(&instrument.id))
                     .map(|instrument| instrument.id)
-                    .next()
                     .or_else(|| self.ask.instrument_ids().into_iter().next());
                 if let Some(instrument) = instrument {
                     self.open_research_for_instrument(&instrument);
@@ -860,6 +864,43 @@ impl App {
                 }
             }
             KeyCode::Char('z') => self.ask.zoomed = !self.ask.zoomed,
+            KeyCode::Char('s') => {
+                let Some(answer) = self
+                    .ask
+                    .history
+                    .iter()
+                    .rev()
+                    .find(|turn| turn.role == "assistant")
+                else {
+                    return Some(Action::Status(
+                        "no answer to save yet — press i to ask something".to_string(),
+                    ));
+                };
+                let mut modal = thesis_form(None);
+                modal.form.fields[0]
+                    .input
+                    .set_value(answer.text.split("\n\n").next().unwrap_or(""));
+                let targets = self
+                    .ask
+                    .targets
+                    .iter()
+                    .filter(|target| self.ask.scope.contains(&target.id))
+                    .map(|target| target.id.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                modal.form.fields[1].input.set_value(&targets);
+                modal.mode = FormMode::AddThesisFromAsk(
+                    answer
+                        .citations
+                        .iter()
+                        .filter(|citation| {
+                            !citation.starts_with("http://") && !citation.starts_with("https://")
+                        })
+                        .cloned()
+                        .collect(),
+                );
+                self.overlay = Some(Overlay::SettingsForm(modal));
+            }
             KeyCode::Char('x') if !self.ask.history.is_empty() => self.ask.clear_pending = true,
             _ => return None,
         }
@@ -1374,7 +1415,7 @@ impl App {
                 &config,
                 values.get("Name").map(String::as_str).unwrap_or(""),
             ),
-            FormMode::AddThesis | FormMode::EditThesis(_) => {
+            FormMode::AddThesis | FormMode::AddThesisFromAsk(_) | FormMode::EditThesis(_) => {
                 let Some(db) = self.thesis_db() else {
                     return (Action::Status("offline: no database".to_string()), false);
                 };
@@ -1397,16 +1438,18 @@ impl App {
                 let scope = values.get("Scope").map(String::as_str).unwrap_or("");
                 let horizon = values.get("Horizon").map(String::as_str).unwrap_or("");
                 let saved = match &modal.mode {
-                    FormMode::AddThesis => delta_services::create_thesis(
-                        &db,
-                        claim,
-                        scope,
-                        &assumptions,
-                        &falsifiers,
-                        &targets,
-                        horizon,
-                        None,
-                    ),
+                    FormMode::AddThesis | FormMode::AddThesisFromAsk(_) => {
+                        delta_services::create_thesis(
+                            &db,
+                            claim,
+                            scope,
+                            &assumptions,
+                            &falsifiers,
+                            &targets,
+                            horizon,
+                            None,
+                        )
+                    }
                     FormMode::EditThesis(id) => delta_services::update_thesis(
                         &db,
                         id,
@@ -1422,6 +1465,21 @@ impl App {
                 };
                 match saved {
                     Ok(thesis) => {
+                        if let FormMode::AddThesisFromAsk(evidence_ids) = &modal.mode {
+                            for evidence_id in evidence_ids {
+                                if let Err(err) = delta_services::add_evidence(
+                                    &db,
+                                    &thesis.id,
+                                    evidence_id,
+                                    "support",
+                                    "from ask",
+                                    Some(true),
+                                ) {
+                                    self.reload_theses();
+                                    return (Action::Status(err.to_string()), true);
+                                }
+                            }
+                        }
                         self.reload_theses();
                         self.theses.selected = self
                             .theses
@@ -1447,6 +1505,10 @@ impl App {
                     FormMode::EditTarget(_) => "target saved".to_string(),
                     FormMode::RemoveTarget => "target removed".to_string(),
                     FormMode::AddThesis | FormMode::EditThesis(_) => "thesis saved".to_string(),
+                    FormMode::AddThesisFromAsk(evidence_ids) => format!(
+                        "thesis created with {} linked evidence items",
+                        evidence_ids.len()
+                    ),
                 };
                 self.desk.reload_settings();
                 let data = &self.desk.settings;
@@ -2070,6 +2132,11 @@ impl Component for App {
                     self.ask_worker = None;
                 }
                 self.ask.finish(generation, result);
+                if generation == self.ask.generation {
+                    if let Some(error) = &self.ask.error {
+                        self.status = error.clone();
+                    }
+                }
                 if generation == self.ask.generation && !self.ask.history.is_empty() {
                     self.ask.citation_labels = citation_labels;
                     self.ask.sidebar_labels = sidebar_labels;
@@ -2493,6 +2560,84 @@ mod tests {
             Some(Action::OpenSource(url)) if url == "https://example.com/source"
         ));
         assert_eq!(app.tab, Tab::Ask);
+    }
+
+    #[test]
+    fn ask_saves_answer_to_thesis_with_accepted_stored_citations() {
+        use delta_core::db::StoreItem;
+        use delta_core::models::NewsItem;
+
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = super::settings_tests::real_desk_app(dir.path());
+        let path = dir.path().join("delta.db");
+        app.desk.source = delta_tui::desk::Source::Real(path.clone());
+        app.ask.set_targets(
+            delta_services::config_ops::target_specs(&dir.path().join("config.toml"))
+                .unwrap()
+                .into_values()
+                .collect(),
+        );
+        let mut db = delta_core::db::Db::open(&path).unwrap();
+        db.store_items(&[StoreItem::News(NewsItem {
+            id: "n1".to_string(),
+            instrument_ids: vec!["US:AAPL".to_string()],
+            published: chrono::Utc::now().naive_utc(),
+            title: "Services grow".to_string(),
+            url: "https://example.test/n1".to_string(),
+            body: None,
+            source: "rss".to_string(),
+        })])
+        .unwrap();
+        app.handle_key(key(KeyCode::Char('5')));
+        app.ask.history.push(delta_services::chat::ChatMessage {
+            role: "assistant".into(),
+            text: "Apple services grow.\n\nMore analysis.".into(),
+            citations: vec!["news:n1".into(), "https://example.test/source".into()],
+            source: "llm".into(),
+        });
+        app.handle_key(key(KeyCode::Char('o')));
+        assert_eq!(app.tab, Tab::Research);
+        assert_eq!(app.research_state.selected_id.as_deref(), Some("news:n1"));
+        app.handle_key(key(KeyCode::Char('5')));
+        app.handle_key(key(KeyCode::Char('s')));
+        let Some(Overlay::SettingsForm(modal)) = &app.overlay else {
+            panic!("save to thesis form did not open");
+        };
+        assert_eq!(modal.form.fields[0].value(), "Apple services grow.");
+        assert_eq!(modal.form.fields[1].value(), "apple");
+        app.handle_key(key(KeyCode::Enter));
+        assert!(app.overlay.is_none());
+        assert_eq!(app.status, "thesis created with 1 linked evidence items");
+        let thesis = delta_services::list_theses(&db).unwrap().pop().unwrap();
+        assert_eq!(thesis.claim, "Apple services grow.");
+        assert_eq!(thesis.targets, vec!["apple"]);
+        let links = delta_services::evidence_for(&db, &thesis.id, true).unwrap();
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].evidence_id, "news:n1");
+        assert!(links[0].accepted);
+        assert_eq!(links[0].note, "from ask");
+    }
+
+    #[test]
+    fn ask_error_is_visible_and_stale_error_is_ignored() {
+        let mut app = app();
+        app.tab = Tab::Ask;
+        app.ask.generation = 2;
+        app.ask.busy = true;
+        app.update(Action::AskAnswered {
+            generation: 1,
+            result: Err("stale failure".into()),
+            citation_labels: Default::default(),
+            sidebar_labels: Default::default(),
+        });
+        assert!(app.status.is_empty());
+        app.update(Action::AskAnswered {
+            generation: 2,
+            result: Err("provider unavailable".into()),
+            citation_labels: Default::default(),
+            sidebar_labels: Default::default(),
+        });
+        assert_eq!(app.status, "provider unavailable");
     }
 
     #[test]
@@ -3143,7 +3288,7 @@ mod settings_tests {
     }
 
     /// A desk over a real temp config + DB, like the live app.
-    fn real_desk_app(dir: &std::path::Path) -> App {
+    pub(super) fn real_desk_app(dir: &std::path::Path) -> App {
         std::fs::write(
             dir.join("config.toml"),
             format!("db_path = {:?}\n[targets.apple]\nkind = \"company\"\nmarket = \"us\"\ntickers = [\"AAPL\"]\n\
