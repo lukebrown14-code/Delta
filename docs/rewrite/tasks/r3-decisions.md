@@ -29,3 +29,13 @@ validation error, delete confirm, filter active.
 
 - [ ] CRUD and reviews from Rust read back identically in Python.
 - [ ] All scenarios green at 3 sizes.
+
+## V1 progress
+
+- Rust app creates, edits, reviews, filters, and deletes decisions through the
+  service layer; the focused interaction test reads the same SQLite records back.
+- Populated list, review history, delete-confirm focus, and review-form dialog
+  match the Python oracle at 80x24, 120x40, and 200x50.
+- The wider R3 card still needs Python cross-read verification and goldens for
+  new/edit forms, validation errors, and active filtering. The `o` binding
+  needs Research's instrument-selection API when the Research stream merges.

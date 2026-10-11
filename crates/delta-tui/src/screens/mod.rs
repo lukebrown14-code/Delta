@@ -5,7 +5,7 @@
 //! 200x50.
 
 mod ask;
-mod decisions;
+pub mod decisions;
 mod home;
 pub mod live;
 mod research;
@@ -15,7 +15,9 @@ mod theses;
 mod watchlist;
 
 pub use ask::{draw_ask, draw_ask_narrow, draw_ask_wide};
-pub use decisions::{draw_decisions, draw_decisions_narrow, draw_decisions_wide};
+pub use decisions::{
+    draw_decisions, draw_decisions_live, draw_decisions_narrow, draw_decisions_wide, DecisionsData,
+};
 pub use home::{draw_home, draw_home_narrow, draw_home_wide, feed_seed, HomeFeed, HomeState};
 pub use research::{draw_research, draw_research_narrow, draw_research_wide};
 pub use settings::{

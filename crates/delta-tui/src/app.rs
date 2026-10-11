@@ -7,6 +7,7 @@ use std::io::Stdout;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
+use chrono::NaiveDate;
 use crossterm::event::{Event, EventStream, KeyCode, KeyEvent};
 use futures::StreamExt;
 use ratatui::backend::CrosstermBackend;
@@ -18,6 +19,7 @@ use delta_tui::desk::Desk;
 use delta_tui::dialog::{GoPicker, HelpDialog};
 use delta_tui::form::Form;
 use delta_tui::screen::{color, Screen, Style};
+use delta_tui::screens::decisions::{draw_decisions_live, DecisionsData};
 use delta_tui::screens::{
     draw_ask, draw_ask_narrow, draw_ask_wide, draw_decisions, draw_decisions_narrow,
     draw_decisions_wide, draw_glossary_overlay, draw_home, draw_home_narrow, draw_home_wide,
@@ -39,6 +41,8 @@ enum Overlay {
     AddTarget(String),
     /// A Settings form modal (market add/edit, source setup).
     SettingsForm(FormModal),
+    DecisionForm(DecisionModal),
+    DecisionFilter(String),
     /// Provider choices, with key entry after a choice.
     ProviderPicker(usize),
     /// Names from the target service, shown on request from Settings.
@@ -51,6 +55,17 @@ const PROVIDER_CHOICES: [&str; 4] = ["openrouter", "openai", "anthropic", "custo
 struct FormModal {
     form: Form,
     mode: FormMode,
+}
+
+struct DecisionModal {
+    form: Form,
+    mode: DecisionMode,
+}
+
+enum DecisionMode {
+    New,
+    Edit(String),
+    Review(String),
 }
 
 /// The services call a submitted Settings form performs.
@@ -139,6 +154,8 @@ pub(crate) struct App {
     overlay: Option<Overlay>,
     /// The Settings screen's interaction state.
     settings: SettingsState,
+    decisions: Option<DecisionsData>,
+    confirm_decision_delete: bool,
     /// The terminal size the last frame painted (breakpoint decisions).
     viewport: (u16, u16),
 }
@@ -187,11 +204,21 @@ impl App {
                 draw_ask(screen),
                 draw_ask_narrow(screen)
             ),
-            Tab::Decisions => route!(
-                draw_decisions_wide(screen),
-                draw_decisions(screen),
-                draw_decisions_narrow(screen)
-            ),
+            Tab::Decisions => {
+                if let Some(data) = self
+                    .decisions
+                    .as_ref()
+                    .filter(|data| !data.decisions.is_empty())
+                {
+                    draw_decisions_live(screen, data);
+                } else {
+                    route!(
+                        draw_decisions_wide(screen),
+                        draw_decisions(screen),
+                        draw_decisions_narrow(screen)
+                    );
+                }
+            }
             Tab::Settings => {
                 let view = SettingsView {
                     data: &self.desk.settings,
@@ -244,6 +271,33 @@ impl App {
                 let (x, y, w, _h) = delta_tui::dialog::dialog_frame(screen, width, height);
                 screen.text(x, y, &modal.form.title, Style::fg(color::BLUE).bold());
                 modal.form.draw_screen(screen, x, y + 2, w);
+            }
+            Some(Overlay::DecisionForm(modal)) => {
+                if matches!(modal.mode, DecisionMode::Review(_)) {
+                    delta_tui::screens::decisions::draw_decision_review_form(
+                        screen,
+                        modal.form.fields[0].value(),
+                        modal.form.fields[1].value(),
+                    );
+                } else {
+                    let width = delta_tui::dialog::MODAL_WIDTH.min(screen.w.saturating_sub(4));
+                    let height = (modal.form.height(width) + 5).min(screen.h.saturating_sub(2));
+                    let (x, y, w, _) = delta_tui::dialog::dialog_frame(screen, width, height);
+                    screen.text(x, y, &modal.form.title, Style::fg(color::BLUE).bold());
+                    modal.form.draw_screen(screen, x, y + 2, w);
+                }
+            }
+            Some(Overlay::DecisionFilter(query)) => {
+                let (x, y, w, _) = delta_tui::dialog::dialog_frame(screen, 54, 7);
+                screen.text(x, y, "filter decisions", Style::fg(color::BLUE).bold());
+                screen.text(x, y + 2, &format!("> {query}_"), Style::fg(color::FG));
+                screen.text(
+                    x,
+                    y + 4,
+                    "enter apply · esc cancel",
+                    Style::fg(color::MUTED),
+                );
+                let _ = w;
             }
             Some(Overlay::ProviderPicker(selected)) => {
                 let (x, y, w, _) = delta_tui::dialog::dialog_frame(screen, 58, 11);
@@ -317,6 +371,194 @@ impl App {
 }
 
 impl App {
+    fn decision_db(&self) -> Result<delta_core::db::Db, String> {
+        let delta_tui::desk::Source::Real(path) = &self.desk.source else {
+            return Err("decision journal needs a local database".to_string());
+        };
+        delta_core::db::Db::open(path).map_err(|error| error.to_string())
+    }
+
+    fn refresh_decisions(&mut self) {
+        let Ok(db) = self.decision_db() else {
+            self.decisions = None;
+            return;
+        };
+        let filter = self
+            .decisions
+            .as_ref()
+            .map(|data| data.filter.clone())
+            .unwrap_or_default();
+        let selected = self.decisions.as_ref().map_or(0, |data| data.selected);
+        let Ok(mut decisions) = delta_services::list_decisions(&db, None, true) else {
+            self.status = "could not load decisions".to_string();
+            return;
+        };
+        if !filter.is_empty() {
+            let needle = filter.to_lowercase();
+            decisions.retain(|item| {
+                item.instrument_id.to_lowercase().contains(&needle)
+                    || item.rationale.to_lowercase().contains(&needle)
+            });
+        }
+        let selected = selected.min(decisions.len().saturating_sub(1));
+        let (reviews, current_price) = if let Some(decision) = decisions.get(selected) {
+            let reviews = delta_services::review_history(&db, &decision.id).unwrap_or_default();
+            let price = db
+                .bars(&decision.instrument_id)
+                .ok()
+                .and_then(|bars| bars.last().map(|bar| bar.close));
+            (reviews, price)
+        } else {
+            (Vec::new(), None)
+        };
+        self.decisions = Some(DecisionsData {
+            decisions,
+            selected,
+            reviews,
+            current_price,
+            filter,
+            spend: delta_services::analytics::total_spend(&db, None),
+            confirm_delete: self.confirm_decision_delete,
+        });
+    }
+
+    fn selected_decision(&self) -> Option<&delta_services::Decision> {
+        self.decisions.as_ref()?.selected()
+    }
+
+    fn handle_decisions_key(&mut self, key: KeyEvent) -> Option<Action> {
+        match key.code {
+            KeyCode::Up | KeyCode::Down => {
+                if let Some(data) = &mut self.decisions {
+                    if key.code == KeyCode::Up {
+                        data.selected = data.selected.saturating_sub(1);
+                    } else {
+                        data.selected =
+                            (data.selected + 1).min(data.decisions.len().saturating_sub(1));
+                    }
+                }
+                self.refresh_decisions();
+            }
+            KeyCode::Char('n') => {
+                self.overlay = Some(Overlay::DecisionForm(decision_form(None)));
+            }
+            KeyCode::Char('e') => {
+                if let Some(decision) = self.selected_decision() {
+                    self.overlay = Some(Overlay::DecisionForm(decision_form(Some(decision))));
+                }
+            }
+            KeyCode::Char('r') => {
+                if let Some(decision) = self.selected_decision() {
+                    self.overlay = Some(Overlay::DecisionForm(review_form(&decision.id)));
+                }
+            }
+            KeyCode::Char('/') => {
+                let query = self
+                    .decisions
+                    .as_ref()
+                    .map_or(String::new(), |d| d.filter.clone());
+                self.overlay = Some(Overlay::DecisionFilter(query));
+            }
+            KeyCode::Char('d') => {
+                if self.selected_decision().is_some() {
+                    self.confirm_decision_delete = true;
+                    if let Some(data) = &mut self.decisions {
+                        data.confirm_delete = true;
+                    }
+                    self.status = "delete decision? press y to confirm".to_string();
+                }
+            }
+            KeyCode::Char('y') if self.confirm_decision_delete => {
+                self.confirm_decision_delete = false;
+                if let Some(id) = self.selected_decision().map(|d| d.id.clone()) {
+                    let result = self.decision_db().and_then(|db| {
+                        delta_services::delete_decision(&db, &id).map_err(|error| error.to_string())
+                    });
+                    self.status = match result {
+                        Ok(()) => "decision deleted".to_string(),
+                        Err(error) => error,
+                    };
+                    self.refresh_decisions();
+                }
+            }
+            KeyCode::Char('o') => {
+                if let Some(decision) = self.selected_decision() {
+                    self.status = format!("research for {}", decision.instrument_id);
+                    self.tab = Tab::Research;
+                }
+            }
+            KeyCode::Esc => {
+                self.confirm_decision_delete = false;
+                if let Some(data) = &mut self.decisions {
+                    data.confirm_delete = false;
+                }
+                self.status.clear();
+            }
+            _ => return None,
+        }
+        Some(Action::Noop)
+    }
+
+    fn submit_decision_form(&mut self, modal: &mut DecisionModal) -> bool {
+        let values = match modal.form.submit() {
+            Ok(values) => values
+                .into_iter()
+                .map(|(_, value)| value)
+                .collect::<Vec<_>>(),
+            Err(errors) => {
+                self.status = errors[0].1.clone();
+                return false;
+            }
+        };
+        let db = match self.decision_db() {
+            Ok(db) => db,
+            Err(error) => {
+                self.status = error;
+                return false;
+            }
+        };
+        let result = match &modal.mode {
+            DecisionMode::New | DecisionMode::Edit(_) => {
+                let date = match NaiveDate::parse_from_str(&values[4], "%Y-%m-%d") {
+                    Ok(date) => date,
+                    Err(_) => {
+                        self.status = "review date must be YYYY-MM-DD".to_string();
+                        return false;
+                    }
+                };
+                let thesis = (!values[6].trim().is_empty()).then_some(values[6].as_str());
+                match &modal.mode {
+                    DecisionMode::New => delta_services::create_decision(
+                        &db, &values[0], &values[1], &values[2], &values[3], date, &values[5],
+                        thesis, None,
+                    )
+                    .map(|_| ()),
+                    DecisionMode::Edit(id) => delta_services::update_decision(
+                        &db, id, &values[0], &values[1], &values[2], &values[3], date, &values[5],
+                        thesis,
+                    )
+                    .map(|_| ()),
+                    DecisionMode::Review(_) => unreachable!(),
+                }
+            }
+            DecisionMode::Review(id) => {
+                let status = values[1].trim().to_lowercase();
+                delta_services::append_review(&db, id, &values[0], Some(&status), None).map(|_| ())
+            }
+        };
+        match result {
+            Ok(()) => {
+                self.status = "decision saved".to_string();
+                self.refresh_decisions();
+                true
+            }
+            Err(error) => {
+                self.status = error.to_string();
+                false
+            }
+        }
+    }
+
     /// Persist a watched instrument using the config service, then reload the
     /// desk from the resulting config and database.
     fn add_instrument_at(&mut self, config: &Path, input: &str) -> Result<(), String> {
@@ -388,7 +630,10 @@ impl App {
             KeyCode::Char('3') => self.tab = Tab::Research,
             KeyCode::Char('4') => self.tab = Tab::Theses,
             KeyCode::Char('5') => self.tab = Tab::Ask,
-            KeyCode::Char('6') => self.tab = Tab::Decisions,
+            KeyCode::Char('6') => {
+                self.tab = Tab::Decisions;
+                self.refresh_decisions();
+            }
             KeyCode::Char('c') => self.tab = Tab::Settings,
             KeyCode::Char('h') => self.tab = Tab::Home,
             KeyCode::Char('m') => return Some(Action::ShowModelPicker),
@@ -921,6 +1166,64 @@ fn source_form(id: &str, current: Option<String>) -> FormModal {
     }
 }
 
+fn decision_form(current: Option<&delta_services::Decision>) -> DecisionModal {
+    use delta_tui::form::{required, Field};
+    let fields = vec![
+        Field::new("Instrument", "US:AAPL", Some(required)),
+        Field::new("Rationale", "Why this decision?", Some(required)),
+        Field::new("Valuation context", "Price and assumptions", Some(required)),
+        Field::new("Time horizon", "e.g. 6m", Some(required)),
+        Field::new("Review date", "YYYY-MM-DD", Some(required)),
+        Field::new(
+            "Invalidation criteria",
+            "What would change your mind?",
+            Some(required),
+        ),
+        Field::new("Thesis ID", "optional", None),
+    ];
+    let mut form = Form::new(
+        if current.is_some() {
+            "edit decision"
+        } else {
+            "new decision"
+        },
+        fields,
+    );
+    let mode = if let Some(decision) = current {
+        for (field, value) in form.fields.iter_mut().zip([
+            decision.instrument_id.as_str(),
+            decision.rationale.as_str(),
+            decision.valuation_context.as_str(),
+            decision.time_horizon.as_str(),
+            &decision.review_date.to_string(),
+            decision.invalidation_criteria.as_str(),
+            decision.thesis_id.as_deref().unwrap_or(""),
+        ]) {
+            field.input.set_value(value);
+        }
+        DecisionMode::Edit(decision.id.clone())
+    } else {
+        DecisionMode::New
+    };
+    DecisionModal { form, mode }
+}
+
+fn review_form(id: &str) -> DecisionModal {
+    use delta_tui::form::{required, Field};
+    let mut form = Form::new(
+        "review decision",
+        vec![
+            Field::new("Review note", "What changed?", Some(required)),
+            Field::new("Status", "open, reviewed, or retired", Some(required)),
+        ],
+    );
+    form.fields[1].input.set_value("reviewed");
+    DecisionModal {
+        form,
+        mode: DecisionMode::Review(id.to_string()),
+    }
+}
+
 impl Component for App {
     fn handle_key(&mut self, key: KeyEvent) -> Option<Action> {
         if let Some(Overlay::ProviderPicker(selected)) = &mut self.overlay {
@@ -964,6 +1267,47 @@ impl Component for App {
                 _ => {}
             }
             return None;
+        }
+        if matches!(self.overlay, Some(Overlay::DecisionForm(_)))
+            && (key.code == KeyCode::Enter
+                || (key.code == KeyCode::Char('s')
+                    && key
+                        .modifiers
+                        .contains(crossterm::event::KeyModifiers::CONTROL)))
+        {
+            let Some(Overlay::DecisionForm(mut modal)) = self.overlay.take() else {
+                unreachable!("checked above");
+            };
+            if !self.submit_decision_form(&mut modal) {
+                self.overlay = Some(Overlay::DecisionForm(modal));
+            }
+            return Some(Action::Noop);
+        }
+        if let Some(Overlay::DecisionFilter(query)) = &mut self.overlay {
+            match key.code {
+                KeyCode::Esc => self.overlay = None,
+                KeyCode::Enter => {
+                    let filter = query.trim().to_string();
+                    self.overlay = None;
+                    if let Some(data) = &mut self.decisions {
+                        data.filter = filter;
+                        data.selected = 0;
+                    }
+                    self.refresh_decisions();
+                }
+                KeyCode::Backspace => {
+                    query.pop();
+                }
+                KeyCode::Char(ch)
+                    if !key
+                        .modifiers
+                        .contains(crossterm::event::KeyModifiers::CONTROL) =>
+                {
+                    query.push(ch);
+                }
+                _ => {}
+            }
+            return Some(Action::Noop);
         }
         // The Settings form manages its own submit cycle: a rejected
         // submit keeps the modal open, the message on the status line.
@@ -1013,6 +1357,11 @@ impl Component for App {
                     KeyCode::Esc => Some(Action::CloseDialog),
                     _ => modal.form.handle_key(key),
                 },
+                Overlay::DecisionForm(modal) => match key.code {
+                    KeyCode::Esc => Some(Action::CloseDialog),
+                    _ => modal.form.handle_key(key),
+                },
+                Overlay::DecisionFilter(_) => unreachable!("handled above"),
                 Overlay::ProviderPicker(_) => unreachable!("handled above"),
                 Overlay::TargetPicker(_, _) => unreachable!("handled above"),
             };
@@ -1065,6 +1414,11 @@ impl Component for App {
         }
         if self.tab == Tab::Settings && key.code == KeyCode::Esc {
             return self.handle_settings_key(key);
+        }
+        if self.tab == Tab::Decisions {
+            if let Some(action) = self.handle_decisions_key(key) {
+                return Some(action);
+            }
         }
         if let Some(action) = self.handle_shell_key(key) {
             return Some(action);
@@ -1191,6 +1545,8 @@ pub(crate) async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> st
         palette: Palette::Dark,
         overlay: None,
         settings: SettingsState::default(),
+        decisions: None,
+        confirm_decision_delete: false,
         viewport: (120, 40),
     };
 
@@ -1295,6 +1651,8 @@ mod tests {
             palette: Palette::Dark,
             overlay: None,
             settings: SettingsState::default(),
+            decisions: None,
+            confirm_decision_delete: false,
             viewport: (120, 40),
         }
     }
@@ -2151,5 +2509,130 @@ mod settings_tests {
         assert_eq!(state.focus, SettingsFocus::Provider);
         assert_eq!(state.provider_selected, 0);
         assert_eq!(state.diagnostics_open, None);
+    }
+
+    #[test]
+    fn decision_journal_creates_reviews_filters_and_deletes_via_services() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("delta.db");
+        let mut a = real_desk_app(dir.path());
+        a.desk.source = delta_tui::desk::Source::Real(db_path.clone());
+        a.handle_key(key(KeyCode::Char('6')));
+        a.handle_key(key(KeyCode::Char('n')));
+        type_into(
+            &[
+                "US:AAPL",
+                "Cash flows should grow",
+                "20x earnings",
+                "6m",
+                "2027-01-01",
+                "Margins contract",
+                "",
+            ],
+            &mut a,
+        );
+        a.handle_key(key(KeyCode::Enter));
+        assert!(a.overlay.is_none(), "{}", a.status);
+        let db = delta_core::db::Db::open(&db_path).unwrap();
+        let decisions = delta_services::list_decisions(&db, None, true).unwrap();
+        assert_eq!(decisions.len(), 1);
+        assert_eq!(decisions[0].rationale, "Cash flows should grow");
+
+        a.handle_key(key(KeyCode::Char('r')));
+        let review_screen = screen_text(&mut a, 120, 40);
+        assert!(review_screen.contains("review decision"));
+        assert!(review_screen.contains("ctrl+s save  esc cancel"));
+        type_into(&["Margins remain healthy"], &mut a);
+        if let Some(Overlay::DecisionForm(modal)) = &mut a.overlay {
+            modal.form.fields[1].input.set_value("invalid");
+        }
+        a.handle_key(key(KeyCode::Enter));
+        assert!(matches!(a.overlay, Some(Overlay::DecisionForm(_))));
+        if let Some(Overlay::DecisionForm(modal)) = &mut a.overlay {
+            modal.form.fields[1].input.set_value("REVIEWED");
+        }
+        a.handle_key(key(KeyCode::Enter));
+        assert!(a.overlay.is_none(), "{}", a.status);
+        let reviews = delta_services::review_history(&db, &decisions[0].id).unwrap();
+        assert_eq!(reviews.len(), 1);
+        assert_eq!(reviews[0].status.as_deref(), Some("reviewed"));
+
+        a.handle_key(key(KeyCode::Char('e')));
+        if let Some(Overlay::DecisionForm(modal)) = &mut a.overlay {
+            modal.form.fields[1]
+                .input
+                .set_value("Cash flows keep growing");
+        } else {
+            panic!("edit form did not open");
+        }
+        a.handle_key(key(KeyCode::Enter));
+        assert_eq!(
+            delta_services::get_decision(&db, &decisions[0].id)
+                .unwrap()
+                .rationale,
+            "Cash flows keep growing"
+        );
+        assert_eq!(
+            delta_services::review_history(&db, &decisions[0].id)
+                .unwrap()
+                .len(),
+            1
+        );
+
+        a.handle_key(key(KeyCode::Char('/')));
+        for ch in "other".chars() {
+            a.handle_key(key(KeyCode::Char(ch)));
+        }
+        a.handle_key(key(KeyCode::Enter));
+        assert!(a.decisions.as_ref().unwrap().decisions.is_empty());
+        a.handle_key(key(KeyCode::Char('/')));
+        for _ in 0..5 {
+            a.handle_key(key(KeyCode::Backspace));
+        }
+        a.handle_key(key(KeyCode::Enter));
+        assert_eq!(a.decisions.as_ref().unwrap().decisions.len(), 1);
+
+        a.handle_key(key(KeyCode::Char('d')));
+        assert!(screen_text(&mut a, 120, 40).contains("confirm delete"));
+        assert_eq!(
+            delta_services::list_decisions(&db, None, true)
+                .unwrap()
+                .len(),
+            1
+        );
+        a.handle_key(key(KeyCode::Char('y')));
+        assert!(delta_services::list_decisions(&db, None, true)
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn decision_form_rejects_missing_fields_and_bad_dates_without_closing() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut a = real_desk_app(dir.path());
+        a.desk.source = delta_tui::desk::Source::Real(dir.path().join("delta.db"));
+        a.handle_key(key(KeyCode::Char('6')));
+        a.handle_key(key(KeyCode::Char('n')));
+        a.handle_key(key(KeyCode::Enter));
+        assert!(matches!(a.overlay, Some(Overlay::DecisionForm(_))));
+        type_into(
+            &[
+                "US:AAPL",
+                "Rationale",
+                "20x earnings",
+                "6m",
+                "next year",
+                "Margins",
+                "",
+            ],
+            &mut a,
+        );
+        a.handle_key(key(KeyCode::Enter));
+        assert_eq!(a.status, "review date must be YYYY-MM-DD");
+        assert!(matches!(a.overlay, Some(Overlay::DecisionForm(_))));
+        let db = delta_core::db::Db::open(dir.path().join("delta.db")).unwrap();
+        assert!(delta_services::list_decisions(&db, None, true)
+            .unwrap()
+            .is_empty());
     }
 }
