@@ -95,14 +95,16 @@ fn diff(entry: &Entry, screen: &Screen) -> Vec<String> {
             // Report prose is Tier B: service tests pin its markdown bytes,
             // while this frame keeps every pane, control, and evidence cell
             // at Tier A. Textual and Rust wrap prose differently.
-            if entry.tier == "B"
+            let report_prose = entry.tier == "B"
                 && entry.state.starts_with("live-research")
-                && entry.size.0 >= 100
-                && x >= 38
-                && x < entry.size.0 - 42
                 && y >= 6
                 && y < entry.size.1 - 3
-            {
+                && if entry.state == "live-research-zoom-report" {
+                    x >= 3 && x < entry.size.0 - 6
+                } else {
+                    entry.size.0 >= 100 && x >= 38 && x < entry.size.0 - 42
+                };
+            if report_prose {
                 continue;
             }
             let mine = &screen.cells[y * screen.w + x];

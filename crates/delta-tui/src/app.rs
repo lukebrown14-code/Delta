@@ -2220,6 +2220,13 @@ pub(crate) async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> st
                                 Action::GenerateReport => {
                                     if !app.research_state.busy {
                                         app.research_state.busy = true;
+                                        app.research_state.error = None;
+                                        app.research_state.activity = app.research.as_ref().map(|data| {
+                                            format!(
+                                                "generating report for {} via {} — esc to cancel…",
+                                                data.company, app.desk.settings.model
+                                            )
+                                        });
                                         app.status = "generating report".into();
                                         let config = app.desk.config_path.clone();
                                         let company = app.research.as_ref().map(|r| r.company.clone());
@@ -2267,6 +2274,7 @@ pub(crate) async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> st
             Some(result) = research_rx.recv() => {
                 dirty = true;
                 app.research_state.busy = false;
+                app.research_state.activity = None;
                 match result { Ok(data) => { app.research = Some(data); app.status = "report generated".into(); }, Err(error) => { app.research_state.error = Some(error.clone()); app.status = error; } }
             }
             _ = clock.tick() => {

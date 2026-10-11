@@ -173,7 +173,7 @@ def export_scenario(scenario: Scenario, tmp_path: Path, out_dir: Path) -> Path:
             rig = FakeRig(engine, [AAPL.model_copy(update={"watchlists": ("apple",)})])
             rig.cfg = build_config(config)
             rig.plugins = {"sec_edgar": SECEdgar()}
-            if scenario.name.startswith("live-research"):
+            if scenario.name.startswith("live-research") and scenario.name != "live-research-no-report":
                 shutil.copytree(
                     Path(__file__).resolve().parent.parent / "fixtures/golden_reports",
                     tmp_path / "reports",
@@ -210,6 +210,23 @@ def export_scenario(scenario: Scenario, tmp_path: Path, out_dir: Path) -> Path:
                         await pilot.press(*scenario.keys)
                         if scenario.name == "live-research-citation":
                             await app.screen.inspect_evidence("news:news-aapl-chip")
+                        if scenario.name == "live-research-generating":
+                            from delta.tui.screens.research import Research
+
+                            research = app.screen
+                            assert isinstance(research, Research)
+                            research.set_busy(
+                                True,
+                                "generating report for US:AAPL via test-model — esc to cancel…",
+                            )
+                        if scenario.name == "live-research-error":
+                            from delta.tui.screens.research import Research
+
+                            research = app.screen
+                            assert isinstance(research, Research)
+                            research.report_failure(
+                                "report failed", ValueError("report has no supported claims")
+                            )
                         if scenario.name == "live-ask":
                             from delta.chat import ChatMessage
                             from delta.tui.screens.chat import Chat

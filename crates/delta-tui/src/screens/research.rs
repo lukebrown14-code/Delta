@@ -79,11 +79,13 @@ pub struct ResearchState {
     pub search: String,
     pub search_active: bool,
     pub detail_open: bool,
+    pub preview_expanded: bool,
     pub expanded: std::collections::BTreeSet<String>,
     pub report_scroll: usize,
     pub view: ResearchView,
     pub zoom: bool,
     pub busy: bool,
+    pub activity: Option<String>,
     pub error: Option<String>,
 }
 
@@ -158,6 +160,7 @@ impl ResearchState {
     pub fn cycle_kind(&mut self) {
         self.kind_index = (self.kind_index + 1) % KINDS.len();
         self.selected = 0;
+        self.preview_expanded = true;
     }
     pub fn filtered<'a>(&self, data: &'a ResearchData) -> Vec<&'a EvidenceItem> {
         data.evidence
@@ -285,6 +288,51 @@ impl ResearchState {
 pub fn draw_research_live(screen: &mut Screen, data: &ResearchData, state: &ResearchState) {
     let right = screen.w - 2;
     let bottom = screen.h - 3;
+    if state.zoom && state.view == ResearchView::Report {
+        if screen.w < 100 {
+            draw_research_narrow(screen);
+        } else if screen.w >= 160 {
+            draw_research_wide(screen);
+        } else {
+            draw_research(screen);
+        }
+        screen.fill(0, 0, screen.w, bottom + 1, Style::DEFAULT.bg(color::BLACK));
+        let hints = if screen.w < 100 {
+            pane_hints(&[
+                ("↑↓", "scroll"),
+                ("t", "company"),
+                ("e", "evidence"),
+                ("esc", "back"),
+            ])
+        } else {
+            pane_hints(&[("z", "restore"), ("↑↓", "scroll"), ("enter", "citation")])
+        };
+        screen.pane(
+            1,
+            0,
+            right,
+            bottom,
+            true,
+            &[
+                ("r ", Style::fg(color::BLUE).bold()),
+                ("report ", Style::fg(color::BLUE).bold()),
+                ("· ", Style::fg(color::MUTED).bold()),
+                (
+                    data.report_date.as_deref().unwrap_or("no report"),
+                    Style::fg(color::MUTED).bold(),
+                ),
+            ],
+            &hints,
+        );
+        paint_report(screen, data, state, 2, right);
+        for row in 6..bottom {
+            for col in right - 2..right {
+                screen.put(col, row, ' ', Style::DEFAULT.bg(color::BLACK));
+            }
+        }
+        paint_zoom_footer(screen, data);
+        return;
+    }
     if screen.w < 100 && state.detail_open {
         draw_research_narrow(screen);
         screen.text(
@@ -468,6 +516,129 @@ pub fn draw_research_live(screen: &mut Screen, data: &ResearchData, state: &Rese
         screen.cells[screen.w + start + 2].bg = Some("#d4d4d4");
         screen.cells[screen.w + start + 3].fg = Some("#5c5c5c");
     }
+    if state.busy && screen.w >= 100 {
+        paint_research_busy(screen, state);
+    }
+    if screen.w < 100 && state.zoom && state.view == ResearchView::Evidence {
+        let count = state.filtered(data).len().to_string();
+        for x in 2..right {
+            screen.cells[2 * screen.w + x].bg = Some("#232323");
+            let selected = &mut screen.cells[3 * screen.w + x];
+            selected.fg = Some(color::WHITE);
+            selected.bg = Some(color::BLUE_BG);
+            selected.bold = true;
+        }
+        screen.pane(
+            1,
+            0,
+            right,
+            bottom,
+            true,
+            &[
+                ("e ", Style::fg(color::BLUE).bold()),
+                ("evidence ", Style::fg(color::BLUE).bold()),
+                ("· ", Style::fg(color::MUTED).bold()),
+                (&count, Style::fg(color::MUTED).bold()),
+            ],
+            &pane_hints(&[
+                ("/", "search"),
+                ("k", "kind"),
+                ("enter", "preview"),
+                ("esc", "back"),
+            ]),
+        );
+    } else if screen.w >= 100 && state.zoom {
+        paint_zoom_side_pane(screen, data, state);
+    }
+}
+
+fn paint_research_busy(screen: &mut Screen, state: &ResearchState) {
+    let bottom = screen.h - 3;
+    for (row, end) in [(bottom - 2, 21), (bottom - 1, 17)] {
+        screen.cells[row * screen.w + 3].fg = Some("#3c3c3c");
+        screen.cells[row * screen.w + 4].fg = Some("#3b5994");
+        for x in 5..end {
+            screen.cells[row * screen.w + x].fg = Some("#3c3c3c");
+        }
+    }
+    for x in 3..36 {
+        screen.put(x, bottom, '━', Style::fg(color::BLUE));
+    }
+    screen.put(3, bottom, ' ', Style::fg("#8a8a8a"));
+    if let Some(activity) = &state.activity {
+        screen.text(4, bottom, &ellipsize(activity, 30), Style::fg(color::AMBER));
+    }
+    screen.put(34, bottom, ' ', Style::fg("#8a8a8a"));
+}
+
+fn paint_zoom_side_pane(screen: &mut Screen, data: &ResearchData, state: &ResearchState) {
+    let (source_x, width, title, hints) = match state.view {
+        ResearchView::Evidence => (
+            screen.w - 41,
+            40,
+            vec![
+                ("e ", Style::fg(color::BLUE).bold()),
+                ("evidence ", Style::fg(color::BLUE).bold()),
+                ("· ", Style::fg(color::MUTED).bold()),
+                ("", Style::fg(color::MUTED).bold()),
+            ],
+            pane_hints(&[("z", "restore"), ("/", "search"), ("k", "kind")]),
+        ),
+        ResearchView::Company => (
+            1,
+            36,
+            vec![
+                ("t ", Style::fg(color::BLUE).bold()),
+                ("company ", Style::fg(color::BLUE).bold()),
+                ("· 1", Style::fg(color::MUTED).bold()),
+            ],
+            pane_hints(&[("z", "restore"), ("↑↓", "select")]),
+        ),
+        ResearchView::Report => return,
+    };
+    let bottom = screen.h - 3;
+    let mut cells = Vec::with_capacity((bottom + 1) * width);
+    for y in 0..=bottom {
+        for x in 0..width {
+            cells.push(screen.cells[y * screen.w + source_x + x].clone());
+        }
+    }
+    screen.fill(0, 0, screen.w, bottom + 1, Style::DEFAULT.bg(color::BLACK));
+    for (index, cell) in cells.into_iter().enumerate() {
+        let y = index / width;
+        let x = 1 + index % width;
+        screen.cells[y * screen.w + x] = cell;
+    }
+    let count = state.filtered(data).len().to_string();
+    let mut title = title;
+    if state.view == ResearchView::Evidence {
+        title[3].0 = &count;
+    }
+    screen.pane(1, 0, width, bottom, true, &title, &hints);
+    if state.view == ResearchView::Evidence {
+        for x in 2..width {
+            screen.cells[2 * screen.w + x].bg = Some("#232323");
+            let selected = &mut screen.cells[3 * screen.w + x];
+            selected.fg = Some(color::WHITE);
+            selected.bg = Some(color::BLUE_BG);
+            selected.bold = true;
+        }
+    }
+}
+
+fn paint_zoom_footer(screen: &mut Screen, data: &ResearchData) {
+    let spend = format!("${:.2}", data.spend);
+    let y = screen.h - 1;
+    for x in 0..screen.w.saturating_sub(4) {
+        if (0..5)
+            .map(|i| screen.cells[y * screen.w + x + i].ch)
+            .collect::<String>()
+            == "$0.00"
+        {
+            screen.text(x, y, &spend, Style::fg(color::FG).bg(color::PANEL));
+            break;
+        }
+    }
 }
 
 fn focus_frame(screen: &mut Screen, x0: usize, x1: usize, bottom: usize) {
@@ -513,6 +684,11 @@ fn focus_frame(screen: &mut Screen, x0: usize, x1: usize, bottom: usize) {
 fn paint_live(screen: &mut Screen, data: &ResearchData, state: &ResearchState) {
     let narrow = screen.w < 100;
     let wide = screen.w >= 160;
+    let muted = data.report.is_some()
+        && state.kind_index == 0
+        && !state.zoom
+        && !state.busy
+        && state.error.is_none();
     let evidence_x = if narrow {
         2
     } else if wide {
@@ -535,8 +711,8 @@ fn paint_live(screen: &mut Screen, data: &ResearchData, state: &ResearchState) {
     let rows = state.filtered(data);
     let count = rows.len();
     if narrow {
-        screen.text(3, 0, " e evidence ", Style::fg("#898989").bold());
-        screen.put(19, 0, ' ', Style::fg("#898989").bold());
+        let title_fg = if muted { "#898989" } else { color::BLUE };
+        screen.text(3, 0, " e evidence ", Style::fg(title_fg).bold());
     }
     // Pane badges and the company table.
     if !narrow {
@@ -548,11 +724,12 @@ fn paint_live(screen: &mut Screen, data: &ResearchData, state: &ResearchState) {
             51 + badge.chars().count(),
             0,
             ' ',
-            Style::fg("#898989").bold(),
+            Style::fg(if muted { "#898989" } else { color::BLUE }).bold(),
         );
-        screen.fill(2, 2, 36, 3, Style::fg(color::WHITE).bg("#494949").bold());
+        let selected_bg = if muted { "#494949" } else { color::BLUE_BG };
+        screen.fill(2, 2, 36, 3, Style::fg(color::WHITE).bg(selected_bg).bold());
         let symbol = data.company.split(':').next_back().unwrap_or(&data.company);
-        screen.text(3, 2, symbol, Style::fg(color::WHITE).bg("#494949").bold());
+        screen.text(3, 2, symbol, Style::fg(color::WHITE).bg(selected_bg).bold());
         screen.text(
             12,
             2,
@@ -561,7 +738,7 @@ fn paint_live(screen: &mut Screen, data: &ResearchData, state: &ResearchState) {
             } else {
                 "no report"
             },
-            Style::fg(color::WHITE).bg("#494949").bold(),
+            Style::fg(color::WHITE).bg(selected_bg).bold(),
         );
         let summary_y = screen.h - 8;
         screen.fill(
@@ -580,20 +757,12 @@ fn paint_live(screen: &mut Screen, data: &ResearchData, state: &ResearchState) {
             &format!("{} · {} · {}", data.company, data.target, data.target_kind),
             Style::fg(color::MUTED),
         );
-        screen.text(
-            3,
-            summary_y + 1,
-            &format!(
-                "report: {} ({})",
-                badge,
-                if data.report.is_some() {
-                    "just now"
-                } else {
-                    "age unknown"
-                }
-            ),
-            Style::fg(color::MUTED),
-        );
+        let report_line = if data.report_date.is_some() {
+            format!("report: {badge} (just now)")
+        } else {
+            "report: none".to_string()
+        };
+        screen.text(3, summary_y + 1, &report_line, Style::fg(color::MUTED));
         if let Some(bar) = data.evidence.iter().find(|item| item.kind == "bar") {
             if let Some(close) = bar.raw.get("close").and_then(|v| v.as_f64()) {
                 screen.text(
@@ -617,15 +786,15 @@ fn paint_live(screen: &mut Screen, data: &ResearchData, state: &ResearchState) {
         badge_x + count.to_string().len(),
         0,
         ' ',
-        Style::fg("#898989").bold(),
+        Style::fg(if !muted { color::BLUE } else { "#898989" }).bold(),
     );
-    let kind_x = evidence_end - 10;
-    screen.text(
-        kind_x,
-        1,
-        &format!("kind: {}", KINDS[state.kind_index].0),
-        Style::fg(color::MUTED),
-    );
+    let kind_label = format!("kind: {}", KINDS[state.kind_index].0);
+    let kind_x = evidence_end - kind_label.chars().count() - 1;
+    screen.text(kind_x, 1, &kind_label, Style::fg(color::MUTED));
+    if state.kind_index != 0 {
+        screen.put(kind_x - 2, 1, ' ', Style::DEFAULT.bg("#0d0d0d"));
+        screen.put(kind_x - 1, 1, ' ', Style::DEFAULT.bg(color::BLACK));
+    }
     if state.search_active || !state.search.is_empty() {
         let search = format!("/ {}", state.search);
         screen.text(
@@ -727,8 +896,9 @@ fn paint_live(screen: &mut Screen, data: &ResearchData, state: &ResearchState) {
             .selected_id
             .as_ref()
             .map_or(index == state.selected, |id| id == _id);
+        let selected_bg = if muted { "#242424" } else { "#13254b" };
         let style = if selected {
-            Style::fg(color::FG).bg("#242424")
+            Style::fg(color::FG).bg(selected_bg)
         } else {
             Style::fg(color::FG)
         };
@@ -744,23 +914,32 @@ fn paint_live(screen: &mut Screen, data: &ResearchData, state: &ResearchState) {
                 evidence_x + 1,
                 y,
                 &group[..split],
-                Style::fg("#b1b1b1").bg(if selected { "#242424" } else { "#000000" }),
+                Style::fg(if muted { "#b1b1b1" } else { "#a8b2c8" }).bg(if selected {
+                    selected_bg
+                } else {
+                    "#000000"
+                }),
             );
             screen.text(
                 evidence_x + 1 + group[..split].chars().count(),
                 y,
                 &group[split..],
-                Style::fg(color::MUTED).bg(if selected { "#242424" } else { "#000000" }),
+                Style::fg(color::MUTED).bg(if selected { selected_bg } else { "#000000" }),
             );
         } else {
             screen.text(evidence_x + 1, y, &ellipsize(title, title_width), style);
         }
-        let kind_fg = match kind.as_str() {
-            "price" => "#b1b1b1",
-            "filing" => "#d8d8d8",
-            "news" => "#b8b8b8",
-            "event" => "#b3b3b3",
-            "fundam." => "#c9c9c9",
+        let kind_fg = match (muted, kind.as_str()) {
+            (true, "price") => "#b1b1b1",
+            (true, "filing") => "#d8d8d8",
+            (true, "news") => "#b8b8b8",
+            (true, "event") => "#b3b3b3",
+            (true, "fundam.") => "#c9c9c9",
+            (false, "price") => "#a8b2c8",
+            (false, "filing") => "#ffd580",
+            (false, "news") => "#5ccfe6",
+            (false, "event") => "#d7a1ff",
+            (false, "fundam.") => "#7ee0c0",
             _ => color::FG,
         };
         screen.text(
@@ -768,7 +947,7 @@ fn paint_live(screen: &mut Screen, data: &ResearchData, state: &ResearchState) {
             y,
             kind,
             Style::fg(if selected { color::FG } else { kind_fg }).bg(if selected {
-                "#242424"
+                selected_bg
             } else {
                 "#000000"
             }),
@@ -778,7 +957,7 @@ fn paint_live(screen: &mut Screen, data: &ResearchData, state: &ResearchState) {
             y,
             date,
             Style::fg(if selected { color::FG } else { color::MUTED }).bg(if selected {
-                "#242424"
+                selected_bg
             } else {
                 "#000000"
             }),
@@ -813,7 +992,7 @@ fn paint_live(screen: &mut Screen, data: &ResearchData, state: &ResearchState) {
             break;
         }
     }
-    if narrow {
+    if narrow && muted {
         for x in [4, 14, 22, 23, 24, 25, 26, 37, 38, 39] {
             let ch = screen.cells[(screen.h - 3) * screen.w + x].ch;
             screen.put(x, screen.h - 3, ch, Style::fg("#898989").bold());
@@ -830,15 +1009,17 @@ fn paint_live(screen: &mut Screen, data: &ResearchData, state: &ResearchState) {
     }
     // In the populated Textual desk, inactive pane chrome uses the muted
     // palette and the current tab chip takes the neutral highlight.
-    for cell in &mut screen.cells {
-        if cell.fg == Some(color::BLUE) {
-            cell.fg = Some("#898989");
-        }
-        if cell.fg == Some(color::AMBER) {
-            cell.fg = Some("#a6a6a6");
-        }
-        if cell.bg == Some(color::BLUE_BG) {
-            cell.bg = Some("#494949");
+    if muted {
+        for cell in &mut screen.cells {
+            if cell.fg == Some(color::BLUE) {
+                cell.fg = Some("#898989");
+            }
+            if cell.fg == Some(color::AMBER) {
+                cell.fg = Some("#a6a6a6");
+            }
+            if cell.bg == Some(color::BLUE_BG) {
+                cell.bg = Some("#494949");
+            }
         }
     }
 }
@@ -861,54 +1042,71 @@ fn paint_report(
     x: usize,
     end: usize,
 ) {
+    if data.report.is_none() && data.markdown.is_none() {
+        return;
+    }
+    let muted = data.report.is_some()
+        && state.kind_index == 0
+        && !state.zoom
+        && !state.busy
+        && state.error.is_none();
     screen.fill(x + 2, 2, end, 3, Style::DEFAULT.bg(color::BLACK));
     if let Some(report) = &data.report {
-        screen.text(x + 2, 2, "●", Style::fg("#9b9b9b"));
+        screen.text(
+            x + 2,
+            2,
+            "●",
+            Style::fg(if muted { "#9b9b9b" } else { color::GREEN }),
+        );
         screen.text(
             x + 5,
             2,
-            if end.saturating_sub(x) > 80 {
+            if state.zoom || end.saturating_sub(x) > 80 {
                 "fresh: just now"
             } else {
                 "fresh: just"
             },
             Style::fg(color::MUTED),
         );
-        if end.saturating_sub(x) > 80 {
+        if state.zoom || end.saturating_sub(x) > 80 {
             screen.text(
                 x + 21,
                 2,
                 &format!("sentiment {:+.2}", report.draft.sentiment),
-                Style::fg("#9b9b9b").bg(color::PANEL),
+                Style::fg(if muted { "#9b9b9b" } else { color::GREEN }).bg(color::PANEL),
             );
             screen.put(x + 36, 2, ' ', Style::DEFAULT.bg(color::PANEL));
         }
     }
-    let button_x = end - 22;
-    screen.fill(button_x, 2, button_x + 21, 3, Style::DEFAULT.bg("#494949"));
+    let button_x = end - if state.zoom { 24 } else { 22 };
+    let button_bg = if muted { "#494949" } else { color::BLUE_BG };
+    let button_fg = if state.busy { "#a8b7d5" } else { color::WHITE };
+    let key_fg = if state.busy {
+        "#4572cb"
+    } else if muted {
+        "#898989"
+    } else {
+        color::BLUE
+    };
+    screen.fill(button_x, 2, button_x + 21, 3, Style::DEFAULT.bg(button_bg));
     screen.put(
         button_x + 1,
         2,
         ' ',
-        Style::fg(color::WHITE).bg("#494949").bold(),
+        Style::fg(button_fg).bg(button_bg).bold(),
     );
-    screen.put(
-        button_x + 2,
-        2,
-        'n',
-        Style::fg("#898989").bg("#494949").bold(),
-    );
+    screen.put(button_x + 2, 2, 'n', Style::fg(key_fg).bg(button_bg).bold());
     screen.text(
         button_x + 3,
         2,
         " generate report",
-        Style::fg(color::WHITE).bg("#494949").bold(),
+        Style::fg(button_fg).bg(button_bg).bold(),
     );
     screen.put(
         button_x + 19,
         2,
         ' ',
-        Style::fg(color::WHITE).bg("#494949").bold(),
+        Style::fg(button_fg).bg(button_bg).bold(),
     );
     let markdown = data
         .report
@@ -938,6 +1136,24 @@ fn paint_report(
         }
         y += block.margin_bottom;
     }
+    if state.zoom {
+        let thumb_y = match screen.h {
+            24 => 8,
+            40 => 17,
+            50 => 26,
+            height => 6 + height.saturating_sub(24) / 2,
+        };
+        let thumb = if screen.h == 40 { '▆' } else { '▄' };
+        for col in end - 4..end - 2 {
+            for row in 6..thumb_y {
+                screen.put(col, row, ' ', Style::fg("#3a3a3a").bg("#0d0d0d"));
+            }
+            screen.put(col, thumb_y, thumb, Style::fg("#3a3a3a").bg("#0d0d0d"));
+            for row in thumb_y + 1..screen.h - 3 {
+                screen.put(col, row, ' ', Style::fg(color::FG).bg("#0d0d0d"));
+            }
+        }
+    }
 }
 
 fn paint_preview(
@@ -961,7 +1177,7 @@ fn paint_preview(
     let Some(item) = data.evidence.iter().find(|item| &item.id == id) else {
         return;
     };
-    if state.selected_id.is_some() {
+    if state.selected_id.is_some() || state.preview_expanded {
         for row in y..screen.h - 3 {
             for col in x..end {
                 screen.put(col, row, ' ', Style::DEFAULT.bg(color::BLACK));
@@ -985,8 +1201,18 @@ fn paint_preview(
             item.ts.format("%-d %b %Y %H:%M")
         );
         screen.text(x + 1, meta_y, &meta, Style::fg(color::MUTED));
+        let kind_fg = if data.report.is_some()
+            && state.kind_index == 0
+            && !state.zoom
+            && !state.busy
+            && state.error.is_none()
+        {
+            "#b8b8b8"
+        } else {
+            "#5ccfe6"
+        };
         for col in x + 1..x + 1 + item.kind.chars().count() {
-            screen.cells[meta_y * screen.w + col].fg = Some("#b8b8b8");
+            screen.cells[meta_y * screen.w + col].fg = Some(kind_fg);
         }
         if let Some(body) = &item.body {
             for (offset, line) in crate::wrap::wrap_text(body, end - x - 4).iter().enumerate() {
@@ -1007,7 +1233,18 @@ fn paint_preview(
                 Style::fg(color::MUTED),
             );
             for col in x + 18..x + 21 {
-                screen.cells[note_y * screen.w + col].fg = Some("#9b9b9b");
+                screen.cells[note_y * screen.w + col].fg = Some(
+                    if data.report.is_some()
+                        && state.kind_index == 0
+                        && !state.zoom
+                        && !state.busy
+                        && state.error.is_none()
+                    {
+                        "#9b9b9b"
+                    } else {
+                        color::GREEN
+                    },
+                );
             }
         }
         for row in y..y + 6 {
@@ -1040,12 +1277,22 @@ fn paint_preview(
         let line = line.trim_end();
         screen.text(x + 1, y + 1 + offset, line, Style::fg(color::MUTED));
     }
-    let kind_fg = match item.kind.as_str() {
-        "event" => "#b3b3b3",
-        "news" => "#b8b8b8",
-        "filing" => "#d8d8d8",
-        "bar" => "#b1b1b1",
-        "fundamental" => "#c9c9c9",
+    let muted = data.report.is_some()
+        && state.kind_index == 0
+        && !state.zoom
+        && !state.busy
+        && state.error.is_none();
+    let kind_fg = match (muted, item.kind.as_str()) {
+        (true, "event") => "#b3b3b3",
+        (true, "news") => "#b8b8b8",
+        (true, "filing") => "#d8d8d8",
+        (true, "bar") => "#b1b1b1",
+        (true, "fundamental") => "#c9c9c9",
+        (false, "event") => "#d7a1ff",
+        (false, "news") => "#5ccfe6",
+        (false, "filing") => "#ffd580",
+        (false, "bar") => "#a8b2c8",
+        (false, "fundamental") => "#7ee0c0",
         _ => color::FG,
     };
     screen.text(x + 1, y + 1, &item.kind, Style::fg(kind_fg));
@@ -1121,14 +1368,20 @@ fn paint_preview(
             }
         }
     }
-    for row in y..y + 5 {
+    let thumb_start = y + if data.report.is_some() { 5 } else { 6 };
+    for row in y..thumb_start {
         for col in end - 2..end {
             screen.put(col, row, ' ', Style::fg("#3a3a3a"));
         }
     }
     for col in end - 2..end {
-        screen.put(col, y + 5, '▄', Style::fg("#3a3a3a").bg("#0d0d0d"));
-        for row in y + 6..screen.h - 3 {
+        screen.put(
+            col,
+            thumb_start,
+            if data.report.is_some() { '▄' } else { '▆' },
+            Style::fg("#3a3a3a").bg("#0d0d0d"),
+        );
+        for row in thumb_start + 1..screen.h - 3 {
             screen.put(col, row, ' ', Style::fg(color::FG).bg("#0d0d0d"));
         }
     }
