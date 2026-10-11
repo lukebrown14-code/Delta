@@ -190,6 +190,132 @@
       "tier": "B"
     },
     {
+      "file": "live-research-no-report-80x24.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "80x24",
+      "state": "live-research-no-report",
+      "tier": "B"
+    },
+    {
+      "file": "live-research-no-report-120x40.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "120x40",
+      "state": "live-research-no-report",
+      "tier": "B"
+    },
+    {
+      "file": "live-research-no-report-200x50.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "200x50",
+      "state": "live-research-no-report",
+      "tier": "B"
+    },
+    {
+      "file": "live-research-kind-news-80x24.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "80x24",
+      "state": "live-research-kind-news",
+      "tier": "B"
+    },
+    {
+      "file": "live-research-kind-news-120x40.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "120x40",
+      "state": "live-research-kind-news",
+      "tier": "B"
+    },
+    {
+      "file": "live-research-kind-news-200x50.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "200x50",
+      "state": "live-research-kind-news",
+      "tier": "B"
+    },
+    {
+      "file": "live-research-zoom-report-80x24.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "80x24",
+      "state": "live-research-zoom-report",
+      "tier": "B"
+    },
+    {
+      "file": "live-research-zoom-report-120x40.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "120x40",
+      "state": "live-research-zoom-report",
+      "tier": "B"
+    },
+    {
+      "file": "live-research-zoom-report-200x50.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "200x50",
+      "state": "live-research-zoom-report",
+      "tier": "B"
+    },
+    {
+      "file": "live-research-zoom-evidence-80x24.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "80x24",
+      "state": "live-research-zoom-evidence",
+      "tier": "B"
+    },
+    {
+      "file": "live-research-zoom-evidence-120x40.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "120x40",
+      "state": "live-research-zoom-evidence",
+      "tier": "B"
+    },
+    {
+      "file": "live-research-zoom-evidence-200x50.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "200x50",
+      "state": "live-research-zoom-evidence",
+      "tier": "B"
+    },
+    {
+      "file": "live-research-generating-80x24.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "80x24",
+      "state": "live-research-generating",
+      "tier": "B"
+    },
+    {
+      "file": "live-research-generating-120x40.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "120x40",
+      "state": "live-research-generating",
+      "tier": "B"
+    },
+    {
+      "file": "live-research-generating-200x50.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "200x50",
+      "state": "live-research-generating",
+      "tier": "B"
+    },
+    {
+      "file": "live-research-error-80x24.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "80x24",
+      "state": "live-research-error",
+      "tier": "B"
+    },
+    {
+      "file": "live-research-error-120x40.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "120x40",
+      "state": "live-research-error",
+      "tier": "B"
+    },
+    {
+      "file": "live-research-error-200x50.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "200x50",
+      "state": "live-research-error",
+      "tier": "B"
+    },
+    {
       "file": "live-ask-80x24.json",
       "seed": "fixtures/golden_seed.db",
       "size": "80x24",

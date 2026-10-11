@@ -39,9 +39,15 @@ pub fn render_live(state: &str, fixture: &serde_json::Value, db_path: &Path) -> 
             Some(live_watchlist(state, db_path, w, h))
         }
         "live-theses" => Some(live_theses(fixture, db_path, w, h)),
-        "live-research" | "live-research-search" | "live-research-citation" => {
-            Some(live_research(state, fixture, db_path, w, h))
-        }
+        "live-research"
+        | "live-research-search"
+        | "live-research-citation"
+        | "live-research-no-report"
+        | "live-research-kind-news"
+        | "live-research-zoom-report"
+        | "live-research-zoom-evidence"
+        | "live-research-generating"
+        | "live-research-error" => Some(live_research(state, fixture, db_path, w, h)),
         "live-ask"
         | "live-ask-typing"
         | "live-ask-waiting"
@@ -288,7 +294,12 @@ fn live_research(
     w: usize,
     h: usize,
 ) -> Screen {
-    let reports = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/golden_reports");
+    let reports =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join(if state_name == "live-research-no-report" {
+            "../../fixtures/no_reports"
+        } else {
+            "../../fixtures/golden_reports"
+        });
     let data = ResearchData::load(db_path, &reports, "US:AAPL", "apple", "company", "USD")
         .expect("load shared research seed");
     let mut screen = Screen::new(w, h);
@@ -299,6 +310,19 @@ fn live_research(
         state.selected_id = Some("news:news-aapl-chip".into());
         state.detail_open = true;
         state.view = crate::screens::research::ResearchView::Report;
+    } else if state_name == "live-research-kind-news" {
+        state.cycle_kind();
+    } else if state_name == "live-research-zoom-report" {
+        state.view = crate::screens::research::ResearchView::Report;
+        state.zoom = true;
+    } else if state_name == "live-research-zoom-evidence" {
+        state.zoom = true;
+    } else if state_name == "live-research-generating" {
+        state.busy = true;
+        state.activity =
+            Some("generating report for US:AAPL via test-model — esc to cancel…".into());
+    } else if state_name == "live-research-error" {
+        state.error = Some("report has no supported claims".into());
     }
     draw_research_live(&mut screen, &data, &state);
     screen
