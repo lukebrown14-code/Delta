@@ -104,6 +104,27 @@
       "size": "200x50",
       "state": "live-research-citation",
       "tier": "B"
+    },
+    {
+      "file": "live-ask-80x24.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "80x24",
+      "state": "live-ask",
+      "tier": "B"
+    },
+    {
+      "file": "live-ask-120x40.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "120x40",
+      "state": "live-ask",
+      "tier": "A"
+    },
+    {
+      "file": "live-ask-200x50.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "200x50",
+      "state": "live-ask",
+      "tier": "B"
     }
   ],
   "seed": "fixtures/golden_seed.db"

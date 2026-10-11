@@ -23,8 +23,9 @@ use delta_tui::screens::{
     draw_decisions_wide, draw_glossary_overlay, draw_home, draw_home_narrow, draw_home_wide,
     draw_research, draw_research_live, draw_research_narrow, draw_research_wide, draw_settings,
     draw_settings_narrow, draw_settings_wide, draw_theses_live, draw_watchlist,
-    draw_watchlist_narrow, draw_watchlist_wide, ResearchData, ResearchState, ResearchView,
-    SettingsFocus, SettingsState, SettingsView, ThesesPane, ThesesState,
+    draw_watchlist_narrow, draw_watchlist_wide, paint_ask_state, AskState, ResearchData,
+    ResearchState, ResearchView, SettingsFocus, SettingsState, SettingsView, ThesesPane,
+    ThesesState,
 };
 use delta_tui::theme::Palette;
 use delta_tui::{is_quit_key, workers, Action, Breakpoint, Component};
@@ -145,6 +146,8 @@ pub(crate) struct App {
     theses: ThesesState,
     research: Option<ResearchData>,
     research_state: ResearchState,
+    ask: AskState,
+    ask_worker: Option<tokio::task::JoinHandle<()>>,
     /// The terminal size the last frame painted (breakpoint decisions).
     viewport: (u16, u16),
 }
@@ -324,11 +327,14 @@ impl App {
                 }
             }
             Tab::Theses => draw_theses_live(screen, &self.theses),
-            Tab::Ask => route!(
-                draw_ask_wide(screen),
-                draw_ask(screen),
-                draw_ask_narrow(screen)
-            ),
+            Tab::Ask => {
+                route!(
+                    draw_ask_wide(screen),
+                    draw_ask(screen),
+                    draw_ask_narrow(screen)
+                );
+                paint_ask_state(screen, &self.ask);
+            }
             Tab::Decisions => route!(
                 draw_decisions_wide(screen),
                 draw_decisions(screen),
@@ -346,6 +352,9 @@ impl App {
                     draw_settings_narrow(screen, &view)
                 )
             }
+        }
+        if self.tab == Tab::Ask {
+            paint_ask_state(screen, &self.ask);
         }
         if self.glossary && self.tab == Tab::Watchlist {
             draw_glossary_overlay(screen, &self.desk.watch_state());
@@ -514,6 +523,71 @@ impl App {
         self.desk.reload_targets_from(config)?;
         self.status = format!("{name} removed");
         Ok(())
+    }
+
+    fn handle_ask_key(&mut self, key: KeyEvent) -> Option<Action> {
+        if self.ask.editing {
+            match key.code {
+                KeyCode::Esc => self.ask.editing = false,
+                KeyCode::Enter => {
+                    if let Some((generation, history, targets)) = self.ask.submit() {
+                        return Some(Action::AskQuestion {
+                            generation,
+                            history,
+                            targets,
+                        });
+                    }
+                }
+                KeyCode::Backspace => {
+                    self.ask.input.pop();
+                }
+                KeyCode::Char(c) => self.ask.input.push(c),
+                _ => {}
+            }
+            return Some(Action::Noop);
+        }
+        if self.ask.clear_pending {
+            match key.code {
+                KeyCode::Char('y') => {
+                    if let Some(worker) = self.ask_worker.take() {
+                        worker.abort();
+                    }
+                    self.ask.clear();
+                }
+                KeyCode::Esc => self.ask.clear_pending = false,
+                _ => {}
+            }
+            return Some(Action::Noop);
+        }
+        match key.code {
+            KeyCode::Esc if self.ask.busy => {
+                if let Some(worker) = self.ask_worker.take() {
+                    worker.abort();
+                }
+                self.ask.cancel_pending();
+            }
+            KeyCode::Char('i') | KeyCode::Enter => {
+                self.ask.editing = true;
+                self.ask.targets_focus = false;
+            }
+            KeyCode::Char('t') => self.ask.targets_focus = true,
+            KeyCode::Esc if self.ask.targets_focus => self.ask.targets_focus = false,
+            KeyCode::Char(' ') => self.ask.toggle_target(),
+            KeyCode::Char('a') => self.ask.toggle_all(),
+            KeyCode::Up if self.ask.targets_focus => {
+                self.ask.target_selected = self.ask.target_selected.saturating_sub(1)
+            }
+            KeyCode::Down if self.ask.targets_focus => {
+                self.ask.target_selected =
+                    (self.ask.target_selected + 1).min(self.ask.targets.len().saturating_sub(1))
+            }
+            KeyCode::Left => self.ask.walk_citation(-1),
+            KeyCode::Right => self.ask.walk_citation(1),
+            KeyCode::Char('z') => self.ask.zoomed = !self.ask.zoomed,
+            KeyCode::Char('x') if !self.ask.history.is_empty() => self.ask.clear_pending = true,
+            _ => return None,
+        }
+        Some(Action::Noop)
     }
 
     /// The shell keys, in `DeltaApp.BINDINGS` order (plus the esc close and
@@ -1526,6 +1600,11 @@ impl Component for App {
                 return Some(action);
             }
         }
+        if self.tab == Tab::Ask {
+            if let Some(action) = self.handle_ask_key(key) {
+                return Some(action);
+            }
+        }
         if self.tab == Tab::Settings && key.code == KeyCode::Esc {
             return self.handle_settings_key(key);
         }
@@ -1593,6 +1672,21 @@ impl Component for App {
                     self.status = "thesis summarised".to_string();
                 }
             }
+            Action::AskAnswered {
+                generation,
+                result,
+                citation_labels,
+                sidebar_labels,
+            } => {
+                if generation == self.ask.generation {
+                    self.ask_worker = None;
+                }
+                self.ask.finish(generation, result);
+                if generation == self.ask.generation && !self.ask.history.is_empty() {
+                    self.ask.citation_labels = citation_labels;
+                    self.ask.sidebar_labels = sidebar_labels;
+                }
+            }
             Action::HomeRefresh(feed) => self.desk.feed = feed,
             Action::ToggleTheme => {
                 // `action_toggle_theme`: swap the palette and notify.
@@ -1638,6 +1732,7 @@ impl Component for App {
                 }
             }
             Action::Noop
+            | Action::AskQuestion { .. }
             | Action::OpenDialog(_)
             | Action::CloseDialog
             | Action::Goto(_)
@@ -1681,6 +1776,17 @@ pub(crate) async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> st
     let (research_tx, mut research_rx) = mpsc::unbounded_channel::<Result<ResearchData, String>>();
     let research = load_research(&desk);
 
+    let mut ask = AskState::default();
+    if let Some(config) = &desk.config_path {
+        if let Ok(targets) = delta_services::target_specs(config) {
+            ask.set_targets(targets.into_values().collect());
+        }
+        if let Ok((_, cfg)) = delta_core::config::load_config(config) {
+            ask.provider = cfg.llm_provider;
+            ask.model = cfg.llm_model;
+        }
+    }
+
     let mut app = App {
         desk,
         tab: Tab::Watchlist,
@@ -1694,6 +1800,8 @@ pub(crate) async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> st
         theses: ThesesState::default(),
         research,
         research_state: ResearchState::default(),
+        ask,
+        ask_worker: None,
         viewport: (120, 40),
     };
     app.reload_theses();
@@ -1724,6 +1832,34 @@ pub(crate) async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> st
                             match action {
                                 Action::Gather => { let _ = active_workers.gather_tx.send(None); }
                                 Action::GatherCompany(id) => { let _ = active_workers.gather_tx.send(Some(id)); }
+                                Action::AskQuestion { generation, history, targets } => {
+                                    let tx = bus_tx.clone();
+                                    let config_path = app.desk.config_path.clone();
+                                    let db_path = match &app.desk.source {
+                                        delta_tui::desk::Source::Real(path) => Some(path.clone()),
+                                        delta_tui::desk::Source::Offline => None,
+                                    };
+                                    app.ask_worker = Some(tokio::spawn(async move {
+                                        let (result, citation_labels, sidebar_labels) = async {
+                                            let config_path = config_path.ok_or_else(|| "offline: no config.toml".to_string())?;
+                                            let db_path = db_path.ok_or_else(|| "offline: no database".to_string())?;
+                                            let (_, cfg) = delta_core::config::load_config(&config_path).map_err(|err| err.to_string())?;
+                                            let mut db = delta_core::db::Db::open(&db_path).map_err(|err| err.to_string())?;
+                                            let answer = delta_services::chat::chat_configured(&mut db, &cfg, &history, &targets).await.map_err(|err| err.to_string())?;
+                                            let mut labels = std::collections::BTreeMap::new();
+                                            let mut sidebar = std::collections::BTreeMap::new();
+                                            for id in &answer.citations {
+                                                if let Some(item) = delta_services::evidence_by_ids(&db, std::slice::from_ref(id)).map_err(|err| err.to_string())?.into_iter().next() {
+                                                    let label = format!("{} · {}", item.title, item.ts.format("%-d %b"));
+                                                    sidebar.insert(id.clone(), label.clone());
+                                                    if item.id == *id { labels.insert(id.clone(), label); }
+                                                }
+                                            }
+                                            Ok::<_, String>((answer, labels, sidebar))
+                                        }.await.map_or_else(|error| (Err(error), Default::default(), Default::default()), |(answer, labels, sidebar)| (Ok(answer), labels, sidebar));
+                                        let _ = tx.send(Action::AskAnswered { generation, result, citation_labels, sidebar_labels });
+                                    }));
+                                }
                                 Action::GenerateReport => {
                                     if !app.research_state.busy {
                                         app.research_state.busy = true;
@@ -1936,6 +2072,8 @@ mod tests {
             theses: ThesesState::default(),
             research: None,
             research_state: ResearchState::default(),
+            ask: AskState::default(),
+            ask_worker: None,
             viewport: (120, 40),
         }
     }

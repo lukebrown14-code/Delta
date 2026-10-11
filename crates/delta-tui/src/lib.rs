@@ -111,6 +111,17 @@ pub enum Action {
     OpenSource(String),
     /// One-line worker status for the status overlay.
     Status(String),
+    AskQuestion {
+        generation: u64,
+        history: Vec<delta_services::chat::ChatMessage>,
+        targets: Vec<String>,
+    },
+    AskAnswered {
+        generation: u64,
+        result: Result<delta_services::chat::ChatMessage, String>,
+        citation_labels: BTreeMap<String, String>,
+        sidebar_labels: BTreeMap<String, String>,
+    },
 }
 
 /// Ratatui component template (see `docs/RUST_REWRITE_PLAN.md`).
