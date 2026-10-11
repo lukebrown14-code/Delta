@@ -20,10 +20,15 @@ use delta_tui::screens::{
     draw_decisions_wide, draw_glossary_overlay, draw_home, draw_home_narrow, draw_home_wide,
     draw_research, draw_research_narrow, draw_research_wide, draw_settings, draw_settings_narrow,
     draw_settings_wide, draw_theses, draw_theses_narrow, draw_theses_wide, draw_watchlist,
-    draw_watchlist_narrow, draw_watchlist_wide, grouped, HomeFeed, HomeState, MetricsData,
-    WatchlistState,
+    draw_watchlist_narrow, draw_watchlist_wide, exporter_world, grouped, HomeFeed, HomeState,
+    MetricsData, SettingsState, SettingsView, WatchlistState,
 };
 use delta_tui::theme::Palette;
+
+/// The frozen exporter clock (`tests/export_golden.py::NOW`).
+fn frozen_now() -> chrono::NaiveDateTime {
+    chrono::NaiveDateTime::parse_from_str("2026-09-21 09:30:00", "%Y-%m-%d %H:%M:%S").expect("NOW")
+}
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -107,6 +112,12 @@ impl Seed {
         };
         WatchlistState {
             range,
+            scrub: None,
+            entries: vec![delta_tui::screens::WatchEntry {
+                symbol: "AAPL".into(),
+                asset_class: "equity".into(),
+            }],
+            selected: 0,
             metric: Some(MetricsData {
                 symbol: "AAPL".to_string(),
                 market: "us".to_string(),
@@ -222,11 +233,21 @@ fn render(entry: &Entry, seed: &Seed) -> Screen {
             40 => draw_decisions(&mut screen),
             _ => draw_decisions_wide(&mut screen),
         },
-        "settings" => match h {
-            24 => draw_settings_narrow(&mut screen),
-            40 => draw_settings(&mut screen),
-            _ => draw_settings_wide(&mut screen),
-        },
+        "settings" => {
+            let data = exporter_world();
+            let footer = data.footer(frozen_now());
+            let state = SettingsState::default();
+            let view = SettingsView {
+                data: &data,
+                state: &state,
+                footer: &footer,
+            };
+            match h {
+                24 => draw_settings_narrow(&mut screen, &view),
+                40 => draw_settings(&mut screen, &view),
+                _ => draw_settings_wide(&mut screen, &view),
+            }
+        }
         other => panic!("no Rust renderer for scenario state {other:?}; add one to golden.rs"),
     }
     screen

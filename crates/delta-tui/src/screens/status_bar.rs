@@ -1,5 +1,83 @@
 use crate::screen::{color, Screen, Style};
 
+/// The status bar's live cells (`shell.py::StatusBar._refresh`): data age,
+/// provider, all-time spend. The default is the exporter-world footer the
+/// committed goldens capture (fresh app, 1d-old bars, no spend).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Footer {
+    /// `data 1d` (age of the newest bar), `data none`, or `data ?`.
+    pub data: String,
+    /// The provider name; `—` when unset. Hidden below 87 columns.
+    pub provider: String,
+    /// All-time model spend, `$0.00`-formatted.
+    pub spend: String,
+}
+
+impl Default for Footer {
+    fn default() -> Self {
+        Self {
+            data: "data 1d".to_string(),
+            provider: "openrouter".to_string(),
+            spend: "$0.00".to_string(),
+        }
+    }
+}
+
+/// The Settings tab's normal-breakpoint bar: digit keys at 3-cell pitch
+/// and the active `c Settings` chip inside the live cluster (the layout
+/// the `settings-120x40` golden pins).
+pub(super) fn settings_status_bar(screen: &mut Screen, footer: &Footer) {
+    let y = screen.h - 1;
+    let w = screen.w;
+    let panel = Style::DEFAULT.bg(color::PANEL);
+    let muted = Style::fg(color::MUTED).bold().bg(color::PANEL);
+    let active_fg = Style::fg(color::WHITE).bold().bg(color::BLUE_BG);
+    let active = Style::DEFAULT.bg(color::BLUE_BG);
+    let plain = Style::fg(color::FG).bg(color::PANEL);
+    screen.fill(1, y, w, y + 1, panel);
+    screen.put(0, y, ' ', Style::DEFAULT.bg(color::BLACK));
+    for x in [2usize, 5, 8, 11, 14, 17] {
+        screen.text(x, y, &((x / 3) + 1).to_string(), muted);
+    }
+    // The live cluster: dot, data age, provider, spend, then the chip and
+    // help hint. Its start follows the footer's string widths so the row
+    // always ends three cells short of the right edge.
+    let widths = (
+        footer.data.chars().count(),
+        footer.provider.chars().count(),
+        footer.spend.chars().count(),
+    );
+    let mut x = w
+        .saturating_sub(36 + widths.0 + widths.1 + widths.2)
+        .max(20);
+    screen.put(x, y, '\u{25CF}', Style::fg(color::AMBER).bg(color::PANEL));
+    x += 1;
+    for (part, style) in [
+        ("  ", panel),
+        (footer.data.as_str(), plain),
+        ("  ", panel),
+        (footer.provider.as_str(), plain),
+        ("  ", panel),
+        (footer.spend.as_str(), plain),
+        ("  ", panel),
+    ] {
+        x = screen.text(x, y, part, style);
+    }
+    screen.fill(x - 1, y, x + 11, y + 1, active);
+    screen.text(x, y, "c Settings", active_fg);
+    x += 11;
+    screen.put(x, y, ' ', panel);
+    x += 1;
+    for (part, style) in [
+        ("?", Style::fg(color::MUTED).bg(color::PANEL)),
+        (" help · g go", Style::fg(color::MUTED).bg(color::PANEL)),
+    ] {
+        x = screen.text(x, y, part, style);
+    }
+    screen.put(w - 2, y, ' ', panel);
+    screen.put(w - 1, y, ' ', Style::DEFAULT.bg(color::BLACK));
+}
+
 /// Hint runs in the panes' title/hint bars: key (bold blue) + " hint" (muted),
 /// pairs joined by two muted spaces, wrapped in single spaces.
 pub(super) fn pane_hints(pairs: &[(&str, &str)]) -> Vec<(String, Style)> {
@@ -94,6 +172,16 @@ pub enum NarrowTab {
 }
 
 pub(super) fn status_bar_narrow(screen: &mut Screen, active: NarrowTab) {
+    status_bar_narrow_with_footer(screen, active, &Footer::default());
+}
+
+/// The narrow bar with live footer cells (provider hidden below the
+/// minimal width, as Python hides it).
+pub(super) fn status_bar_narrow_with_footer(
+    screen: &mut Screen,
+    active: NarrowTab,
+    footer: &Footer,
+) {
     let y = screen.h - 1;
     let w = screen.w;
     let panel = Style::DEFAULT.bg(color::PANEL);
@@ -158,11 +246,12 @@ pub(super) fn status_bar_narrow(screen: &mut Screen, active: NarrowTab) {
     }
 
     // Right cluster: dot, data age, spend, then the settings tab (chip when
-    // active, muted label otherwise).
+    // active, muted label otherwise). The spend cell follows the data label.
     screen.put(49, y, '\u{25CF}', Style::fg(color::AMBER).bg(color::PANEL));
-    screen.text(52, y, "data 1d", plain);
-    screen.text(59, y, "  ", panel);
-    screen.text(61, y, "$0.00", plain);
+    screen.text(52, y, &footer.data, plain);
+    let spend_x = (52 + footer.data.chars().count() + 2).max(61);
+    screen.text(spend_x - 2, y, "  ", panel);
+    screen.text(spend_x, y, &footer.spend, plain);
     if active == NarrowTab::Settings {
         let label = "c Settings";
         let len = label.chars().count();
@@ -247,6 +336,17 @@ pub(super) fn status_bar_tabs(
 
 /// Wide status bar: every tab shows its label; `active` gets the chip.
 pub(super) fn draw_status_bar_wide(screen: &mut Screen, y: usize, w: usize, active: &str) {
+    draw_status_bar_wide_with_footer(screen, y, w, active, &Footer::default());
+}
+
+/// The wide bar with live footer cells (`data 1d`, provider, spend).
+pub(super) fn draw_status_bar_wide_with_footer(
+    screen: &mut Screen,
+    y: usize,
+    w: usize,
+    active: &str,
+    footer: &Footer,
+) {
     let panel = Style::DEFAULT.bg(color::PANEL);
     let muted = Style::fg(color::MUTED).bold().bg(color::PANEL);
     let muted_plain = Style::fg(color::MUTED).bg(color::PANEL);
@@ -326,17 +426,25 @@ pub(super) fn draw_status_bar_wide(screen: &mut Screen, y: usize, w: usize, acti
         screen.put(52, y, '6', muted);
         screen.text(53, y, " Decisions", muted_plain);
     }
-    let cluster = "●  data 1d  openrouter  $0.00  c Settings  ? help · g go ";
-    let mut cx = w - 1 - cluster.chars().count();
+    // The live cluster, right-aligned: its start follows the footer's
+    // string widths so the row always ends three cells short of the edge.
+    let widths = (
+        footer.data.chars().count(),
+        footer.provider.chars().count(),
+        footer.spend.chars().count(),
+    );
+    let mut cx = w
+        .saturating_sub(36 + widths.0 + widths.1 + widths.2)
+        .max(64);
     screen.put(cx, y, '●', Style::fg(color::AMBER).bg(color::PANEL));
     cx += 1;
     for (part, style) in [
         ("  ", panel),
-        ("data 1d", plain),
+        (footer.data.as_str(), plain),
         ("  ", panel),
-        ("openrouter", plain),
+        (footer.provider.as_str(), plain),
         ("  ", panel),
-        ("$0.00", plain),
+        (footer.spend.as_str(), plain),
     ] {
         cx = screen.text(cx, y, part, style);
     }

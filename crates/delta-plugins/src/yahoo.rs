@@ -33,6 +33,31 @@ pub fn default_suffixes() -> BTreeMap<String, String> {
     ])
 }
 
+/// Market suffixes for one configured source: the defaults, then
+/// `[markets]` profiles, then any `[plugins.<source>.suffixes]` overrides.
+pub fn configured_suffixes(
+    cfg: &delta_core::config::AppConfig,
+    source: &str,
+) -> BTreeMap<String, String> {
+    let mut suffixes = default_suffixes();
+    for (market, profile) in &cfg.markets {
+        suffixes.insert(market.clone(), profile.yahoo_suffix.clone());
+    }
+    if let Some(overrides) = cfg
+        .plugins
+        .get(source)
+        .and_then(|table| table.get("suffixes"))
+        .and_then(Value::as_object)
+    {
+        for (market, suffix) in overrides {
+            if let Some(suffix) = suffix.as_str() {
+                suffixes.insert(market.clone(), suffix.into());
+            }
+        }
+    }
+    suffixes
+}
+
 /// yfinance ticker for an instrument: BHP on asx -> BHP.AX. One source of truth.
 pub fn yf_symbol(inst: &Instrument, suffixes: &BTreeMap<String, String>) -> String {
     format!(

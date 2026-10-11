@@ -12,7 +12,10 @@ use delta_core::models::Bar;
 use delta_plugins::{DataProviderField, DataProviderSpec};
 use delta_services::config_ops::{remove_market, save_market};
 use delta_services::error::ServiceError;
-use delta_services::setup::{configure_data_provider, data_provider_status, setup_checks};
+use delta_services::setup::{
+    configure_data_provider, data_provider_status, save_model_choice, save_provider_choice,
+    setup_checks,
+};
 
 /// `LicensedSource` from `test_data_sources.py`.
 static LICENSED_SPEC: DataProviderSpec = DataProviderSpec {
@@ -166,6 +169,24 @@ fn unknown_provider_and_settings_are_rejected() {
     );
 }
 
+#[test]
+fn unknown_market_precedes_missing_required_field() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config.toml");
+    let env = dir.path().join(".env");
+    assert_invalid(
+        configure_data_provider(
+            &config,
+            &env,
+            &licensed_specs(),
+            "licensed",
+            &values(&[("endpoint", ""), ("api_key", "")]),
+            Some(&["nowhere".to_string()]),
+        ),
+        "unknown markets: nowhere",
+    );
+}
+
 /// A secret whose spec forgot its env var cannot be accepted: it must never
 /// land in config.toml.
 #[test]
@@ -247,6 +268,52 @@ fn data_provider_status_reads_config_and_env() {
     let statuses = data_provider_status(&cfg, &env, &licensed_specs());
     assert!(statuses[0].configured);
     assert!(statuses[0].enabled);
+}
+
+#[test]
+fn data_provider_status_uses_python_truthiness() {
+    let dir = tempfile::tempdir().unwrap();
+    let env = dir.path().join(".env");
+    let specs = delta_plugins::provider_specs();
+    for falsy in [
+        serde_json::json!(null),
+        serde_json::json!(false),
+        serde_json::json!(0),
+        serde_json::json!(""),
+        serde_json::json!([]),
+        serde_json::json!({}),
+    ] {
+        let cfg = AppConfig {
+            plugins: BTreeMap::from([(
+                "sec_edgar".to_string(),
+                serde_json::json!({"contact": falsy, "enabled": falsy}),
+            )]),
+            ..AppConfig::default()
+        };
+        let status = data_provider_status(&cfg, &env, &specs);
+        assert!(!status[0].configured);
+        assert!(!status[0].enabled);
+    }
+}
+
+#[test]
+fn whitespace_provider_key_matches_python_setup_check() {
+    let dir = tempfile::tempdir().unwrap();
+    let settings = delta_core::config::Settings {
+        openrouter_api_key: "   ".to_string(),
+        ..Default::default()
+    };
+    let cfg = AppConfig::default();
+    let db = Db::open_memory().unwrap();
+    let checks = setup_checks(
+        &settings,
+        &cfg,
+        &db,
+        &dir.path().join("config.toml"),
+        &dir.path().join(".env"),
+    )
+    .unwrap();
+    assert!(checks[0].ok);
 }
 
 /// `test_setup_checks_flag_missing_key` (test_services.py): no key, no
@@ -360,4 +427,71 @@ fn setup_checks_report_unknown_provider() {
     assert!(checks[0]
         .fix
         .contains("anthropic, custom, openai, openrouter"));
+}
+
+/// The Settings provider dot: connected when the provider's key is readable
+/// from `.env` (`config.py::_refresh_ai`).
+#[test]
+fn provider_connected_reads_the_env_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let env = dir.path().join(".env");
+    std::fs::write(&env, "OPENROUTER_API_KEY=test-key\n").unwrap();
+    let cfg = AppConfig::default(); // openrouter
+    assert!(delta_services::setup::provider_connected(&cfg, &env));
+    // Missing file or empty key: not connected (never an error).
+    let empty = dir.path().join("missing.env");
+    assert!(!delta_services::setup::provider_connected(&cfg, &empty));
+    std::fs::write(&empty, "OPENROUTER_API_KEY=\n").unwrap();
+    assert!(!delta_services::setup::provider_connected(&cfg, &empty));
+    // Unknown provider: never connected.
+    let unknown = AppConfig {
+        llm_provider: "litellm".to_string(),
+        ..AppConfig::default()
+    };
+    assert!(!delta_services::setup::provider_connected(&unknown, &env));
+    std::fs::write(&env, "MY_LOCAL_KEY=custom-test-key\n").unwrap();
+    let custom = AppConfig {
+        llm_provider: "custom".to_string(),
+        llm_api_key_env: "MY_LOCAL_KEY".to_string(),
+        ..AppConfig::default()
+    };
+    assert!(delta_services::setup::provider_connected(&custom, &env));
+}
+
+#[test]
+fn provider_and_model_choices_persist_without_leaking_the_key_to_toml() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config.toml");
+    let env = dir.path().join(".env");
+    std::fs::write(
+        &config,
+        "# keep this comment\n[llm]\nprovider = \"openrouter\"\n",
+    )
+    .unwrap();
+
+    save_provider_choice(&config, &env, "openai", "secret-test-key", "", "").unwrap();
+    save_model_choice(&config, "gpt-test").unwrap();
+
+    let toml = std::fs::read_to_string(&config).unwrap();
+    assert!(toml.contains("# keep this comment"));
+    assert!(!toml.contains("secret-test-key"));
+    let raw = load_toml(&config).unwrap();
+    assert_eq!(raw["llm"]["provider"], "openai");
+    assert_eq!(raw["llm"]["model"], "gpt-test");
+    assert_eq!(
+        std::fs::read_to_string(&env).unwrap(),
+        "OPENAI_API_KEY=secret-test-key\n"
+    );
+}
+
+#[test]
+fn invalid_provider_choice_does_not_write_config_or_env() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config.toml");
+    let env = dir.path().join(".env");
+    std::fs::write(&config, "[llm]\nprovider = \"openrouter\"\n").unwrap();
+    assert!(save_provider_choice(&config, &env, "unknown", "key", "", "").is_err());
+    assert!(save_provider_choice(&config, &env, "openai", "line\nINJECTED=1", "", "").is_err());
+    assert!(!env.exists());
+    assert_eq!(load_toml(&config).unwrap()["llm"]["provider"], "openrouter");
 }

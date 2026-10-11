@@ -5,25 +5,37 @@
 //! 200x50.
 
 mod ask;
-mod decisions;
+pub mod decisions;
 mod home;
+pub mod live;
 mod research;
 mod settings;
 mod status_bar;
 mod theses;
 mod watchlist;
 
-pub use ask::{draw_ask, draw_ask_narrow, draw_ask_wide};
-pub use decisions::{draw_decisions, draw_decisions_narrow, draw_decisions_wide};
+pub use ask::{draw_ask, draw_ask_narrow, draw_ask_wide, paint_ask_state, AskState};
+pub use decisions::{
+    draw_decisions, draw_decisions_live, draw_decisions_narrow, draw_decisions_wide, DecisionsData,
+};
 pub use home::{draw_home, draw_home_narrow, draw_home_wide, feed_seed, HomeFeed, HomeState};
-pub use research::{draw_research, draw_research_narrow, draw_research_wide};
-pub use settings::{draw_settings, draw_settings_narrow, draw_settings_wide};
-pub use status_bar::NarrowTab;
-pub use theses::{draw_theses, draw_theses_narrow, draw_theses_wide};
+pub use research::{
+    draw_research, draw_research_live, draw_research_narrow, draw_research_wide, ResearchData,
+    ResearchState, ResearchView,
+};
+pub use settings::{
+    comma, draw_settings, draw_settings_narrow, draw_settings_wide, exporter_world, human_size,
+    stamp, SettingsData, SettingsDiagnostics, SettingsFocus, SettingsMarket, SettingsSource,
+    SettingsState, SettingsView,
+};
+pub use status_bar::{Footer, NarrowTab};
+pub use theses::{
+    draw_theses, draw_theses_live, draw_theses_narrow, draw_theses_wide, ThesesPane, ThesesState,
+};
 pub use watchlist::{
     chart_window, draw_glossary_overlay, draw_watchlist, draw_watchlist_narrow,
     draw_watchlist_wide, friendly_date, friendly_date_range, grouped, range_label, range_window,
-    MetricsData, WatchlistState, GLOSSARY_EQUITY, RANGES,
+    MetricsData, WatchEntry, WatchlistState, GLOSSARY_EQUITY, RANGES,
 };
 
 /// A pane rectangle in golden-Screen coordinates: `(x0, y0, x1, y1)` with

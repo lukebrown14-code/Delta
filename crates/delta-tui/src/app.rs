@@ -4,8 +4,10 @@
 //! modals (Go, help, palette) and the theme switch.
 
 use std::io::Stdout;
+use std::path::Path;
 use std::time::{Duration, Instant};
 
+use chrono::NaiveDate;
 use crossterm::event::{Event, EventStream, KeyCode, KeyEvent};
 use futures::StreamExt;
 use ratatui::backend::CrosstermBackend;
@@ -15,13 +17,17 @@ use tokio::sync::mpsc;
 use delta_tui::components::CommandPalette;
 use delta_tui::desk::Desk;
 use delta_tui::dialog::{GoPicker, HelpDialog};
+use delta_tui::form::Form;
 use delta_tui::screen::{color, Screen, Style};
+use delta_tui::screens::decisions::{draw_decisions_live, DecisionsData};
 use delta_tui::screens::{
     draw_ask, draw_ask_narrow, draw_ask_wide, draw_decisions, draw_decisions_narrow,
     draw_decisions_wide, draw_glossary_overlay, draw_home, draw_home_narrow, draw_home_wide,
-    draw_research, draw_research_narrow, draw_research_wide, draw_settings, draw_settings_narrow,
-    draw_settings_wide, draw_theses, draw_theses_narrow, draw_theses_wide, draw_watchlist,
-    draw_watchlist_narrow, draw_watchlist_wide,
+    draw_research, draw_research_live, draw_research_narrow, draw_research_wide, draw_settings,
+    draw_settings_narrow, draw_settings_wide, draw_theses_live, draw_watchlist,
+    draw_watchlist_narrow, draw_watchlist_wide, paint_ask_state, AskState, ResearchData,
+    ResearchState, ResearchView, SettingsFocus, SettingsState, SettingsView, ThesesPane,
+    ThesesState,
 };
 use delta_tui::theme::Palette;
 use delta_tui::{is_quit_key, workers, Action, Breakpoint, Component};
@@ -34,6 +40,52 @@ enum Overlay {
     Help(HelpDialog),
     /// ctrl+k / ctrl+p: the command palette (`app.py::DeltaCommands`).
     Palette(CommandPalette),
+    AddTarget(String),
+    /// A Settings form modal (market add/edit, source setup).
+    SettingsForm(FormModal),
+    DecisionForm(DecisionModal),
+    DecisionFilter(String),
+    /// Provider choices, with key entry after a choice.
+    ProviderPicker(usize),
+    /// Names from the target service, shown on request from Settings.
+    TargetPicker(Vec<String>, usize),
+}
+
+const PROVIDER_CHOICES: [&str; 4] = ["openrouter", "openai", "anthropic", "custom"];
+
+/// One Settings form and what submitting it does.
+struct FormModal {
+    form: Form,
+    mode: FormMode,
+}
+
+struct DecisionModal {
+    form: Form,
+    mode: DecisionMode,
+}
+
+enum DecisionMode {
+    New,
+    Edit(String),
+    Review(String),
+}
+
+/// The services call a submitted Settings form performs.
+#[derive(Clone, PartialEq)]
+enum FormMode {
+    /// `a`: `services.save_market` on a new id.
+    AddMarket,
+    /// `e`/enter: `services.save_market` on an existing id.
+    EditMarket(String),
+    /// `s`/enter: `services.configure_data_provider` for one source.
+    Source(String),
+    Provider(String),
+    Model,
+    AddTarget,
+    EditTarget(String),
+    RemoveTarget,
+    AddThesis,
+    EditThesis(String),
 }
 
 /// The seven panes: 1-6 plus `c`.
@@ -104,9 +156,155 @@ pub(crate) struct App {
     palette: Palette,
     /// The floating shell modal, if any.
     overlay: Option<Overlay>,
+    /// The Settings screen's interaction state.
+    settings: SettingsState,
+    theses: ThesesState,
+    research: Option<ResearchData>,
+    research_state: ResearchState,
+    ask: AskState,
+    ask_worker: Option<tokio::task::JoinHandle<()>>,
+    decisions: Option<DecisionsData>,
+    confirm_decision_delete: bool,
+    /// The terminal size the last frame painted (breakpoint decisions).
+    viewport: (u16, u16),
 }
 
 impl App {
+    /// Open Research on a specific instrument (used by cross-screen navigation).
+    fn open_research_for_instrument(&mut self, instrument_id: &str) {
+        self.tab = Tab::Research;
+        if let Some(data) = load_research_for(&self.desk, instrument_id) {
+            self.research = Some(data);
+            self.research_state = ResearchState::default();
+        }
+    }
+
+    fn handle_research_key(&mut self, key: KeyEvent) -> Option<Action> {
+        let state = &mut self.research_state;
+        if state.search_active {
+            match key.code {
+                KeyCode::Esc | KeyCode::Enter => state.search_active = false,
+                KeyCode::Backspace => {
+                    state.search.pop();
+                }
+                KeyCode::Char(c) => {
+                    state.search.push(c);
+                    state.selected = 0;
+                }
+                _ => return None,
+            }
+            return Some(Action::Noop);
+        }
+        match key.code {
+            KeyCode::Char('n') => Some(Action::GenerateReport),
+            KeyCode::Char('u') => self
+                .research
+                .as_ref()
+                .map(|data| Action::GatherCompany(data.company.clone())),
+            KeyCode::Char('e') => {
+                state.view = ResearchView::Evidence;
+                Some(Action::Noop)
+            }
+            KeyCode::Char('r') => {
+                state.view = ResearchView::Report;
+                Some(Action::Noop)
+            }
+            KeyCode::Char('t') => {
+                state.view = ResearchView::Company;
+                Some(Action::Noop)
+            }
+            KeyCode::Char('k') => {
+                state.cycle_kind();
+                state.view = ResearchView::Evidence;
+                Some(Action::Noop)
+            }
+            KeyCode::Char('l') => {
+                state.load_more();
+                Some(Action::Noop)
+            }
+            KeyCode::Char('o') => {
+                let data = self.research.as_ref()?;
+                let id = state
+                    .selected_id
+                    .clone()
+                    .or_else(|| state.selected_evidence_id(data))?;
+                let url = data
+                    .evidence
+                    .iter()
+                    .find(|item| item.id == id)?
+                    .url
+                    .as_ref()?;
+                if url.starts_with("https://") || url.starts_with("http://") {
+                    Some(Action::OpenSource(url.clone()))
+                } else {
+                    None
+                }
+            }
+            KeyCode::Char(' ') => {
+                if let Some(data) = &self.research {
+                    state.toggle_selected_price_run(data);
+                }
+                Some(Action::Noop)
+            }
+            KeyCode::Char('/') => {
+                state.search_active = true;
+                state.view = ResearchView::Evidence;
+                Some(Action::Noop)
+            }
+            KeyCode::Esc => {
+                if state.detail_open {
+                    state.detail_open = false;
+                } else {
+                    state.view = ResearchView::Company;
+                }
+                state.zoom = false;
+                Some(Action::Noop)
+            }
+            KeyCode::Enter if state.view == ResearchView::Report => {
+                if let Some(data) = &self.research {
+                    state.open_next_citation(data);
+                }
+                Some(Action::Noop)
+            }
+            KeyCode::Enter if state.view == ResearchView::Evidence => {
+                if let Some(data) = &self.research {
+                    state.selected_id = state.selected_evidence_id(data);
+                    state.detail_open = state.selected_id.is_some();
+                }
+                Some(Action::Noop)
+            }
+            KeyCode::Up if state.view == ResearchView::Report => {
+                state.report_scroll = state.report_scroll.saturating_sub(1);
+                Some(Action::Noop)
+            }
+            KeyCode::Down if state.view == ResearchView::Report => {
+                state.report_scroll += 1;
+                Some(Action::Noop)
+            }
+            KeyCode::Up => {
+                state.selected_id = None;
+                state.selected = state.selected.saturating_sub(1);
+                Some(Action::Noop)
+            }
+            KeyCode::Down => {
+                state.selected_id = None;
+                state.selected += 1;
+                Some(Action::Noop)
+            }
+            KeyCode::Char('z') => {
+                state.zoom = !state.zoom;
+                Some(Action::Noop)
+            }
+            KeyCode::Char('v') if state.selected_id.is_some() => {
+                if let (Some(data), Some(id)) = (&self.research, state.selected_id.clone()) {
+                    state.reveal_claim(data, &id, self.viewport.0 as usize);
+                }
+                Some(Action::Noop)
+            }
+            _ => None,
+        }
+    }
+
     fn paint(&mut self, screen: &mut Screen) {
         let w = screen.w;
         // The shell breakpoints (`shell.py::NARROW_WIDTH` plus the wide
@@ -135,31 +333,55 @@ impl App {
                 draw_watchlist(screen, &self.desk.watch_state()),
                 draw_watchlist_narrow(screen, &self.desk.watch_state())
             ),
-            Tab::Research => route!(
-                draw_research_wide(screen),
-                draw_research(screen),
-                draw_research_narrow(screen)
-            ),
-            Tab::Theses => route!(
-                draw_theses_wide(screen),
-                draw_theses(screen),
-                draw_theses_narrow(screen)
-            ),
-            Tab::Ask => route!(
-                draw_ask_wide(screen),
-                draw_ask(screen),
-                draw_ask_narrow(screen)
-            ),
-            Tab::Decisions => route!(
-                draw_decisions_wide(screen),
-                draw_decisions(screen),
-                draw_decisions_narrow(screen)
-            ),
-            Tab::Settings => route!(
-                draw_settings_wide(screen),
-                draw_settings(screen),
-                draw_settings_narrow(screen)
-            ),
+            Tab::Research => {
+                if let Some(data) = &self.research {
+                    draw_research_live(screen, data, &self.research_state);
+                } else {
+                    route!(
+                        draw_research_wide(screen),
+                        draw_research(screen),
+                        draw_research_narrow(screen)
+                    );
+                }
+            }
+            Tab::Theses => draw_theses_live(screen, &self.theses),
+            Tab::Ask => {
+                route!(
+                    draw_ask_wide(screen),
+                    draw_ask(screen),
+                    draw_ask_narrow(screen)
+                );
+            }
+            Tab::Decisions => {
+                if let Some(data) = self
+                    .decisions
+                    .as_ref()
+                    .filter(|data| !data.decisions.is_empty())
+                {
+                    draw_decisions_live(screen, data);
+                } else {
+                    route!(
+                        draw_decisions_wide(screen),
+                        draw_decisions(screen),
+                        draw_decisions_narrow(screen)
+                    );
+                }
+            }
+            Tab::Settings => {
+                let view = SettingsView {
+                    data: &self.desk.settings,
+                    state: &self.settings,
+                    footer: &self.desk.settings_footer,
+                };
+                route!(
+                    draw_settings_wide(screen, &view),
+                    draw_settings(screen, &view),
+                    draw_settings_narrow(screen, &view)
+                )
+            }
+        }
+        if self.tab == Tab::Ask {
+            paint_ask_state(screen, &self.ask);
         }
         if self.glossary && self.tab == Tab::Watchlist {
             draw_glossary_overlay(screen, &self.desk.watch_state());
@@ -168,6 +390,113 @@ impl App {
             Some(Overlay::Go) => GoPicker::draw_screen(screen),
             Some(Overlay::Help(help)) => help.draw_screen(screen),
             Some(Overlay::Palette(palette)) => palette.draw_screen(screen),
+            Some(Overlay::AddTarget(query)) => {
+                let left = screen.w.saturating_sub(62) / 2;
+                let top = screen.h.saturating_sub(12) / 2;
+                screen.pane(
+                    left,
+                    top,
+                    left + 61,
+                    top + 11,
+                    true,
+                    &[("add to watchlist", Style::fg(color::BLUE).bold())],
+                    &[],
+                );
+                screen.text(left + 3, top + 2, "Instrument", Style::fg(color::MUTED));
+                screen.text(
+                    left + 3,
+                    top + 3,
+                    &format!("> {query}_"),
+                    Style::fg(color::FG),
+                );
+                screen.text(
+                    left + 3,
+                    top + 6,
+                    "Enter US:AAPL or ASX:BHP",
+                    Style::fg(color::MUTED),
+                );
+            }
+            Some(Overlay::SettingsForm(modal)) => {
+                if matches!(modal.mode, FormMode::AddThesis | FormMode::EditThesis(_)) {
+                    draw_thesis_modal(screen, &modal.form);
+                } else {
+                    let width = delta_tui::dialog::MODAL_WIDTH.min(screen.w.saturating_sub(4));
+                    let height = (modal.form.height(width) + 5).min(screen.h.saturating_sub(2));
+                    let (x, y, w, _h) = delta_tui::dialog::dialog_frame(screen, width, height);
+                    screen.text(x, y, &modal.form.title, Style::fg(color::BLUE).bold());
+                    modal.form.draw_screen(screen, x, y + 2, w);
+                }
+            }
+            Some(Overlay::DecisionForm(modal)) => {
+                if matches!(modal.mode, DecisionMode::Review(_)) {
+                    delta_tui::screens::decisions::draw_decision_review_form(
+                        screen,
+                        modal.form.fields[0].value(),
+                        modal.form.fields[1].value(),
+                    );
+                } else {
+                    let width = delta_tui::dialog::MODAL_WIDTH.min(screen.w.saturating_sub(4));
+                    let height = (modal.form.height(width) + 5).min(screen.h.saturating_sub(2));
+                    let (x, y, w, _) = delta_tui::dialog::dialog_frame(screen, width, height);
+                    screen.text(x, y, &modal.form.title, Style::fg(color::BLUE).bold());
+                    modal.form.draw_screen(screen, x, y + 2, w);
+                }
+            }
+            Some(Overlay::DecisionFilter(query)) => {
+                let (x, y, w, _) = delta_tui::dialog::dialog_frame(screen, 54, 7);
+                screen.text(x, y, "filter decisions", Style::fg(color::BLUE).bold());
+                screen.text(x, y + 2, &format!("> {query}_"), Style::fg(color::FG));
+                screen.text(
+                    x,
+                    y + 4,
+                    "enter apply · esc cancel",
+                    Style::fg(color::MUTED),
+                );
+                let _ = w;
+            }
+            Some(Overlay::ProviderPicker(selected)) => {
+                let (x, y, w, _) = delta_tui::dialog::dialog_frame(screen, 58, 11);
+                screen.text(x, y, "select a provider", Style::fg(color::BLUE).bold());
+                screen.text(x, y + 2, "Provider", Style::fg(color::MUTED).bold());
+                for (index, name) in PROVIDER_CHOICES.iter().enumerate() {
+                    let style = if index == *selected {
+                        Style::fg(color::WHITE).bg(color::BLUE_BG).bold()
+                    } else {
+                        Style::fg(color::FG)
+                    };
+                    screen.fill(x, y + 3 + index, x + w, y + 4 + index, style);
+                    screen.text(x + 1, y + 3 + index, name, style);
+                }
+                screen.text(
+                    x,
+                    y + 8,
+                    "enter connect · esc cancel",
+                    Style::fg(color::MUTED),
+                );
+            }
+            Some(Overlay::TargetPicker(targets, selected)) => {
+                let height = (targets.len() + 7).min(screen.h.saturating_sub(2));
+                let (x, y, w, _) = delta_tui::dialog::dialog_frame(screen, 58, height);
+                screen.text(x, y, "targets", Style::fg(color::BLUE).bold());
+                if targets.is_empty() {
+                    screen.text(x, y + 2, "no targets", Style::fg(color::MUTED));
+                }
+                for (index, name) in targets.iter().take(height.saturating_sub(6)).enumerate() {
+                    let style = if index == *selected {
+                        Style::fg(color::WHITE).bg(color::BLUE_BG).bold()
+                    } else {
+                        Style::fg(color::FG)
+                    };
+                    screen.fill(x, y + 2 + index, x + w, y + 3 + index, style);
+                    screen.text(x + 1, y + 2 + index, name, style);
+                }
+                screen.text(
+                    x,
+                    y + height - 3,
+                    "enter edit · n add · x remove · esc close",
+                    Style::fg(color::MUTED),
+                );
+            }
             None => {}
         }
         self.paint_status_overlay(screen);
@@ -197,6 +526,313 @@ impl App {
 }
 
 impl App {
+    fn decision_db(&self) -> Result<delta_core::db::Db, String> {
+        let delta_tui::desk::Source::Real(path) = &self.desk.source else {
+            return Err("decision journal needs a local database".to_string());
+        };
+        delta_core::db::Db::open(path).map_err(|error| error.to_string())
+    }
+
+    fn refresh_decisions(&mut self) {
+        let Ok(db) = self.decision_db() else {
+            self.decisions = None;
+            return;
+        };
+        let filter = self
+            .decisions
+            .as_ref()
+            .map(|data| data.filter.clone())
+            .unwrap_or_default();
+        let selected = self.decisions.as_ref().map_or(0, |data| data.selected);
+        let Ok(mut decisions) = delta_services::list_decisions(&db, None, true) else {
+            self.status = "could not load decisions".to_string();
+            return;
+        };
+        if !filter.is_empty() {
+            let needle = filter.to_lowercase();
+            decisions.retain(|item| {
+                item.instrument_id.to_lowercase().contains(&needle)
+                    || item.rationale.to_lowercase().contains(&needle)
+            });
+        }
+        let selected = selected.min(decisions.len().saturating_sub(1));
+        let (reviews, current_price) = if let Some(decision) = decisions.get(selected) {
+            let reviews = delta_services::review_history(&db, &decision.id).unwrap_or_default();
+            let price = delta_services::recent_closes(&db, &decision.instrument_id, 1)
+                .ok()
+                .and_then(|closes| closes.last().copied());
+            (reviews, price)
+        } else {
+            (Vec::new(), None)
+        };
+        self.decisions = Some(DecisionsData {
+            decisions,
+            selected,
+            reviews,
+            current_price,
+            filter,
+            spend: delta_services::analytics::total_spend(&db, None),
+            confirm_delete: self.confirm_decision_delete,
+        });
+    }
+
+    fn selected_decision(&self) -> Option<&delta_services::Decision> {
+        self.decisions.as_ref()?.selected()
+    }
+
+    fn handle_decisions_key(&mut self, key: KeyEvent) -> Option<Action> {
+        match key.code {
+            KeyCode::Up | KeyCode::Down => {
+                if let Some(data) = &mut self.decisions {
+                    if key.code == KeyCode::Up {
+                        data.selected = data.selected.saturating_sub(1);
+                    } else {
+                        data.selected =
+                            (data.selected + 1).min(data.decisions.len().saturating_sub(1));
+                    }
+                }
+                self.refresh_decisions();
+            }
+            KeyCode::Char('n') => {
+                self.overlay = Some(Overlay::DecisionForm(decision_form(None)));
+            }
+            KeyCode::Char('e') => {
+                if let Some(decision) = self.selected_decision() {
+                    self.overlay = Some(Overlay::DecisionForm(decision_form(Some(decision))));
+                }
+            }
+            KeyCode::Char('r') => {
+                if let Some(decision) = self.selected_decision() {
+                    self.overlay = Some(Overlay::DecisionForm(review_form(&decision.id)));
+                }
+            }
+            KeyCode::Char('/') => {
+                let query = self
+                    .decisions
+                    .as_ref()
+                    .map_or(String::new(), |d| d.filter.clone());
+                self.overlay = Some(Overlay::DecisionFilter(query));
+            }
+            KeyCode::Char('d') => {
+                if self.selected_decision().is_some() {
+                    self.confirm_decision_delete = true;
+                    if let Some(data) = &mut self.decisions {
+                        data.confirm_delete = true;
+                    }
+                    self.status = "delete decision? press y to confirm".to_string();
+                }
+            }
+            KeyCode::Char('y') if self.confirm_decision_delete => {
+                self.confirm_decision_delete = false;
+                if let Some(id) = self.selected_decision().map(|d| d.id.clone()) {
+                    let result = self.decision_db().and_then(|db| {
+                        delta_services::delete_decision(&db, &id).map_err(|error| error.to_string())
+                    });
+                    self.status = match result {
+                        Ok(()) => "decision deleted".to_string(),
+                        Err(error) => error,
+                    };
+                    self.refresh_decisions();
+                }
+            }
+            KeyCode::Char('o') => {
+                if let Some(instrument_id) = self
+                    .selected_decision()
+                    .map(|decision| decision.instrument_id.clone())
+                {
+                    self.open_research_for_instrument(&instrument_id);
+                }
+            }
+            KeyCode::Esc => {
+                self.confirm_decision_delete = false;
+                if let Some(data) = &mut self.decisions {
+                    data.confirm_delete = false;
+                }
+                self.status.clear();
+            }
+            _ => return None,
+        }
+        Some(Action::Noop)
+    }
+
+    fn submit_decision_form(&mut self, modal: &mut DecisionModal) -> bool {
+        let values = match modal.form.submit() {
+            Ok(values) => values
+                .into_iter()
+                .map(|(_, value)| value)
+                .collect::<Vec<_>>(),
+            Err(errors) => {
+                self.status = errors[0].1.clone();
+                return false;
+            }
+        };
+        let db = match self.decision_db() {
+            Ok(db) => db,
+            Err(error) => {
+                self.status = error;
+                return false;
+            }
+        };
+        let result = match &modal.mode {
+            DecisionMode::New | DecisionMode::Edit(_) => {
+                let date = match NaiveDate::parse_from_str(&values[4], "%Y-%m-%d") {
+                    Ok(date) => date,
+                    Err(_) => {
+                        self.status = "review date must be YYYY-MM-DD".to_string();
+                        return false;
+                    }
+                };
+                let thesis = (!values[6].trim().is_empty()).then_some(values[6].as_str());
+                match &modal.mode {
+                    DecisionMode::New => delta_services::create_decision(
+                        &db, &values[0], &values[1], &values[2], &values[3], date, &values[5],
+                        thesis, None,
+                    )
+                    .map(|_| ()),
+                    DecisionMode::Edit(id) => delta_services::update_decision(
+                        &db, id, &values[0], &values[1], &values[2], &values[3], date, &values[5],
+                        thesis,
+                    )
+                    .map(|_| ()),
+                    DecisionMode::Review(_) => unreachable!(),
+                }
+            }
+            DecisionMode::Review(id) => {
+                let status = values[1].trim().to_lowercase();
+                delta_services::append_review(&db, id, &values[0], Some(&status), None).map(|_| ())
+            }
+        };
+        match result {
+            Ok(()) => {
+                self.status = "decision saved".to_string();
+                self.refresh_decisions();
+                true
+            }
+            Err(error) => {
+                self.status = error.to_string();
+                false
+            }
+        }
+    }
+
+    /// Persist a watched instrument using the config service, then reload the
+    /// desk from the resulting config and database.
+    fn add_instrument_at(&mut self, config: &Path, input: &str) -> Result<(), String> {
+        let input = input.trim().to_uppercase();
+        let (market, symbol) = input.split_once(':').unwrap_or(("US", input.as_str()));
+        if symbol.is_empty()
+            || !symbol
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || ".-^".contains(ch))
+        {
+            return Err("enter a market and instrument, for example US:AAPL".into());
+        }
+        delta_services::config_ops::add_target(
+            config,
+            symbol,
+            "company",
+            &market.to_lowercase(),
+            &[symbol.to_string()],
+            &[],
+            "",
+            None,
+            "equity",
+        )
+        .map_err(|error| error.to_string())?;
+        self.desk.reload_targets_from(config)?;
+        self.desk.selected = self
+            .desk
+            .instruments
+            .iter()
+            .position(|row| row.instrument.symbol == symbol)
+            .unwrap_or(0);
+        self.status = format!("{market}:{symbol} added");
+        Ok(())
+    }
+
+    fn remove_instrument_at(&mut self, config: &Path) -> Result<(), String> {
+        let current = self
+            .desk
+            .current()
+            .ok_or_else(|| "nothing selected".to_string())?;
+        let name = current
+            .instrument
+            .watchlists
+            .first()
+            .ok_or_else(|| "target unavailable".to_string())?
+            .clone();
+        delta_services::config_ops::remove_target(config, &name)
+            .map_err(|error| error.to_string())?;
+        self.desk.reload_targets_from(config)?;
+        self.status = format!("{name} removed");
+        Ok(())
+    }
+
+    fn handle_ask_key(&mut self, key: KeyEvent) -> Option<Action> {
+        if self.ask.editing {
+            match key.code {
+                KeyCode::Esc => self.ask.editing = false,
+                KeyCode::Enter => {
+                    if let Some((generation, history, targets)) = self.ask.submit() {
+                        return Some(Action::AskQuestion {
+                            generation,
+                            history,
+                            targets,
+                        });
+                    }
+                }
+                KeyCode::Backspace => {
+                    self.ask.input.pop();
+                }
+                KeyCode::Char(c) => self.ask.input.push(c),
+                _ => {}
+            }
+            return Some(Action::Noop);
+        }
+        if self.ask.clear_pending {
+            match key.code {
+                KeyCode::Char('y') => {
+                    if let Some(worker) = self.ask_worker.take() {
+                        worker.abort();
+                    }
+                    self.ask.clear();
+                }
+                KeyCode::Esc => self.ask.clear_pending = false,
+                _ => {}
+            }
+            return Some(Action::Noop);
+        }
+        match key.code {
+            KeyCode::Esc if self.ask.busy => {
+                if let Some(worker) = self.ask_worker.take() {
+                    worker.abort();
+                }
+                self.ask.cancel_pending();
+            }
+            KeyCode::Char('i') | KeyCode::Enter => {
+                self.ask.editing = true;
+                self.ask.targets_focus = false;
+            }
+            KeyCode::Char('t') => self.ask.targets_focus = true,
+            KeyCode::Esc if self.ask.targets_focus => self.ask.targets_focus = false,
+            KeyCode::Char(' ') => self.ask.toggle_target(),
+            KeyCode::Char('a') => self.ask.toggle_all(),
+            KeyCode::Up if self.ask.targets_focus => {
+                self.ask.target_selected = self.ask.target_selected.saturating_sub(1)
+            }
+            KeyCode::Down if self.ask.targets_focus => {
+                self.ask.target_selected =
+                    (self.ask.target_selected + 1).min(self.ask.targets.len().saturating_sub(1))
+            }
+            KeyCode::Left => self.ask.walk_citation(-1),
+            KeyCode::Right => self.ask.walk_citation(1),
+            KeyCode::Char('z') => self.ask.zoomed = !self.ask.zoomed,
+            KeyCode::Char('x') if !self.ask.history.is_empty() => self.ask.clear_pending = true,
+            _ => return None,
+        }
+        Some(Action::Noop)
+    }
+
     /// The shell keys, in `DeltaApp.BINDINGS` order (plus the esc close and
     /// the palette keys Textual/the plan install). Per-screen keys (the
     /// watchlist's `r`/`R` range, `enter` inspect, ...) belong to their
@@ -212,10 +848,24 @@ impl App {
             }
             KeyCode::Char('1') => self.tab = Tab::Home,
             KeyCode::Char('2') => self.tab = Tab::Watchlist,
-            KeyCode::Char('3') => self.tab = Tab::Research,
-            KeyCode::Char('4') => self.tab = Tab::Theses,
+            KeyCode::Char('3') => {
+                if let Some(instrument_id) =
+                    self.desk.current().map(|row| row.instrument.id.clone())
+                {
+                    self.open_research_for_instrument(&instrument_id);
+                } else {
+                    self.tab = Tab::Research;
+                }
+            }
+            KeyCode::Char('4') => {
+                self.tab = Tab::Theses;
+                self.reload_theses();
+            }
             KeyCode::Char('5') => self.tab = Tab::Ask,
-            KeyCode::Char('6') => self.tab = Tab::Decisions,
+            KeyCode::Char('6') => {
+                self.tab = Tab::Decisions;
+                self.refresh_decisions();
+            }
             KeyCode::Char('c') => self.tab = Tab::Settings,
             KeyCode::Char('h') => self.tab = Tab::Home,
             KeyCode::Char('m') => return Some(Action::ShowModelPicker),
@@ -262,16 +912,991 @@ impl App {
         }
         None
     }
+
+    fn thesis_db(&self) -> Option<delta_core::db::Db> {
+        let delta_tui::desk::Source::Real(path) = &self.desk.source else {
+            return None;
+        };
+        delta_core::db::Db::open(path).ok()
+    }
+
+    fn reload_theses(&mut self) {
+        if let Some(db) = self.thesis_db() {
+            if let Err(err) = self.theses.load(&db) {
+                self.status = err.to_string();
+            }
+        }
+    }
+
+    fn handle_theses_key(&mut self, key: KeyEvent) -> Option<Action> {
+        use delta_services::{remove_evidence, set_accepted};
+        if self.theses.filtering {
+            match key.code {
+                KeyCode::Esc | KeyCode::Enter => self.theses.filtering = false,
+                KeyCode::Backspace => {
+                    self.theses.filter.pop();
+                }
+                KeyCode::Char(ch) => self.theses.filter.push(ch),
+                _ => {}
+            }
+            return Some(Action::Noop);
+        }
+        match key.code {
+            KeyCode::Esc if self.theses.view != ThesesPane::Claims => {
+                self.theses.view = ThesesPane::Claims;
+                Some(Action::Noop)
+            }
+            KeyCode::Char('/') => {
+                self.theses.filtering = true;
+                self.theses.view = ThesesPane::Claims;
+                Some(Action::Noop)
+            }
+            KeyCode::Char('t') | KeyCode::Enter => {
+                self.theses.view = ThesesPane::Detail;
+                Some(Action::Noop)
+            }
+            KeyCode::Char('e') => {
+                self.theses.view = ThesesPane::Evidence;
+                Some(Action::Noop)
+            }
+            KeyCode::Char('n') => {
+                self.overlay = Some(Overlay::SettingsForm(thesis_form(None)));
+                Some(Action::Noop)
+            }
+            KeyCode::Char('d') => {
+                let row = self.theses.fleet.get(self.theses.selected)?;
+                self.overlay = Some(Overlay::SettingsForm(thesis_form(Some(&row.thesis))));
+                Some(Action::Noop)
+            }
+            KeyCode::Up => {
+                if self.theses.view == ThesesPane::Evidence {
+                    self.theses.evidence_selected = self.theses.evidence_selected.saturating_sub(1);
+                    return Some(Action::Noop);
+                }
+                self.theses.selected = self.theses.selected.saturating_sub(1);
+                if let Some(db) = self.thesis_db() {
+                    let _ = self.theses.select(&db);
+                }
+                Some(Action::Noop)
+            }
+            KeyCode::Down => {
+                if self.theses.view == ThesesPane::Evidence {
+                    self.theses.evidence_selected = (self.theses.evidence_selected + 1)
+                        .min(self.theses.links.len().saturating_sub(1));
+                    return Some(Action::Noop);
+                }
+                self.theses.selected =
+                    (self.theses.selected + 1).min(self.theses.fleet.len().saturating_sub(1));
+                if let Some(db) = self.thesis_db() {
+                    let _ = self.theses.select(&db);
+                }
+                Some(Action::Noop)
+            }
+            KeyCode::Char('f') => self
+                .theses
+                .selected_id()
+                .map(|id| Action::ThesisFind(id.to_string()))
+                .or_else(|| Some(Action::Status("select a thesis first".to_string()))),
+            KeyCode::Char('s') => self
+                .theses
+                .selected_id()
+                .map(|id| Action::ThesisSummarize(id.to_string()))
+                .or_else(|| Some(Action::Status("select a thesis first".to_string()))),
+            KeyCode::Char('a' | 'x' | 'u') => {
+                if self.viewport_width() < 100 && self.theses.view != ThesesPane::Evidence {
+                    return Some(Action::Status(
+                        "press e to review evidence first".to_string(),
+                    ));
+                }
+                let Some(link) = self.theses.selected_link().cloned() else {
+                    return Some(Action::Status("no evidence to review".to_string()));
+                };
+                let Some(db) = self.thesis_db() else {
+                    return Some(Action::Status("offline: no database".to_string()));
+                };
+                let result = match key.code {
+                    KeyCode::Char('a') if !link.accepted => {
+                        set_accepted(&db, &link.thesis_id, &link.evidence_id, true).map(|_| ())
+                    }
+                    KeyCode::Char('u') if link.accepted => {
+                        set_accepted(&db, &link.thesis_id, &link.evidence_id, false).map(|_| ())
+                    }
+                    KeyCode::Char('x') if !link.accepted => {
+                        remove_evidence(&db, &link.thesis_id, &link.evidence_id)
+                    }
+                    _ => {
+                        return Some(Action::Status(
+                            "review that item's current state first".to_string(),
+                        ))
+                    }
+                };
+                match result {
+                    Ok(()) => {
+                        self.reload_theses();
+                        Some(Action::Noop)
+                    }
+                    Err(err) => Some(Action::Status(err.to_string())),
+                }
+            }
+            _ => None,
+        }
+    }
+}
+
+impl App {
+    /// The Settings screen's keys (`config.py::BINDINGS`): `d` diagnostics,
+    /// `r` refresh, `l` plugins, `s` configure source, `a`/`e`/`x`
+    /// add/edit/remove market, `esc` back; plus the table keys (↑↓/tab/
+    /// enter) and `t` to toggle a plugin.
+    fn handle_settings_key(&mut self, key: KeyEvent) -> Option<Action> {
+        let data = &self.desk.settings;
+        let counts = (data.plugins.len(), data.sources.len(), data.markets.len());
+        match key.code {
+            KeyCode::Esc => {
+                self.settings.close_diagnostics(self.viewport_width());
+                Some(Action::Noop)
+            }
+            KeyCode::Up => {
+                self.settings
+                    .move_selection(-1, counts.0, counts.1, counts.2);
+                Some(Action::Noop)
+            }
+            KeyCode::Down => {
+                self.settings
+                    .move_selection(1, counts.0, counts.1, counts.2);
+                Some(Action::Noop)
+            }
+            KeyCode::Tab => {
+                self.settings.cycle_focus(false);
+                Some(Action::Noop)
+            }
+            KeyCode::BackTab => {
+                self.settings.cycle_focus(true);
+                Some(Action::Noop)
+            }
+            KeyCode::Enter => Some(self.settings_enter()),
+            KeyCode::Char('d') => {
+                self.settings.toggle_diagnostics(self.viewport_width());
+                Some(Action::Noop)
+            }
+            KeyCode::Char('r') => {
+                self.desk.reload_settings();
+                let refreshed = self
+                    .desk
+                    .settings
+                    .diagnostics
+                    .as_ref()
+                    .map(|d| d.refreshed.clone())
+                    .unwrap_or_default();
+                self.status = format!("diagnostics refreshed {refreshed}");
+                Some(Action::Noop)
+            }
+            KeyCode::Char('l') => {
+                self.settings.focus = SettingsFocus::Plugins;
+                Some(Action::Noop)
+            }
+            KeyCode::Char('s') => Some(self.open_source_form()),
+            KeyCode::Char('a') => {
+                self.overlay = Some(Overlay::SettingsForm(market_form(None)));
+                Some(Action::Noop)
+            }
+            KeyCode::Char('e') => Some(self.edit_market()),
+            KeyCode::Char('x') => Some(self.remove_market()),
+            KeyCode::Char('t') => Some(self.toggle_plugin()),
+            KeyCode::Char('n') => {
+                self.overlay = Some(Overlay::SettingsForm(target_form(None)));
+                Some(Action::Noop)
+            }
+            KeyCode::Char('X') => {
+                self.overlay = Some(Overlay::SettingsForm(remove_target_form()));
+                Some(Action::Noop)
+            }
+            KeyCode::Char('w') => Some(self.open_target_picker()),
+            _ => None,
+        }
+    }
+
+    /// `enter` on the focused table's row (`on_data_table_row_selected`).
+    fn settings_enter(&mut self) -> Action {
+        match self.settings.focus {
+            SettingsFocus::Provider => {
+                if self.settings.provider_selected == 0 {
+                    Action::ShowProviderPicker
+                } else {
+                    Action::ShowModelPicker
+                }
+            }
+            SettingsFocus::Plugins => {
+                let data = &self.desk.settings;
+                match data.plugins.get(self.settings.plugin_selected) {
+                    Some((id, enabled)) => Action::Status(format!(
+                        "{id}: {} · t toggle",
+                        if *enabled { "enabled" } else { "disabled" }
+                    )),
+                    None => Action::Noop,
+                }
+            }
+            SettingsFocus::Sources => self.open_source_form(),
+            SettingsFocus::Markets => self.edit_market(),
+            SettingsFocus::Diagnostics => Action::Noop,
+        }
+    }
+
+    /// `s`/enter on a source: the setup form for its provider fields.
+    fn open_source_form(&mut self) -> Action {
+        let Some(id) = self
+            .desk
+            .settings
+            .sources
+            .get(self.settings.source_selected)
+            .map(|s| s.id.clone())
+        else {
+            return Action::Status("no data source selected".to_string());
+        };
+        let current = self
+            .desk
+            .settings
+            .sources
+            .get(self.settings.source_selected)
+            .map(|source| source.contact.clone());
+        self.overlay = Some(Overlay::SettingsForm(source_form(&id, current)));
+        Action::Noop
+    }
+
+    /// `e`/enter on a market: the prefilled edit form.
+    fn edit_market(&mut self) -> Action {
+        let Some(market) = self
+            .desk
+            .settings
+            .markets
+            .get(self.settings.market_selected)
+            .cloned()
+        else {
+            return Action::Status("no market selected".to_string());
+        };
+        self.overlay = Some(Overlay::SettingsForm(market_form(Some(&market))));
+        Action::Noop
+    }
+
+    /// `x`: remove the selected market through the services layer.
+    fn remove_market(&mut self) -> Action {
+        let Some(id) = self
+            .settings
+            .selected_market_id(&self.desk.settings)
+            .map(str::to_string)
+        else {
+            return Action::Status("no market selected".to_string());
+        };
+        let Some(config) = self.desk.config_path.clone() else {
+            return Action::Status("offline: no config.toml".to_string());
+        };
+        match delta_services::config_ops::remove_market(&config, &id) {
+            Ok(()) => {
+                self.desk.reload_settings();
+                let data = &self.desk.settings;
+                self.settings
+                    .reconcile(data.plugins.len(), data.sources.len(), data.markets.len());
+                Action::Status(format!("market {id} removed"))
+            }
+            Err(e) => Action::Status(e.to_string()),
+        }
+    }
+
+    /// `t`: flip the selected plugin's enabled flag in `config.toml`.
+    fn toggle_plugin(&mut self) -> Action {
+        let Some(id) = self
+            .settings
+            .selected_plugin_id(&self.desk.settings)
+            .map(str::to_string)
+        else {
+            return Action::Status("no plugin selected".to_string());
+        };
+        let enabled = self
+            .desk
+            .settings
+            .plugins
+            .get(self.settings.plugin_selected)
+            .map(|(_, on)| *on)
+            .unwrap_or(true);
+        let Some(config) = self.desk.config_path.clone() else {
+            return Action::Status("offline: no config.toml".to_string());
+        };
+        match delta_services::config_ops::set_plugin_enabled(&config, &id, !enabled) {
+            Ok(()) => {
+                self.desk.reload_settings();
+                Action::Status(format!(
+                    "{id} {}",
+                    if !enabled { "enabled" } else { "disabled" }
+                ))
+            }
+            Err(e) => Action::Status(e.to_string()),
+        }
+    }
+
+    /// Run the form's services call on submit; returns the action and
+    /// whether the form should close (a rejected submit stays open).
+    fn submit_settings_form(&mut self, modal: &mut FormModal) -> (Action, bool) {
+        let values: std::collections::BTreeMap<String, String> = match modal.form.submit() {
+            Ok(values) => values.into_iter().collect(),
+            Err(errors) => {
+                let message = errors
+                    .first()
+                    .map(|(_, m)| m.clone())
+                    .unwrap_or_else(|| "invalid input".to_string());
+                return (Action::Status(message), false);
+            }
+        };
+        let Some(config) = self.desk.config_path.clone() else {
+            return (Action::Status("offline: no config.toml".to_string()), false);
+        };
+        let result = match &modal.mode {
+            FormMode::AddMarket | FormMode::EditMarket(_) => {
+                let id = values.get("ID").cloned().unwrap_or_default();
+                delta_services::config_ops::save_market(
+                    &config,
+                    &id,
+                    values.get("Name").map(String::as_str).unwrap_or(""),
+                    values.get("Currency").map(String::as_str).unwrap_or(""),
+                    values.get("Yahoo suffix").map(String::as_str).unwrap_or(""),
+                )
+            }
+            FormMode::Source(id) => {
+                let mut fields = std::collections::BTreeMap::new();
+                if let Some(value) = values.get("Contact email") {
+                    fields.insert("contact".to_string(), value.clone());
+                }
+                delta_services::setup::configure_data_provider(
+                    &config,
+                    &self.env_path(),
+                    &delta_plugins::provider_specs(),
+                    id,
+                    &fields,
+                    None,
+                )
+            }
+            FormMode::Provider(name) => delta_services::setup::save_provider_choice(
+                &config,
+                &self.env_path(),
+                name,
+                values.get("API key").map(String::as_str).unwrap_or(""),
+                values.get("Base URL").map(String::as_str).unwrap_or(""),
+                values
+                    .get("Key environment variable")
+                    .map(String::as_str)
+                    .unwrap_or(""),
+            ),
+            FormMode::Model => delta_services::setup::save_model_choice(
+                &config,
+                values.get("Model ID").map(String::as_str).unwrap_or(""),
+            ),
+            FormMode::AddTarget => {
+                let symbols = values
+                    .get("Instruments")
+                    .map(|s| {
+                        s.split(',')
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty())
+                            .map(str::to_string)
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                delta_services::config_ops::add_target(
+                    &config,
+                    values.get("Name").map(String::as_str).unwrap_or(""),
+                    values.get("Kind").map(String::as_str).unwrap_or("company"),
+                    values.get("Market").map(String::as_str).unwrap_or("us"),
+                    &symbols,
+                    &[],
+                    "",
+                    None,
+                    "equity",
+                )
+            }
+            FormMode::EditTarget(name) => {
+                if values.get("Name").is_none_or(|value| value != name) {
+                    return (
+                        Action::Status("target ID cannot be changed".to_string()),
+                        false,
+                    );
+                }
+                let symbols = values
+                    .get("Instruments")
+                    .map(|s| {
+                        s.split(',')
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty())
+                            .map(str::to_string)
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                delta_services::config_ops::update_target(
+                    &config,
+                    name,
+                    values.get("Kind").map(String::as_str).unwrap_or("company"),
+                    values.get("Market").map(String::as_str).unwrap_or("us"),
+                    &symbols,
+                )
+            }
+            FormMode::RemoveTarget => delta_services::config_ops::remove_target(
+                &config,
+                values.get("Name").map(String::as_str).unwrap_or(""),
+            ),
+            FormMode::AddThesis | FormMode::EditThesis(_) => {
+                let Some(db) = self.thesis_db() else {
+                    return (Action::Status("offline: no database".to_string()), false);
+                };
+                let csv = |name: &str| {
+                    values
+                        .get(name)
+                        .map(|s| {
+                            s.split(',')
+                                .map(str::trim)
+                                .filter(|part| !part.is_empty())
+                                .map(str::to_string)
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default()
+                };
+                let claim = values.get("Claim").map(String::as_str).unwrap_or("");
+                let targets = csv("Targets");
+                let assumptions = csv("Holds if");
+                let falsifiers = csv("Breaks if");
+                let scope = values.get("Scope").map(String::as_str).unwrap_or("");
+                let horizon = values.get("Horizon").map(String::as_str).unwrap_or("");
+                let saved = match &modal.mode {
+                    FormMode::AddThesis => delta_services::create_thesis(
+                        &db,
+                        claim,
+                        scope,
+                        &assumptions,
+                        &falsifiers,
+                        &targets,
+                        horizon,
+                        None,
+                    ),
+                    FormMode::EditThesis(id) => delta_services::update_thesis(
+                        &db,
+                        id,
+                        claim,
+                        &targets,
+                        horizon,
+                        values.get("Status").map(String::as_str).unwrap_or("active"),
+                        Some(scope),
+                        Some(&assumptions),
+                        Some(&falsifiers),
+                    ),
+                    _ => unreachable!(),
+                };
+                match saved {
+                    Ok(thesis) => {
+                        self.reload_theses();
+                        self.theses.selected = self
+                            .theses
+                            .fleet
+                            .iter()
+                            .position(|row| row.thesis.id == thesis.id)
+                            .unwrap_or(0);
+                        let _ = self.theses.select(&db);
+                        Ok(())
+                    }
+                    Err(err) => Err(err),
+                }
+            }
+        };
+        match result {
+            Ok(()) => {
+                let message = match &modal.mode {
+                    FormMode::AddMarket | FormMode::EditMarket(_) => "market saved".to_string(),
+                    FormMode::Source(_) => "source saved".to_string(),
+                    FormMode::Provider(name) => format!("{name} selected"),
+                    FormMode::Model => "model saved".to_string(),
+                    FormMode::AddTarget => "target added".to_string(),
+                    FormMode::EditTarget(_) => "target saved".to_string(),
+                    FormMode::RemoveTarget => "target removed".to_string(),
+                    FormMode::AddThesis | FormMode::EditThesis(_) => "thesis saved".to_string(),
+                };
+                self.desk.reload_settings();
+                let data = &self.desk.settings;
+                self.settings
+                    .reconcile(data.plugins.len(), data.sources.len(), data.markets.len());
+                (Action::Status(message), true)
+            }
+            Err(e) => (Action::Status(e.to_string()), false),
+        }
+    }
+
+    fn viewport_width(&self) -> usize {
+        self.viewport.0 as usize
+    }
+
+    fn env_path(&self) -> std::path::PathBuf {
+        self.desk
+            .config_path
+            .as_ref()
+            .and_then(|path| path.parent())
+            .unwrap_or_else(|| std::path::Path::new("."))
+            .join(".env")
+    }
+
+    fn open_target_picker(&mut self) -> Action {
+        let Some(config) = &self.desk.config_path else {
+            return Action::Status("offline: no config.toml".to_string());
+        };
+        match delta_services::config_ops::target_specs(config) {
+            Ok(targets) => {
+                self.overlay = Some(Overlay::TargetPicker(targets.into_keys().collect(), 0));
+                Action::Noop
+            }
+            Err(e) => Action::Status(e.to_string()),
+        }
+    }
+}
+
+fn provider_form(name: &str) -> FormModal {
+    let fields = if name == "custom" {
+        vec![
+            delta_tui::form::Field::new(
+                "Base URL",
+                "http://localhost:11434/v1",
+                Some(delta_tui::form::required),
+            ),
+            delta_tui::form::Field::new("Key environment variable", "CUSTOM_API_KEY", None),
+            delta_tui::form::Field::new("API key", "optional for local servers", None).secret(),
+        ]
+    } else {
+        vec![delta_tui::form::Field::new("API key", "leave blank to use existing", None).secret()]
+    };
+    FormModal {
+        form: Form::new(&format!("connect {name}"), fields),
+        mode: FormMode::Provider(name.to_string()),
+    }
+}
+
+fn model_form(current: &str) -> FormModal {
+    let mut form = Form::new(
+        "select a model",
+        vec![delta_tui::form::Field::new(
+            "Model ID",
+            "provider/model-id",
+            Some(delta_tui::form::required),
+        )],
+    );
+    form.fields[0].input.set_value(current);
+    FormModal {
+        form,
+        mode: FormMode::Model,
+    }
+}
+
+fn target_form(current: Option<&delta_services::targets::WatchTarget>) -> FormModal {
+    let mut form = Form::new(
+        if current.is_some() {
+            "edit target"
+        } else {
+            "add target"
+        },
+        vec![
+            delta_tui::form::Field::new("Name", "e.g. apple", Some(delta_tui::form::required)),
+            delta_tui::form::Field::new(
+                "Kind",
+                "company, theme, market…",
+                Some(delta_tui::form::required),
+            ),
+            delta_tui::form::Field::new("Market", "us, asx…", Some(delta_tui::form::required)),
+            delta_tui::form::Field::new("Instruments", "AAPL,MSFT", None),
+        ],
+    );
+    let mut mode = FormMode::AddTarget;
+    if let Some(target) = current {
+        mode = FormMode::EditTarget(target.id.clone());
+        for (field, value) in form.fields.iter_mut().zip([
+            target.id.clone(),
+            target.kind.clone(),
+            target.markets.first().cloned().unwrap_or_default(),
+            target.tickers.join(","),
+        ]) {
+            field.input.set_value(&value);
+        }
+    }
+    FormModal { form, mode }
+}
+
+fn thesis_claim_required(value: &str) -> Result<(), String> {
+    if value.trim().is_empty() {
+        Err("claim is required".to_string())
+    } else {
+        Ok(())
+    }
+}
+
+fn draw_thesis_modal(screen: &mut Screen, form: &Form) {
+    let width = 68.min(screen.w.saturating_sub(4));
+    let height = (form.fields.len() * 2 + 6).min(screen.h.saturating_sub(2));
+    let (x, y, w, _) = delta_tui::dialog::dialog_frame(screen, width, height);
+    screen.text(x, y, &form.title, Style::fg(color::BLUE).bold());
+    for (index, field) in form.fields.iter().enumerate() {
+        let row = y + 2 + index * 2;
+        let focused = index == form.focus;
+        screen.text(
+            x,
+            row,
+            &field.label,
+            Style::fg(if focused { color::BLUE } else { color::MUTED }).bold(),
+        );
+        screen.fill(
+            x,
+            row + 1,
+            x + w,
+            row + 2,
+            Style::fg(color::FG).bg(color::PANEL),
+        );
+        screen.put(
+            x,
+            row + 1,
+            '▌',
+            Style::fg(if focused { color::BLUE } else { color::PANEL }),
+        );
+        let value = field.value();
+        screen.text(
+            x + 2,
+            row + 1,
+            &value.chars().take(w.saturating_sub(3)).collect::<String>(),
+            Style::fg(if field.value().is_empty() {
+                color::MUTED
+            } else {
+                color::FG
+            })
+            .bg(color::PANEL),
+        );
+        if let Some(error) = &field.error {
+            screen.text(
+                x + w.saturating_sub(error.len()),
+                row,
+                error,
+                Style::fg(color::RED),
+            );
+        }
+    }
+    screen.text(
+        x,
+        y + 2 + form.fields.len() * 2,
+        "tab next · enter save · esc cancel",
+        Style::fg(color::MUTED),
+    );
+}
+
+fn thesis_form(current: Option<&delta_services::Thesis>) -> FormModal {
+    use delta_tui::form::Field;
+    let mut fields = vec![
+        Field::new("Claim", "Claim", Some(thesis_claim_required)),
+        Field::new("Targets", "US:AAPL", None),
+        Field::new("Horizon", "5y", None),
+        Field::new("Scope", "what the claim is about", None),
+        Field::new("Holds if", "assumptions, comma separated", None),
+        Field::new("Breaks if", "what would disprove it", None),
+    ];
+    if current.is_some() {
+        fields.push(Field::new(
+            "Status",
+            "active",
+            Some(delta_tui::form::required),
+        ));
+    }
+    let mut form = Form::new(
+        if current.is_some() {
+            "edit thesis"
+        } else {
+            "new thesis"
+        },
+        fields,
+    );
+    if let Some(thesis) = current {
+        for (field, value) in form.fields.iter_mut().zip([
+            thesis.claim.clone(),
+            thesis.targets.join(", "),
+            thesis.time_horizon.clone(),
+            thesis.scope.clone(),
+            thesis.assumptions.join(", "),
+            thesis.falsifiers.join(", "),
+            thesis.status.clone(),
+        ]) {
+            field.input.set_value(&value);
+        }
+    }
+    FormModal {
+        form,
+        mode: current.map_or(FormMode::AddThesis, |thesis| {
+            FormMode::EditThesis(thesis.id.clone())
+        }),
+    }
+}
+
+fn remove_target_form() -> FormModal {
+    FormModal {
+        form: Form::new(
+            "remove target",
+            vec![delta_tui::form::Field::new(
+                "Name",
+                "target id",
+                Some(delta_tui::form::required),
+            )],
+        ),
+        mode: FormMode::RemoveTarget,
+    }
+}
+
+/// The market form (`market_setup.py::MarketSetupModal`): ID, name,
+/// currency, Yahoo suffix.
+fn market_form(current: Option<&delta_tui::screens::SettingsMarket>) -> FormModal {
+    let mut form = Form::new(
+        if current.is_some() {
+            "edit market"
+        } else {
+            "add market"
+        },
+        vec![
+            delta_tui::form::Field::new("ID", "e.g. lse", Some(delta_tui::form::required)),
+            delta_tui::form::Field::new("Name", "Exchange name", Some(delta_tui::form::required)),
+            delta_tui::form::Field::new("Currency", "GBP", Some(delta_tui::form::required)),
+            delta_tui::form::Field::new("Yahoo suffix", ".L", None),
+        ],
+    );
+    let mut mode = FormMode::AddMarket;
+    if let Some(market) = current {
+        mode = FormMode::EditMarket(market.id.clone());
+        let prefill = [
+            ("ID", market.id.as_str()),
+            ("Name", market.label.as_str()),
+            ("Currency", market.currency.as_str()),
+            ("Yahoo suffix", market.yahoo_suffix.as_str()),
+        ];
+        for field in form.fields.iter_mut() {
+            if let Some((_, value)) = prefill.iter().find(|(label, _)| *label == field.label) {
+                field.input.set_value(value);
+            }
+        }
+    }
+    FormModal { form, mode }
+}
+
+/// The source setup form (`source_setup.py`): the provider's non-secret
+/// fields; secrets stay in `configure_data_provider`.
+fn source_form(id: &str, current: Option<String>) -> FormModal {
+    let mut form = Form::new(
+        "configure source",
+        vec![delta_tui::form::Field::new(
+            "Contact email",
+            "you@example.com",
+            Some(delta_tui::form::required),
+        )],
+    );
+    if let Some(current) = current {
+        form.fields[0].input.set_value(&current);
+    }
+    FormModal {
+        form,
+        mode: FormMode::Source(id.to_string()),
+    }
+}
+
+fn decision_form(current: Option<&delta_services::Decision>) -> DecisionModal {
+    use delta_tui::form::{required, Field};
+    let fields = vec![
+        Field::new("Instrument", "US:AAPL", Some(required)),
+        Field::new("Rationale", "Why this decision?", Some(required)),
+        Field::new("Valuation context", "Price and assumptions", Some(required)),
+        Field::new("Time horizon", "e.g. 6m", Some(required)),
+        Field::new("Review date", "YYYY-MM-DD", Some(required)),
+        Field::new(
+            "Invalidation criteria",
+            "What would change your mind?",
+            Some(required),
+        ),
+        Field::new("Thesis ID", "optional", None),
+    ];
+    let mut form = Form::new(
+        if current.is_some() {
+            "edit decision"
+        } else {
+            "new decision"
+        },
+        fields,
+    );
+    let mode = if let Some(decision) = current {
+        for (field, value) in form.fields.iter_mut().zip([
+            decision.instrument_id.as_str(),
+            decision.rationale.as_str(),
+            decision.valuation_context.as_str(),
+            decision.time_horizon.as_str(),
+            &decision.review_date.to_string(),
+            decision.invalidation_criteria.as_str(),
+            decision.thesis_id.as_deref().unwrap_or(""),
+        ]) {
+            field.input.set_value(value);
+        }
+        DecisionMode::Edit(decision.id.clone())
+    } else {
+        DecisionMode::New
+    };
+    DecisionModal { form, mode }
+}
+
+fn review_form(id: &str) -> DecisionModal {
+    use delta_tui::form::{required, Field};
+    let mut form = Form::new(
+        "review decision",
+        vec![
+            Field::new("Review note", "What changed?", Some(required)),
+            Field::new("Status", "open, reviewed, or retired", Some(required)),
+        ],
+    );
+    form.fields[1].input.set_value("reviewed");
+    DecisionModal {
+        form,
+        mode: DecisionMode::Review(id.to_string()),
+    }
 }
 
 impl Component for App {
     fn handle_key(&mut self, key: KeyEvent) -> Option<Action> {
+        if let Some(Overlay::ProviderPicker(selected)) = &mut self.overlay {
+            match key.code {
+                KeyCode::Esc => self.overlay = None,
+                KeyCode::Up => *selected = selected.saturating_sub(1),
+                KeyCode::Down => *selected = (*selected + 1).min(PROVIDER_CHOICES.len() - 1),
+                KeyCode::Enter => {
+                    let name = PROVIDER_CHOICES[*selected];
+                    self.overlay = Some(Overlay::SettingsForm(provider_form(name)));
+                }
+                _ => {}
+            }
+            return None;
+        }
+        if let Some(Overlay::TargetPicker(targets, selected)) = &mut self.overlay {
+            match key.code {
+                KeyCode::Esc => self.overlay = None,
+                KeyCode::Up => *selected = selected.saturating_sub(1),
+                KeyCode::Down => *selected = (*selected + 1).min(targets.len().saturating_sub(1)),
+                KeyCode::Char('n') => self.overlay = Some(Overlay::SettingsForm(target_form(None))),
+                KeyCode::Enter => {
+                    if let (Some(name), Some(config)) =
+                        (targets.get(*selected), &self.desk.config_path)
+                    {
+                        if let Ok(specs) = delta_services::config_ops::target_specs(config) {
+                            if let Some(target) = specs.get(name) {
+                                self.overlay =
+                                    Some(Overlay::SettingsForm(target_form(Some(target))));
+                            }
+                        }
+                    }
+                }
+                KeyCode::Char('x') => {
+                    if let Some(name) = targets.get(*selected) {
+                        let mut modal = remove_target_form();
+                        modal.form.fields[0].input.set_value(name);
+                        self.overlay = Some(Overlay::SettingsForm(modal));
+                    }
+                }
+                _ => {}
+            }
+            return None;
+        }
+        if matches!(self.overlay, Some(Overlay::DecisionForm(_)))
+            && (key.code == KeyCode::Enter
+                || (key.code == KeyCode::Char('s')
+                    && key
+                        .modifiers
+                        .contains(crossterm::event::KeyModifiers::CONTROL)))
+        {
+            let Some(Overlay::DecisionForm(mut modal)) = self.overlay.take() else {
+                unreachable!("checked above");
+            };
+            if !self.submit_decision_form(&mut modal) {
+                self.overlay = Some(Overlay::DecisionForm(modal));
+            }
+            return Some(Action::Noop);
+        }
+        if let Some(Overlay::DecisionFilter(query)) = &mut self.overlay {
+            match key.code {
+                KeyCode::Esc => self.overlay = None,
+                KeyCode::Enter => {
+                    let filter = query.trim().to_string();
+                    self.overlay = None;
+                    if let Some(data) = &mut self.decisions {
+                        data.filter = filter;
+                        data.selected = 0;
+                    }
+                    self.refresh_decisions();
+                }
+                KeyCode::Backspace => {
+                    query.pop();
+                }
+                KeyCode::Char(ch)
+                    if !key
+                        .modifiers
+                        .contains(crossterm::event::KeyModifiers::CONTROL) =>
+                {
+                    query.push(ch);
+                }
+                _ => {}
+            }
+            return Some(Action::Noop);
+        }
+        // The Settings form manages its own submit cycle: a rejected
+        // submit keeps the modal open, the message on the status line.
+        if key.code == KeyCode::Enter && matches!(self.overlay, Some(Overlay::SettingsForm(_))) {
+            let Some(Overlay::SettingsForm(mut modal)) = self.overlay.take() else {
+                unreachable!("checked the variant above");
+            };
+            let (action, saved) = self.submit_settings_form(&mut modal);
+            if !saved {
+                self.overlay = Some(Overlay::SettingsForm(modal));
+            }
+            self.update(action);
+            return None;
+        }
         // Modals take the key first (a Textual modal stops propagation).
+        if let Some(Overlay::AddTarget(query)) = &mut self.overlay {
+            match key.code {
+                KeyCode::Esc => self.overlay = None,
+                KeyCode::Backspace => {
+                    query.pop();
+                }
+                KeyCode::Enter => {
+                    let input = query.clone();
+                    match self.add_instrument_at(Path::new("config.toml"), &input) {
+                        Ok(()) => self.overlay = None,
+                        Err(error) => self.status = error,
+                    }
+                }
+                KeyCode::Char(ch)
+                    if !key
+                        .modifiers
+                        .contains(crossterm::event::KeyModifiers::CONTROL) =>
+                {
+                    query.push(ch)
+                }
+                _ => {}
+            }
+            return Some(Action::Noop);
+        }
         if let Some(overlay) = &mut self.overlay {
             let action = match overlay {
                 Overlay::Go => delta_tui::dialog::go_picker_key(key),
                 Overlay::Help(help) => help.handle_key(key),
                 Overlay::Palette(palette) => palette.handle_key(key),
+                Overlay::AddTarget(_) => unreachable!(),
+                Overlay::SettingsForm(modal) => match key.code {
+                    KeyCode::Esc => Some(Action::CloseDialog),
+                    _ => modal.form.handle_key(key),
+                },
+                Overlay::DecisionForm(modal) => match key.code {
+                    KeyCode::Esc => Some(Action::CloseDialog),
+                    _ => modal.form.handle_key(key),
+                },
+                Overlay::DecisionFilter(_) => unreachable!("handled above"),
+                Overlay::ProviderPicker(_) => unreachable!("handled above"),
+                Overlay::TargetPicker(_, _) => unreachable!("handled above"),
             };
             let action = action.unwrap_or(Action::Noop);
             match action {
@@ -281,8 +1906,75 @@ impl Component for App {
             }
             return None;
         }
+        if self.tab == Tab::Watchlist {
+            match key.code {
+                KeyCode::Char('a') => {
+                    self.overlay = Some(Overlay::AddTarget(String::new()));
+                    return Some(Action::Noop);
+                }
+                KeyCode::Char('d') => {
+                    if let Err(error) = self.remove_instrument_at(Path::new("config.toml")) {
+                        self.status = error;
+                    }
+                    return Some(Action::Noop);
+                }
+                KeyCode::Char(']') => {
+                    self.desk.move_scrub(1);
+                    return Some(Action::Noop);
+                }
+                KeyCode::Char('[') => {
+                    self.desk.move_scrub(-1);
+                    return Some(Action::Noop);
+                }
+                KeyCode::Char('r') => {
+                    self.desk.cycle_range(1);
+                    return Some(Action::Noop);
+                }
+                KeyCode::Char('R') => {
+                    self.desk.cycle_range(-1);
+                    return Some(Action::Noop);
+                }
+                KeyCode::Down => {
+                    self.desk.cycle_instrument(1);
+                    return Some(Action::Noop);
+                }
+                KeyCode::Up => {
+                    self.desk.cycle_instrument(-1);
+                    return Some(Action::Noop);
+                }
+                _ => {}
+            }
+        }
+        if self.tab == Tab::Research {
+            if let Some(action) = self.handle_research_key(key) {
+                return Some(action);
+            }
+        }
+        if self.tab == Tab::Ask {
+            if let Some(action) = self.handle_ask_key(key) {
+                return Some(action);
+            }
+        }
+        if self.tab == Tab::Settings && key.code == KeyCode::Esc {
+            return self.handle_settings_key(key);
+        }
+        if self.tab == Tab::Theses {
+            if let Some(action) = self.handle_theses_key(key) {
+                return Some(action);
+            }
+        }
+        if self.tab == Tab::Decisions {
+            if let Some(action) = self.handle_decisions_key(key) {
+                return Some(action);
+            }
+        }
         if let Some(action) = self.handle_shell_key(key) {
             return Some(action);
+        }
+        if self.tab == Tab::Settings {
+            if let Some(action) = self.handle_settings_key(key) {
+                return Some(action);
+            }
         }
         None
     }
@@ -293,6 +1985,15 @@ impl Component for App {
             Action::Quotes(prices) => self.desk.live = prices,
             Action::Metrics { instrument, rows } => {
                 self.desk.metrics.insert(instrument, rows);
+            }
+            Action::AssetMetrics { range, data } => {
+                if let Some(error) = &data.error {
+                    self.status = format!("metrics unavailable: {error}");
+                } else {
+                    self.desk
+                        .asset_metrics
+                        .insert((data.instrument_id.clone(), range), *data);
+                }
             }
             Action::Ingested(counts) => {
                 // Per-source counts, RSS/SEC/bars each visible.
@@ -313,6 +2014,34 @@ impl Component for App {
                 }
             }
             Action::Status(msg) => self.status = msg,
+            Action::ThesisFound(count) => {
+                self.reload_theses();
+                self.status = format!(
+                    "{count} candidate{} to review",
+                    if count == 1 { "" } else { "s" }
+                );
+            }
+            Action::ThesisSummary(summary) => {
+                if self.theses.selected_id() == Some(summary.thesis_id.as_str()) {
+                    self.theses.summary = Some(*summary);
+                    self.status = "thesis summarised".to_string();
+                }
+            }
+            Action::AskAnswered {
+                generation,
+                result,
+                citation_labels,
+                sidebar_labels,
+            } => {
+                if generation == self.ask.generation {
+                    self.ask_worker = None;
+                }
+                self.ask.finish(generation, result);
+                if generation == self.ask.generation && !self.ask.history.is_empty() {
+                    self.ask.citation_labels = citation_labels;
+                    self.ask.sidebar_labels = sidebar_labels;
+                }
+            }
             Action::HomeRefresh(feed) => self.desk.feed = feed,
             Action::ToggleTheme => {
                 // `action_toggle_theme`: swap the palette and notify.
@@ -325,28 +2054,48 @@ impl Component for App {
             Action::GotoScreen(name) => {
                 if let Some(tab) = Tab::from_screen_name(&name) {
                     self.tab = tab;
+                    if tab == Tab::Theses {
+                        self.reload_theses();
+                    }
                     self.overlay = None;
                     self.glossary = false;
                 }
             }
             Action::ShowHelp => self.overlay = Some(Overlay::Help(HelpDialog::default())),
             Action::ShowModelPicker => {
-                // The picker screen lands with R3.2 (settings stream); the
-                // binding is live now so the keymap cannot drift.
-                self.status = "model picker: lands with R3.2 settings".to_string();
+                self.overlay = Some(Overlay::SettingsForm(model_form(&self.desk.settings.model)));
             }
             Action::ShowProviderPicker => {
-                self.status = "provider picker: lands with R3.2 settings".to_string();
+                let selected = PROVIDER_CHOICES
+                    .iter()
+                    .position(|name| *name == self.desk.settings.provider)
+                    .unwrap_or(0);
+                self.overlay = Some(Overlay::ProviderPicker(selected));
             }
             Action::FormSubmitted(title) => {
                 self.overlay = None;
                 self.status = format!("{title} saved");
             }
+            Action::OpenSource(url) => {
+                #[cfg(target_os = "macos")]
+                let opener = "open";
+                #[cfg(not(target_os = "macos"))]
+                let opener = "xdg-open";
+                match std::process::Command::new(opener).arg(&url).spawn() {
+                    Ok(_) => self.status = format!("opened {url}"),
+                    Err(error) => self.status = format!("cannot open source: {error}"),
+                }
+            }
             Action::Noop
+            | Action::AskQuestion { .. }
             | Action::OpenDialog(_)
             | Action::CloseDialog
             | Action::Goto(_)
-            | Action::Gather => {}
+            | Action::ThesisFind(_)
+            | Action::ThesisSummarize(_)
+            | Action::Gather
+            | Action::GatherCompany(_)
+            | Action::GenerateReport => {}
         }
     }
 
@@ -354,27 +2103,44 @@ impl Component for App {
         if area.width < 4 || area.height < 4 {
             return; // degenerate terminal; the painters assume a status bar
         }
+        self.viewport = (area.width, area.height);
         let mut screen = Screen::themed(self.palette, area.width as usize, area.height as usize);
         self.paint(&mut screen);
         delta_tui::screen::blit(frame, &screen, area);
     }
 }
 
-pub(crate) async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> std::io::Result<()> {
-    let (bus_tx, mut bus_rx) = mpsc::unbounded_channel::<Action>();
-    let desk = Desk::open();
+fn start_workers(bus: mpsc::UnboundedSender<Action>, desk: &Desk) -> workers::Workers {
     let universe: Vec<delta_core::models::Instrument> = desk
         .instruments
         .iter()
-        .map(|d| d.instrument.clone())
+        .map(|row| row.instrument.clone())
         .collect();
     let db_path = match &desk.source {
         delta_tui::desk::Source::Real(db) => Some(db.clone()),
         delta_tui::desk::Source::Offline => None,
     };
-    // Quotes hit the network; opt in with DELTA_QUOTES=1.
-    let quotes_enabled = std::env::var("DELTA_QUOTES").as_deref() == Ok("1");
-    let gather_tx = workers::spawn(bus_tx.clone(), universe, db_path, quotes_enabled);
+    let quotes_enabled = matches!(&desk.source, delta_tui::desk::Source::Real(_));
+    workers::spawn(bus, universe, db_path, quotes_enabled)
+}
+
+pub(crate) async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> std::io::Result<()> {
+    let (bus_tx, mut bus_rx) = mpsc::unbounded_channel::<Action>();
+    let desk = Desk::open();
+    let mut active_workers = start_workers(bus_tx.clone(), &desk);
+    let (research_tx, mut research_rx) = mpsc::unbounded_channel::<Result<ResearchData, String>>();
+    let research = load_research(&desk);
+
+    let mut ask = AskState::default();
+    if let Some(config) = &desk.config_path {
+        if let Ok(targets) = delta_services::target_specs(config) {
+            ask.set_targets(targets.into_values().collect());
+        }
+        if let Ok((_, cfg)) = delta_core::config::load_config(config) {
+            ask.provider = cfg.llm_provider;
+            ask.model = cfg.llm_model;
+        }
+    }
 
     let mut app = App {
         desk,
@@ -385,7 +2151,17 @@ pub(crate) async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> st
         quit: false,
         palette: Palette::Dark,
         overlay: None,
+        settings: SettingsState::default(),
+        theses: ThesesState::default(),
+        research,
+        research_state: ResearchState::default(),
+        ask,
+        ask_worker: None,
+        decisions: None,
+        confirm_decision_delete: false,
+        viewport: (120, 40),
     };
+    app.reload_theses();
 
     let mut events = EventStream::new();
     let mut tick = tokio::time::interval(Duration::from_millis(50));
@@ -406,11 +2182,74 @@ pub(crate) async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> st
                 match maybe_event {
                     Some(Ok(Event::Key(key))) => {
                         dirty = true;
+                        let previous_ids: Vec<_> = app.desk.instruments.iter().map(|row| row.instrument.id.clone()).collect();
+                        let previous_range = app.desk.range();
+                        let previous_selected = app.desk.current().map(|row| row.instrument.id.clone());
                         if let Some(action) = app.handle_key(key) {
-                            if action == Action::Gather {
-                                let _ = gather_tx.send(());
-                            } else {
-                                app.update(action);
+                            match action {
+                                Action::Gather => { let _ = active_workers.gather_tx.send(None); }
+                                Action::GatherCompany(id) => { let _ = active_workers.gather_tx.send(Some(id)); }
+                                Action::AskQuestion { generation, history, targets } => {
+                                    let tx = bus_tx.clone();
+                                    let config_path = app.desk.config_path.clone();
+                                    let db_path = match &app.desk.source {
+                                        delta_tui::desk::Source::Real(path) => Some(path.clone()),
+                                        delta_tui::desk::Source::Offline => None,
+                                    };
+                                    app.ask_worker = Some(tokio::spawn(async move {
+                                        let (result, citation_labels, sidebar_labels) = async {
+                                            let config_path = config_path.ok_or_else(|| "offline: no config.toml".to_string())?;
+                                            let db_path = db_path.ok_or_else(|| "offline: no database".to_string())?;
+                                            let (_, cfg) = delta_core::config::load_config(&config_path).map_err(|err| err.to_string())?;
+                                            let mut db = delta_core::db::Db::open(&db_path).map_err(|err| err.to_string())?;
+                                            let answer = delta_services::chat::chat_configured(&mut db, &cfg, &history, &targets).await.map_err(|err| err.to_string())?;
+                                            let mut labels = std::collections::BTreeMap::new();
+                                            let mut sidebar = std::collections::BTreeMap::new();
+                                            for id in &answer.citations {
+                                                if let Some(item) = delta_services::evidence_by_ids(&db, std::slice::from_ref(id)).map_err(|err| err.to_string())?.into_iter().next() {
+                                                    let label = format!("{} · {}", item.title, item.ts.format("%-d %b"));
+                                                    sidebar.insert(id.clone(), label.clone());
+                                                    if item.id == *id { labels.insert(id.clone(), label); }
+                                                }
+                                            }
+                                            Ok::<_, String>((answer, labels, sidebar))
+                                        }.await.map_or_else(|error| (Err(error), Default::default(), Default::default()), |(answer, labels, sidebar)| (Ok(answer), labels, sidebar));
+                                        let _ = tx.send(Action::AskAnswered { generation, result, citation_labels, sidebar_labels });
+                                    }));
+                                }
+                                Action::GenerateReport => {
+                                    if !app.research_state.busy {
+                                        app.research_state.busy = true;
+                                        app.status = "generating report".into();
+                                        let config = app.desk.config_path.clone();
+                                        let company = app.research.as_ref().map(|r| r.company.clone());
+                                        let tx = research_tx.clone();
+                                        let runtime = tokio::runtime::Handle::current();
+                                        std::thread::spawn(move || {
+                                            let result = runtime.block_on(generate_research(config, company));
+                                            let _ = tx.send(result);
+                                        });
+                                    }
+                                }
+                                Action::ThesisFind(id) => {
+                                    spawn_thesis_job(&app, id, true, bus_tx.clone());
+                                }
+                                Action::ThesisSummarize(id) => {
+                                    spawn_thesis_job(&app, id, false, bus_tx.clone());
+                                }
+                                other => app.update(other),
+                            }
+                        }
+                        let current_ids: Vec<_> = app.desk.instruments.iter().map(|row| row.instrument.id.clone()).collect();
+                        if current_ids != previous_ids {
+                            active_workers = start_workers(bus_tx.clone(), &app.desk);
+                        }
+                        let selected = app.desk.current();
+                        let selection_changed = selected.map(|row| &row.instrument.id) != previous_selected.as_ref();
+                        if (app.desk.range() != previous_range || selection_changed || key.code == KeyCode::Enter)
+                            && app.tab == Tab::Watchlist && app.overlay.is_none() {
+                            if let Some(row) = selected {
+                                let _ = active_workers.metrics_tx.send((row.instrument.clone(), app.desk.range().to_string()));
                             }
                         }
                     }
@@ -424,6 +2263,11 @@ pub(crate) async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> st
             Some(action) = bus_rx.recv() => {
                 dirty = true;
                 app.update(action);
+            }
+            Some(result) = research_rx.recv() => {
+                dirty = true;
+                app.research_state.busy = false;
+                match result { Ok(data) => { app.research = Some(data); app.status = "report generated".into(); }, Err(error) => { app.research_state.error = Some(error.clone()); app.status = error; } }
             }
             _ = clock.tick() => {
                 // The home clock reads the wall clock; repaint once a second.
@@ -443,6 +2287,47 @@ pub(crate) async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> st
     }
 }
 
+/// The thesis model work runs off the Textual event path and reports a result
+/// through the same action bus used by ingest and quotes.
+fn spawn_thesis_job(app: &App, id: String, find: bool, bus: mpsc::UnboundedSender<Action>) {
+    let Some(config_path) = app.desk.config_path.clone() else {
+        let _ = bus.send(Action::Status("offline: no config.toml".to_string()));
+        return;
+    };
+    let delta_tui::desk::Source::Real(db_path) = &app.desk.source else {
+        let _ = bus.send(Action::Status("offline: no database".to_string()));
+        return;
+    };
+    let db_path = db_path.clone();
+    tokio::task::spawn_blocking(move || {
+        let result: Result<Action, String> = tokio::runtime::Handle::current().block_on(async {
+            let (_, cfg) =
+                delta_core::config::load_config(&config_path).map_err(|e| e.to_string())?;
+            let mut db = delta_core::db::Db::open(&db_path).map_err(|e| e.to_string())?;
+            let env_path = config_path
+                .parent()
+                .unwrap_or(std::path::Path::new("."))
+                .join(".env");
+            if find {
+                let found =
+                    delta_services::propose_evidence_configured(&mut db, &cfg, &env_path, &id)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                Ok(Action::ThesisFound(found.len()))
+            } else {
+                let summary =
+                    delta_services::summarize_thesis_configured(&mut db, &cfg, &env_path, &id)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                Ok(Action::ThesisSummary(Box::new(summary)))
+            }
+        });
+        let action =
+            result.unwrap_or_else(|error| Action::Status(format!("thesis model failed: {error}")));
+        let _ = bus.send(action);
+    });
+}
+
 impl App {
     fn draw_frame(
         &mut self,
@@ -452,6 +2337,74 @@ impl App {
         terminal.draw(|frame| self.draw(frame, area))?;
         Ok(())
     }
+}
+
+fn load_research(desk: &Desk) -> Option<ResearchData> {
+    load_research_for(desk, &desk.current()?.instrument.id)
+}
+
+fn load_research_for(desk: &Desk, instrument_id: &str) -> Option<ResearchData> {
+    let config_path = desk.config_path.as_ref()?;
+    let (_, config) = delta_core::config::load_config(config_path).ok()?;
+    let db_path = match &desk.source {
+        delta_tui::desk::Source::Real(path) => path,
+        delta_tui::desk::Source::Offline => return None,
+    };
+    let specs = delta_services::config_ops::target_specs(config_path).ok()?;
+    let (target, spec) = specs.iter().find(|(_, spec)| {
+        spec.instruments()
+            .iter()
+            .any(|instrument| instrument.id == instrument_id)
+    })?;
+    let currency = spec
+        .instruments()
+        .iter()
+        .find(|instrument| instrument.id == instrument_id)?
+        .currency
+        .clone();
+    ResearchData::load(
+        db_path,
+        std::path::Path::new(&config.reports_dir),
+        instrument_id,
+        target,
+        &spec.kind,
+        &currency,
+    )
+    .ok()
+}
+
+async fn generate_research(
+    config_path: Option<std::path::PathBuf>,
+    company: Option<String>,
+) -> Result<ResearchData, String> {
+    let config_path = config_path.ok_or("offline: no config.toml")?;
+    let company = company.ok_or("no company selected")?;
+    let (_, config) = delta_core::config::load_config(&config_path).map_err(|e| e.to_string())?;
+    let mut db = delta_core::db::Db::open(std::path::Path::new(&config.db_path))
+        .map_err(|e| e.to_string())?;
+    delta_services::generate_report_configured(&mut db, &config, &company)
+        .await
+        .map_err(|e| e.to_string())?;
+    let specs =
+        delta_services::config_ops::target_specs(&config_path).map_err(|e| e.to_string())?;
+    let (target, spec) = specs
+        .iter()
+        .find(|(_, spec)| spec.instruments().iter().any(|i| i.id == company))
+        .ok_or("company not configured")?;
+    let currency = spec
+        .instruments()
+        .iter()
+        .find(|i| i.id == company)
+        .map(|i| i.currency.clone())
+        .unwrap_or_default();
+    ResearchData::load(
+        std::path::Path::new(&config.db_path),
+        std::path::Path::new(&config.reports_dir),
+        &company,
+        target,
+        &spec.kind,
+        &currency,
+    )
 }
 
 #[cfg(test)]
@@ -472,6 +2425,15 @@ mod tests {
             quit: false,
             palette: Palette::Dark,
             overlay: None,
+            settings: SettingsState::default(),
+            theses: ThesesState::default(),
+            research: None,
+            research_state: ResearchState::default(),
+            ask: AskState::default(),
+            ask_worker: None,
+            decisions: None,
+            confirm_decision_delete: false,
+            viewport: (120, 40),
         }
     }
 
@@ -481,6 +2443,62 @@ mod tests {
 
     fn ctrl(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::CONTROL)
+    }
+
+    #[test]
+    fn research_reader_opens_a_citation_and_requests_generation() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let mut app = app();
+        app.tab = Tab::Research;
+        app.research = Some(
+            ResearchData::load(
+                &root.join("fixtures/golden_seed.db"),
+                &root.join("fixtures/golden_reports"),
+                "US:AAPL",
+                "apple",
+                "company",
+                "USD",
+            )
+            .expect("research seed"),
+        );
+        app.handle_key(key(KeyCode::Char('r')));
+        assert_eq!(app.research_state.view, ResearchView::Report);
+        app.handle_key(key(KeyCode::Enter));
+        assert_eq!(app.research_state.view, ResearchView::Evidence);
+        let selected = app
+            .research_state
+            .selected_id
+            .as_ref()
+            .expect("citation selection");
+        assert!(app
+            .research
+            .as_ref()
+            .unwrap()
+            .evidence
+            .iter()
+            .any(|item| &item.id == selected));
+        assert!(matches!(
+            app.handle_key(key(KeyCode::Char('o'))),
+            Some(Action::OpenSource(url)) if url == "https://example.com/news/aapl-chip"
+        ));
+        assert!(app.research_state.detail_open);
+        app.handle_key(key(KeyCode::Char('v')));
+        assert_eq!(app.research_state.view, ResearchView::Report);
+        assert!(app.research_state.report_scroll > 0);
+        let mut frame = Screen::new(120, 40);
+        app.paint(&mut frame);
+        let visible: String = frame.cells.iter().map(|cell| cell.ch).collect();
+        assert!(visible.contains("The announced chip"));
+        app.handle_key(key(KeyCode::Esc));
+        assert!(!app.research_state.detail_open);
+        app.handle_key(key(KeyCode::Char('/')));
+        assert_eq!(app.handle_key(key(KeyCode::Char('n'))), Some(Action::Noop));
+        assert_eq!(app.research_state.search, "n");
+        app.handle_key(key(KeyCode::Esc));
+        assert_eq!(
+            app.handle_key(key(KeyCode::Char('n'))),
+            Some(Action::GenerateReport)
+        );
     }
 
     #[test]
@@ -553,13 +2571,14 @@ mod tests {
             Some(Action::ShowModelPicker)
         );
         a.update(Action::ShowModelPicker);
-        assert!(!a.status.is_empty());
+        assert!(matches!(a.overlay, Some(Overlay::SettingsForm(_))));
+        a.handle_key(key(KeyCode::Esc));
         assert_eq!(
             a.handle_key(key(KeyCode::Char('p'))),
             Some(Action::ShowProviderPicker)
         );
         a.update(Action::ShowProviderPicker);
-        assert!(!a.status.is_empty());
+        assert!(matches!(a.overlay, Some(Overlay::ProviderPicker(_))));
     }
 
     #[test]
@@ -617,6 +2636,121 @@ mod tests {
             .values
             .iter()
             .any(|(l, v)| l == "Market cap" && v == "$3.40T"));
+    }
+
+    #[test]
+    fn add_dialog_accepts_instrument_text_and_esc_cancels() {
+        let mut a = app();
+        a.handle_key(key(KeyCode::Char('a')));
+        for ch in "ASX:BHP".chars() {
+            a.handle_key(key(KeyCode::Char(ch)));
+        }
+        assert!(matches!(&a.overlay, Some(Overlay::AddTarget(query)) if query == "ASX:BHP"));
+        a.handle_key(key(KeyCode::Esc));
+        assert!(a.overlay.is_none());
+    }
+
+    #[test]
+    fn watchlist_add_and_remove_persist_through_services() {
+        let dir = std::env::temp_dir().join(format!(
+            "delta-watchlist-{}-{}",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let config = dir.join("config.toml");
+        let db_path = dir.join("delta.db");
+        delta_core::db::Db::open(&db_path).unwrap();
+        std::fs::write(
+            &config,
+            format!("db_path = {:?}\n", db_path.display().to_string()),
+        )
+        .unwrap();
+        let mut a = app();
+        a.add_instrument_at(&config, "ASX:BHP").unwrap();
+        assert!(delta_services::config_ops::target_specs(&config)
+            .unwrap()
+            .contains_key("BHP"));
+        assert_eq!(a.desk.watch_state().entries[0].symbol, "BHP");
+        a.remove_instrument_at(&config).unwrap();
+        assert!(delta_services::config_ops::target_specs(&config)
+            .unwrap()
+            .is_empty());
+        assert!(a.desk.watch_state().entries.is_empty());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn empty_watchlist_renders_without_a_selected_instrument() {
+        let mut a = app();
+        a.desk.instruments.clear();
+        for &(w, h) in &[(80, 24), (120, 40), (200, 50)] {
+            let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
+            terminal.draw(|frame| a.draw(frame, frame.area())).unwrap();
+        }
+        assert!(a.desk.watch_state().metric.is_none());
+    }
+
+    #[test]
+    fn watchlist_scrub_moves_across_the_loaded_series() {
+        let mut a = app();
+        a.handle_key(key(KeyCode::Char(']')));
+        let state = a.desk.watch_state();
+        let count = state.metric.unwrap().series.len();
+        assert_eq!(state.scrub, Some(count - 1));
+        a.handle_key(key(KeyCode::Char('[')));
+        assert_eq!(a.desk.watch_state().scrub, Some(count - 2));
+    }
+
+    #[test]
+    fn scrubbed_watchlist_paints_a_date_value_and_cursor() {
+        let mut a = app();
+        a.handle_key(key(KeyCode::Char(']')));
+        let state = a.desk.watch_state();
+        let metric = state.metric.unwrap();
+        let stamp = delta_tui::screens::friendly_date(metric.series_times.last().unwrap());
+        let price = delta_tui::screens::grouped(*metric.series.last().unwrap());
+        let mut screen = Screen::new(120, 40);
+        a.paint(&mut screen);
+        let cells = &screen.cells;
+        let width = screen.w;
+        let chart_rows: String = (4..18)
+            .flat_map(|y| (50..116).map(move |x| cells[y * width + x].ch))
+            .collect();
+        assert!(chart_rows.contains("┊"));
+        assert!(chart_rows.contains(&stamp));
+        assert!(chart_rows.contains(&price));
+    }
+
+    #[test]
+    fn bond_metrics_from_service_reach_the_inspector() {
+        let mut a = app();
+        a.desk.instruments[0].instrument.asset_class = delta_core::models::AssetClass::Bond;
+        let inst = a.desk.instruments[0].instrument.clone();
+        let metrics = delta_services::asset_metrics::normalize_asset_metrics(
+            &inst,
+            &serde_json::json!({"couponRate": {"raw": 0.05}}),
+            vec![4.0, 4.25],
+            vec!["2026-10-08T00:00:00Z".into(), "2026-10-09T00:00:00Z".into()],
+        );
+        a.update(Action::AssetMetrics {
+            range: "1m".into(),
+            data: Box::new(metrics),
+        });
+        let inspector = a.desk.watch_state().metric.unwrap();
+        assert_eq!(inspector.asset_class, "bond");
+        assert_eq!(inspector.change_label.as_deref(), Some("+25.0 bps"));
+        assert!(inspector.values.iter().any(|(label, _)| label == "Coupon"));
+    }
+
+    #[test]
+    fn watchlist_metrics_use_the_instrument_asset_class() {
+        let mut a = app();
+        a.desk.instruments[0].instrument.asset_class = delta_core::models::AssetClass::Bond;
+        let metric = a.desk.watch_state().metric.unwrap();
+        assert_eq!(metric.asset_class, "bond");
+        assert!(metric.change_label.unwrap().ends_with("bps"));
+        assert_eq!(metric.values[0].0, "Current yield");
     }
 
     #[test]
@@ -829,5 +2963,579 @@ mod home_feed_tests {
                 assert!(text.contains(probe), "missing {probe} at {w}x{h}");
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod settings_tests {
+    use super::tests::app;
+    use super::*;
+    use delta_tui::screens::SettingsState;
+    use ratatui::backend::TestBackend;
+
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, crossterm::event::KeyModifiers::NONE)
+    }
+
+    fn settings_app() -> App {
+        let mut a = app();
+        a.handle_key(key(KeyCode::Char('c')));
+        a
+    }
+
+    fn screen_text(a: &mut App, w: u16, h: u16) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
+        terminal.draw(|f| a.draw(f, f.area())).unwrap();
+        terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(ratatui::buffer::Cell::symbol)
+            .collect()
+    }
+
+    #[test]
+    fn settings_tab_paints_live_data_at_all_sizes() {
+        let mut a = settings_app();
+        for &(w, h) in &[(80u16, 24u16), (120, 40), (200, 50)] {
+            let text = screen_text(&mut a, w, h);
+            for probe in [
+                "provider: ● openrouter",
+                "model: ",
+                "sec_edgar  enabled",
+                "diagnostics",
+            ] {
+                assert!(text.contains(probe), "missing {probe:?} at {w}x{h}");
+            }
+            if w >= 100 {
+                assert!(text.contains("delta.db · 4 KB"), "db size at {w}x{h}");
+                assert!(text.contains("latest bar US:AAPL 20 Sep 00:00 UTC"));
+            } else {
+                assert!(
+                    text.contains("80 rows · latest bar 20 Sep 00:00 UTC · spend $0.00"),
+                    "folded summary at {w}x{h}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn diagnostics_toggle_follows_the_breakpoint_and_pins() {
+        let mut a = settings_app();
+        a.viewport = (80, 24); // narrow: folded by default
+        a.handle_key(key(KeyCode::Char('d')));
+        assert_eq!(a.settings.focus, SettingsFocus::Diagnostics);
+        assert!(a.settings.diagnostics_expanded(80));
+        let text = screen_text(&mut a, 80, 24);
+        assert!(
+            text.contains("esc"),
+            "the expanded narrow pane offers esc to close"
+        );
+        a.handle_key(key(KeyCode::Esc));
+        assert!(!a.settings.diagnostics_expanded(80));
+        assert_eq!(a.settings.focus, SettingsFocus::Provider);
+        // Wide stays expanded and esc leaves it open.
+        a.viewport = (120, 40);
+        a.handle_key(key(KeyCode::Char('d')));
+        assert!(a.settings.diagnostics_expanded(120));
+        a.handle_key(key(KeyCode::Esc));
+        assert!(a.settings.diagnostics_expanded(120));
+    }
+
+    #[test]
+    fn focus_keys_and_selections_move() {
+        let mut a = settings_app();
+        a.handle_key(key(KeyCode::Char('l')));
+        assert_eq!(a.settings.focus, SettingsFocus::Plugins);
+        a.handle_key(key(KeyCode::Tab));
+        assert_eq!(a.settings.focus, SettingsFocus::Sources);
+        a.handle_key(key(KeyCode::Tab));
+        assert_eq!(a.settings.focus, SettingsFocus::Markets);
+        a.handle_key(key(KeyCode::BackTab));
+        assert_eq!(a.settings.focus, SettingsFocus::Sources);
+        // The provider table has two rows; the model row is the second.
+        a.handle_key(key(KeyCode::Tab));
+        a.handle_key(key(KeyCode::Tab));
+        a.handle_key(key(KeyCode::Tab));
+        assert_eq!(a.settings.focus, SettingsFocus::Provider);
+        a.handle_key(key(KeyCode::Down));
+        assert_eq!(a.settings.provider_selected, 1);
+        // Enter on the model row opens the model picker action.
+        assert_eq!(
+            a.handle_key(key(KeyCode::Enter)),
+            Some(Action::ShowModelPicker)
+        );
+        a.handle_key(key(KeyCode::Up));
+        assert_eq!(
+            a.handle_key(key(KeyCode::Enter)),
+            Some(Action::ShowProviderPicker)
+        );
+    }
+
+    #[test]
+    fn plugin_detail_and_refresh_status() {
+        let mut a = settings_app();
+        a.handle_key(key(KeyCode::Char('l')));
+        let action = a.handle_key(key(KeyCode::Enter)).expect("action");
+        match action {
+            Action::Status(msg) => {
+                assert!(msg.starts_with("sec_edgar: enabled"), "{msg}");
+            }
+            other => panic!("expected a status line, got {other:?}"),
+        }
+        a.handle_key(key(KeyCode::Char('r')));
+        assert!(
+            a.status.starts_with("diagnostics refreshed "),
+            "{}",
+            a.status
+        );
+    }
+
+    /// A desk over a real temp config + DB, like the live app.
+    fn real_desk_app(dir: &std::path::Path) -> App {
+        std::fs::write(
+            dir.join("config.toml"),
+            format!("db_path = {:?}\n[targets.apple]\nkind = \"company\"\nmarket = \"us\"\ntickers = [\"AAPL\"]\n\
+             [llm]\nprovider = \"openrouter\"\nmodel = \"test-model\"\n\
+             [plugins.sec_edgar]\nenabled = true\ncontact = \"oracle@example.test\"\n", dir.join("delta.db").display().to_string()),
+        )
+        .unwrap();
+        let mut a = app();
+        let now = delta_tui::desk::now_naive();
+        let (_, mut config) = delta_core::config::load_config(&dir.join("config.toml")).unwrap();
+        config.db_path = dir.join("delta.db").display().to_string();
+        // The DB file is created by the settings loader on first open.
+        a.desk.settings = delta_tui::screens::SettingsData::load(
+            &config,
+            &dir.join("delta.db"),
+            &dir.join(".env"),
+            now,
+        );
+        a.desk.settings_footer = a.desk.settings.footer(now);
+        a.desk.config_path = Some(dir.join("config.toml"));
+        a.handle_key(key(KeyCode::Char('c')));
+        a
+    }
+
+    fn type_into(form_keys: &[&str], a: &mut App) {
+        for text in form_keys {
+            for ch in text.chars() {
+                a.handle_key(key(KeyCode::Char(ch)));
+            }
+            a.handle_key(key(KeyCode::Tab));
+        }
+    }
+
+    #[test]
+    fn add_market_edit_flows_through_the_services_layer() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut a = real_desk_app(dir.path());
+        // The default config has the built-in markets only.
+        let ids: Vec<&str> = a
+            .desk
+            .settings
+            .markets
+            .iter()
+            .map(|m| m.id.as_str())
+            .collect();
+        assert_eq!(ids, ["asx", "us"], "the built-in markets before the edit");
+        a.handle_key(key(KeyCode::Char('a')));
+        assert!(matches!(a.overlay, Some(Overlay::SettingsForm(_))));
+        type_into(&["lse", "London Stock Exchange", "GBP", ".L"], &mut a);
+        a.handle_key(key(KeyCode::Enter));
+        assert!(a.overlay.is_none(), "the form closes on save");
+        assert_eq!(a.status, "market saved");
+        let raw = delta_core::config::load_toml(&dir.path().join("config.toml")).unwrap();
+        assert_eq!(raw["markets"]["lse"]["currency"], "GBP");
+        assert_eq!(raw["markets"]["lse"]["yahoo_suffix"], ".L");
+        // The reloaded screen shows the new market.
+        let ids: Vec<&str> = a
+            .desk
+            .settings
+            .markets
+            .iter()
+            .map(|m| m.id.as_str())
+            .collect();
+        assert_eq!(ids, ["asx", "lse", "us"]);
+        let text = screen_text(&mut a, 120, 40);
+        assert!(text.contains("London Stock Exchange"));
+        assert!(text.contains(".L"));
+    }
+
+    #[test]
+    fn edit_market_prefills_and_saves() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut a = real_desk_app(dir.path());
+        delta_services::config_ops::save_market(
+            &dir.path().join("config.toml"),
+            "lse",
+            "London Stock Exchange",
+            "GBP",
+            ".L",
+        )
+        .unwrap();
+        a.desk.reload_settings();
+        a.settings.market_selected = 1;
+        a.handle_key(key(KeyCode::Char('e')));
+        let Some(Overlay::SettingsForm(modal)) = &a.overlay else {
+            panic!("edit form open");
+        };
+        assert_eq!(modal.form.title, "edit market");
+        assert_eq!(modal.form.fields[0].value(), "lse");
+        a.handle_key(key(KeyCode::Enter));
+        assert!(a.overlay.is_none());
+        assert_eq!(a.status, "market saved");
+    }
+
+    #[test]
+    fn remove_market_is_blocked_for_builtins() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut a = real_desk_app(dir.path());
+        if let Some(action) = a.handle_key(key(KeyCode::Char('x'))) {
+            a.update(action);
+        }
+        assert_eq!(a.status, "only user-defined markets can be removed");
+    }
+
+    #[test]
+    fn plugin_toggle_flips_the_config_and_the_row() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut a = real_desk_app(dir.path());
+        if let Some(action) = a.handle_key(key(KeyCode::Char('t'))) {
+            a.update(action);
+        }
+        assert_eq!(a.status, "sec_edgar disabled");
+        let raw = delta_core::config::load_toml(&dir.path().join("config.toml")).unwrap();
+        assert_eq!(raw["plugins"]["sec_edgar"]["enabled"], false);
+        let text = screen_text(&mut a, 120, 40);
+        assert!(text.contains("○  sec_edgar  disabled"), "{text}");
+        if let Some(action) = a.handle_key(key(KeyCode::Char('t'))) {
+            a.update(action);
+        }
+        assert_eq!(a.status, "sec_edgar enabled");
+    }
+
+    #[test]
+    fn source_setup_persists_the_contact_field() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut a = real_desk_app(dir.path());
+        // The configured contact makes the source ready.
+        assert_eq!(a.desk.settings.sources.len(), 1);
+        assert!(a.desk.settings.sources[0].ready);
+        a.handle_key(key(KeyCode::Char('s')));
+        assert!(matches!(a.overlay, Some(Overlay::SettingsForm(_))));
+        if let Some(Overlay::SettingsForm(modal)) = &a.overlay {
+            assert_eq!(modal.form.fields[0].value(), "oracle@example.test");
+        }
+        for _ in "oracle@example.test".chars() {
+            a.handle_key(key(KeyCode::Backspace));
+        }
+        for ch in "next@example.test".chars() {
+            a.handle_key(key(KeyCode::Char(ch)));
+        }
+        a.handle_key(key(KeyCode::Enter));
+        assert!(a.overlay.is_none());
+        assert_eq!(a.status, "source saved");
+        let raw = delta_core::config::load_toml(&dir.path().join("config.toml")).unwrap();
+        assert_eq!(raw["plugins"]["sec_edgar"]["contact"], "next@example.test");
+    }
+
+    #[test]
+    fn settings_adds_and_removes_a_target_through_services() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut a = real_desk_app(dir.path());
+        a.handle_key(key(KeyCode::Char('n')));
+        assert!(matches!(a.overlay, Some(Overlay::SettingsForm(_))));
+        type_into(&["chips", "theme", "us", "NVDA,AMD"], &mut a);
+        a.handle_key(key(KeyCode::Enter));
+        assert_eq!(a.status, "target added");
+        let specs =
+            delta_services::config_ops::target_specs(&dir.path().join("config.toml")).unwrap();
+        assert_eq!(specs["chips"].tickers, ["NVDA", "AMD"]);
+
+        a.handle_key(key(KeyCode::Char('w')));
+        if let Some(Overlay::TargetPicker(targets, _)) = &a.overlay {
+            assert_eq!(targets, &["apple", "chips"]);
+        } else {
+            panic!("target picker did not open");
+        }
+        a.handle_key(key(KeyCode::Down));
+        a.handle_key(key(KeyCode::Enter));
+        if let Some(Overlay::SettingsForm(modal)) = &a.overlay {
+            assert_eq!(modal.form.fields[0].value(), "chips");
+            assert_eq!(modal.form.fields[3].value(), "NVDA,AMD");
+        } else {
+            panic!("edit form did not open");
+        }
+        for _ in 0..3 {
+            a.handle_key(key(KeyCode::Tab));
+        }
+        for _ in "NVDA,AMD".chars() {
+            a.handle_key(key(KeyCode::Backspace));
+        }
+        for ch in "NVDA,INTC".chars() {
+            a.handle_key(key(KeyCode::Char(ch)));
+        }
+        a.handle_key(key(KeyCode::Enter));
+        assert_eq!(a.status, "target saved");
+        let specs =
+            delta_services::config_ops::target_specs(&dir.path().join("config.toml")).unwrap();
+        assert_eq!(specs["chips"].tickers, ["NVDA", "INTC"]);
+        a.handle_key(key(KeyCode::Char('w')));
+        a.handle_key(key(KeyCode::Down));
+        a.handle_key(key(KeyCode::Char('x')));
+        if let Some(Overlay::SettingsForm(modal)) = &a.overlay {
+            assert_eq!(modal.form.fields[0].value(), "chips");
+        } else {
+            panic!("remove form did not open");
+        }
+        a.handle_key(key(KeyCode::Enter));
+        assert_eq!(a.status, "target removed");
+        let specs =
+            delta_services::config_ops::target_specs(&dir.path().join("config.toml")).unwrap();
+        assert!(!specs.contains_key("chips"));
+    }
+
+    #[test]
+    fn rejected_submits_keep_the_form_open() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut a = real_desk_app(dir.path());
+        a.handle_key(key(KeyCode::Char('a')));
+        // Submit with empty fields: the required validator rejects.
+        a.handle_key(key(KeyCode::Enter));
+        assert!(
+            matches!(a.overlay, Some(Overlay::SettingsForm(_))),
+            "the form stays open on a rejected submit"
+        );
+        // A bad market id reaches the service and surfaces its message.
+        type_into(&["No ID", "London", "GBP", ""], &mut a);
+        a.handle_key(key(KeyCode::Enter));
+        assert_eq!(
+            a.status,
+            "market ID must use lowercase letters, numbers, or underscores"
+        );
+        assert!(matches!(a.overlay, Some(Overlay::SettingsForm(_))));
+    }
+
+    #[test]
+    fn offline_edits_explain_themselves() {
+        let mut a = settings_app();
+        assert_eq!(a.desk.config_path, None);
+        match a.handle_key(key(KeyCode::Char('t'))).unwrap() {
+            Action::Status(msg) => assert_eq!(msg, "offline: no config.toml"),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn settings_form_paints_over_the_screen() {
+        let mut a = settings_app();
+        a.handle_key(key(KeyCode::Char('a')));
+        let text = screen_text(&mut a, 120, 40);
+        assert!(text.contains("add market"), "{text}");
+        assert!(text.contains("ID"));
+        a.handle_key(key(KeyCode::Esc));
+        assert!(a.overlay.is_none());
+    }
+
+    #[test]
+    fn settings_state_default_matches_the_golden_world() {
+        let state = SettingsState::default();
+        assert_eq!(state.focus, SettingsFocus::Provider);
+        assert_eq!(state.provider_selected, 0);
+        assert_eq!(state.diagnostics_open, None);
+    }
+
+    #[test]
+    fn thesis_form_requires_claim_and_creates_visible_thesis() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut a = real_desk_app(dir.path());
+        a.desk.source = delta_tui::desk::Source::Real(dir.path().join("delta.db"));
+        a.handle_key(key(KeyCode::Char('4')));
+        a.handle_key(key(KeyCode::Char('n')));
+        a.handle_key(key(KeyCode::Enter));
+        assert_eq!(a.status, "claim is required");
+        assert!(a.overlay.is_some());
+        for ch in "Apple grows".chars() {
+            a.handle_key(key(KeyCode::Char(ch)));
+        }
+        a.handle_key(key(KeyCode::Enter));
+        assert!(a.overlay.is_none());
+        assert_eq!(a.theses.fleet.len(), 1);
+        assert!(screen_text(&mut a, 120, 40).contains("Apple grows"));
+    }
+
+    #[test]
+    fn reviewing_candidate_changes_live_health_and_rejects_only_pending() {
+        use delta_core::db::StoreItem;
+        use delta_core::models::NewsItem;
+        let dir = tempfile::tempdir().unwrap();
+        let mut a = real_desk_app(dir.path());
+        let path = dir.path().join("delta.db");
+        a.desk.source = delta_tui::desk::Source::Real(path.clone());
+        let mut db = delta_core::db::Db::open(&path).unwrap();
+        db.store_items(&[StoreItem::News(NewsItem {
+            id: "n1".to_string(),
+            instrument_ids: vec!["US:AAPL".to_string()],
+            published: chrono::Utc::now().naive_utc(),
+            title: "Services grow".to_string(),
+            url: "https://example.test/n1".to_string(),
+            body: None,
+            source: "rss".to_string(),
+        })])
+        .unwrap();
+        let thesis = delta_services::create_thesis(
+            &db,
+            "Apple grows",
+            "",
+            &[],
+            &[],
+            &["US:AAPL".to_string()],
+            "5y",
+            None,
+        )
+        .unwrap();
+        delta_services::add_evidence(&db, &thesis.id, "news:n1", "support", "growth", None)
+            .unwrap();
+        a.handle_key(key(KeyCode::Char('4')));
+        assert!(a.theses.fleet[0].result.is_none());
+        a.handle_key(key(KeyCode::Char('e')));
+        a.handle_key(key(KeyCode::Char('a')));
+        assert_eq!(a.theses.fleet[0].result.as_ref().unwrap().support, 1);
+        assert!(a.theses.selected_link().unwrap().accepted);
+        assert!(matches!(
+            a.handle_key(key(KeyCode::Char('x'))),
+            Some(Action::Status(_))
+        ));
+        a.handle_key(key(KeyCode::Char('u')));
+        assert!(a.theses.fleet[0].result.is_none());
+        a.handle_key(key(KeyCode::Char('x')));
+        assert!(a.theses.links.is_empty());
+    }
+
+    #[test]
+    fn decision_journal_creates_reviews_filters_and_deletes_via_services() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("delta.db");
+        let mut a = real_desk_app(dir.path());
+        a.desk.source = delta_tui::desk::Source::Real(db_path.clone());
+        a.handle_key(key(KeyCode::Char('6')));
+        a.handle_key(key(KeyCode::Char('n')));
+        type_into(
+            &[
+                "US:AAPL",
+                "Cash flows should grow",
+                "20x earnings",
+                "6m",
+                "2027-01-01",
+                "Margins contract",
+                "",
+            ],
+            &mut a,
+        );
+        a.handle_key(key(KeyCode::Enter));
+        assert!(a.overlay.is_none(), "{}", a.status);
+        let db = delta_core::db::Db::open(&db_path).unwrap();
+        let decisions = delta_services::list_decisions(&db, None, true).unwrap();
+        assert_eq!(decisions.len(), 1);
+        assert_eq!(decisions[0].rationale, "Cash flows should grow");
+
+        a.handle_key(key(KeyCode::Char('r')));
+        let review_screen = screen_text(&mut a, 120, 40);
+        assert!(review_screen.contains("review decision"));
+        assert!(review_screen.contains("ctrl+s save  esc cancel"));
+        type_into(&["Margins remain healthy"], &mut a);
+        if let Some(Overlay::DecisionForm(modal)) = &mut a.overlay {
+            modal.form.fields[1].input.set_value("invalid");
+        }
+        a.handle_key(key(KeyCode::Enter));
+        assert!(matches!(a.overlay, Some(Overlay::DecisionForm(_))));
+        if let Some(Overlay::DecisionForm(modal)) = &mut a.overlay {
+            modal.form.fields[1].input.set_value("REVIEWED");
+        }
+        a.handle_key(key(KeyCode::Enter));
+        assert!(a.overlay.is_none(), "{}", a.status);
+        let reviews = delta_services::review_history(&db, &decisions[0].id).unwrap();
+        assert_eq!(reviews.len(), 1);
+        assert_eq!(reviews[0].status.as_deref(), Some("reviewed"));
+
+        a.handle_key(key(KeyCode::Char('e')));
+        if let Some(Overlay::DecisionForm(modal)) = &mut a.overlay {
+            modal.form.fields[1]
+                .input
+                .set_value("Cash flows keep growing");
+        } else {
+            panic!("edit form did not open");
+        }
+        a.handle_key(key(KeyCode::Enter));
+        assert_eq!(
+            delta_services::get_decision(&db, &decisions[0].id)
+                .unwrap()
+                .rationale,
+            "Cash flows keep growing"
+        );
+        assert_eq!(
+            delta_services::review_history(&db, &decisions[0].id)
+                .unwrap()
+                .len(),
+            1
+        );
+
+        a.handle_key(key(KeyCode::Char('/')));
+        for ch in "other".chars() {
+            a.handle_key(key(KeyCode::Char(ch)));
+        }
+        a.handle_key(key(KeyCode::Enter));
+        assert!(a.decisions.as_ref().unwrap().decisions.is_empty());
+        a.handle_key(key(KeyCode::Char('/')));
+        for _ in 0..5 {
+            a.handle_key(key(KeyCode::Backspace));
+        }
+        a.handle_key(key(KeyCode::Enter));
+        assert_eq!(a.decisions.as_ref().unwrap().decisions.len(), 1);
+
+        a.handle_key(key(KeyCode::Char('d')));
+        assert!(screen_text(&mut a, 120, 40).contains("confirm delete"));
+        assert_eq!(
+            delta_services::list_decisions(&db, None, true)
+                .unwrap()
+                .len(),
+            1
+        );
+        a.handle_key(key(KeyCode::Char('y')));
+        assert!(delta_services::list_decisions(&db, None, true)
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn decision_form_rejects_missing_fields_and_bad_dates_without_closing() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut a = real_desk_app(dir.path());
+        a.desk.source = delta_tui::desk::Source::Real(dir.path().join("delta.db"));
+        a.handle_key(key(KeyCode::Char('6')));
+        a.handle_key(key(KeyCode::Char('n')));
+        a.handle_key(key(KeyCode::Enter));
+        assert!(matches!(a.overlay, Some(Overlay::DecisionForm(_))));
+        type_into(
+            &[
+                "US:AAPL",
+                "Rationale",
+                "20x earnings",
+                "6m",
+                "next year",
+                "Margins",
+                "",
+            ],
+            &mut a,
+        );
+        a.handle_key(key(KeyCode::Enter));
+        assert_eq!(a.status, "review date must be YYYY-MM-DD");
+        assert!(matches!(a.overlay, Some(Overlay::DecisionForm(_))));
+        let db = delta_core::db::Db::open(dir.path().join("delta.db")).unwrap();
+        assert!(delta_services::list_decisions(&db, None, true)
+            .unwrap()
+            .is_empty());
     }
 }

@@ -8,14 +8,18 @@
 //! this module rather than core/db so the stage ships without touching shared
 //! files; every public function creates them first, idempotently.
 //!
-//! Not ported here: `propose_evidence` (the LLM discovery call and its
-//! `ThesisDraft` payload). It lands with the theses screen stream, which owns
-//! the prompt/structured-call wiring.
+//! Discovery proposes candidate rows; acceptance remains a user action.
 
 use chrono::{NaiveDateTime, Timelike, Utc};
+use delta_core::config::AppConfig;
 
 use delta_core::db::Db;
 use delta_core::ids::stable_id;
+use delta_llm::client::LlmClient;
+use delta_llm::router::model_for;
+use serde::Deserialize;
+use serde_json::json;
+use std::path::Path;
 
 use crate::error::ServiceError;
 
@@ -25,7 +29,7 @@ pub(crate) fn truncate_to_micros(ts: NaiveDateTime) -> NaiveDateTime {
     ts.with_nanosecond(ts.nanosecond() / 1_000 * 1_000)
         .unwrap_or(ts)
 }
-use crate::evidence::{evidence, EvidenceItem};
+use crate::evidence::{cite, evidence, EvidenceItem};
 use crate::thesis_health::Thesis;
 
 /// Sorted for stable "side must be one of ..." error messages.
@@ -48,6 +52,107 @@ pub struct ThesisEvidence {
     pub side: String,
     pub note: String,
     pub accepted: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct CandidateDraft {
+    evidence_id: String,
+    side: String,
+    note: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ThesisDraft {
+    #[serde(default)]
+    candidates: Vec<CandidateDraft>,
+}
+
+pub(crate) fn configured_client(
+    cfg: &AppConfig,
+    env_path: &Path,
+) -> Result<LlmClient, ServiceError> {
+    delta_llm::client::build_client(
+        &cfg.llm_provider,
+        &|name| delta_core::config::read_env_value_named(name, env_path),
+        std::time::Duration::from_secs(60),
+        Some(cfg.llm_max_output_tokens),
+        &cfg.llm_base_url,
+        &cfg.llm_api_key_env,
+    )
+    .map_err(|err| ServiceError::invalid(err.to_string()))
+}
+
+pub async fn propose_evidence_configured(
+    db: &mut Db,
+    cfg: &AppConfig,
+    env_path: &Path,
+    thesis_id: &str,
+) -> Result<Vec<ThesisEvidence>, ServiceError> {
+    let client = configured_client(cfg, env_path)?;
+    propose_evidence(db, &client, cfg, thesis_id, None, 100).await
+}
+
+/// Ask the routed thesis model to classify new gathered evidence. Unknown and
+/// duplicate ids are ignored; every stored row starts unaccepted.
+pub async fn propose_evidence(
+    db: &mut Db,
+    client: &LlmClient,
+    cfg: &AppConfig,
+    thesis_id: &str,
+    since: Option<&str>,
+    limit: usize,
+) -> Result<Vec<ThesisEvidence>, ServiceError> {
+    let thesis = get_thesis(db, thesis_id)?;
+    let linked: std::collections::BTreeSet<String> = evidence_for(db, thesis_id, false)?
+        .into_iter()
+        .map(|row| row.evidence_id)
+        .collect();
+    let fresh: Vec<EvidenceItem> = gather(db, &thesis.targets, since, limit)?
+        .into_iter()
+        .filter(|item| !linked.contains(&item.id))
+        .collect();
+    if fresh.is_empty() {
+        return Ok(Vec::new());
+    }
+    let model =
+        model_for(cfg, "thesis", None).map_err(|err| ServiceError::invalid(err.to_string()))?;
+    let vars = json!({
+        "claim": thesis.claim, "scope": thesis.scope,
+        "assumptions": thesis.assumptions, "falsifiers": thesis.falsifiers,
+        "time_horizon": thesis.time_horizon,
+        "items": fresh.iter().map(|item| json!({"id": item.id, "cite": cite(item)})).collect::<Vec<_>>(),
+    });
+    let (draft, _) = delta_llm::structured::structured::<ThesisDraft>(
+        client,
+        db,
+        "thesis",
+        &model,
+        "thesis_v1.j2",
+        &vars,
+        Some(&crate::schemas::thesis_draft()),
+    )
+    .await
+    .map_err(|err| ServiceError::invalid(err.to_string()))?;
+    let fresh_ids: std::collections::BTreeSet<&str> =
+        fresh.iter().map(|item| item.id.as_str()).collect();
+    let mut seen = std::collections::BTreeSet::new();
+    let mut stored = Vec::new();
+    for candidate in draft.candidates {
+        if !fresh_ids.contains(candidate.evidence_id.as_str())
+            || !seen.insert(candidate.evidence_id.clone())
+        {
+            continue;
+        }
+        stored.push(add_evidence(
+            db,
+            thesis_id,
+            &candidate.evidence_id,
+            &candidate.side,
+            &candidate.note,
+            Some(false),
+        )?);
+    }
+    Ok(stored)
 }
 
 /// Stable id: the same claim with the same scope is the same thesis

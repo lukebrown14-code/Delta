@@ -170,3 +170,26 @@ fn add_target_validates_and_persists() {
     assert!(!target_specs(&path).unwrap().contains_key("t"));
     assert!(remove_target(&path, "ghost").is_err());
 }
+
+#[test]
+fn update_target_keeps_other_saved_details() {
+    let (_dir, path) = temp_config(
+        "# keep\n[targets.chips]\nkind = \"company\"\nmarket = \"us\"\n\
+         tickers = [\"NVDA\"]\ntags = [\"watch\"]\nnotes = \"Long view\"\n",
+    );
+    delta_services::config_ops::update_target(
+        &path,
+        "chips",
+        "theme",
+        "asx",
+        &["bhp".to_string(), "rio".to_string()],
+    )
+    .unwrap();
+    let specs = target_specs(&path).unwrap();
+    assert_eq!(specs["chips"].kind, "theme");
+    assert_eq!(specs["chips"].markets, ["asx"]);
+    assert_eq!(specs["chips"].tickers, ["BHP", "RIO"]);
+    assert_eq!(specs["chips"].notes, "Long view");
+    assert!(specs["chips"].tags.contains("watch"));
+    assert!(std::fs::read_to_string(&path).unwrap().contains("# keep"));
+}

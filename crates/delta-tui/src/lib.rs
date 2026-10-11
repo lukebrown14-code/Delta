@@ -80,6 +80,11 @@ pub enum Action {
     ShowProviderPicker,
     /// A form submitted successfully (carries the form title).
     FormSubmitted(String),
+    /// Long-running thesis model calls are dispatched by the event loop.
+    ThesisFind(String),
+    ThesisSummarize(String),
+    ThesisFound(usize),
+    ThesisSummary(Box<delta_services::ThesisSummary>),
     /// Live quote prices keyed by instrument id (from the quotes worker).
     Quotes(BTreeMap<String, f64>),
     /// Inspector metric rows (label, formatted value) for one instrument.
@@ -87,14 +92,36 @@ pub enum Action {
         instrument: String,
         rows: Vec<(String, String)>,
     },
+    /// Asset-class-aware provider metrics and history for one instrument.
+    AssetMetrics {
+        range: String,
+        data: Box<delta_services::asset_metrics::AssetMetrics>,
+    },
     /// Ingest finished; carries per-source row counts.
     Ingested(BTreeMap<String, usize>),
     /// Refreshed Home overview values (headline, pulse, upcoming, health).
     HomeRefresh(crate::screens::HomeFeed),
     /// Request a gather run (UI -> ingest worker).
     Gather,
+    /// Gather evidence for one selected company.
+    GatherCompany(String),
+    /// Generate the selected company's cited report on a background task.
+    GenerateReport,
+    /// Open a selected evidence source URL in the system browser.
+    OpenSource(String),
     /// One-line worker status for the status overlay.
     Status(String),
+    AskQuestion {
+        generation: u64,
+        history: Vec<delta_services::chat::ChatMessage>,
+        targets: Vec<String>,
+    },
+    AskAnswered {
+        generation: u64,
+        result: Result<delta_services::chat::ChatMessage, String>,
+        citation_labels: BTreeMap<String, String>,
+        sidebar_labels: BTreeMap<String, String>,
+    },
 }
 
 /// Ratatui component template (see `docs/RUST_REWRITE_PLAN.md`).

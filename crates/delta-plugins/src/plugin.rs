@@ -218,10 +218,101 @@ pub fn default_plugins() -> Vec<Box<dyn DataPlugin>> {
     ]
 }
 
+/// The registry with each plugin's `[plugins.<name>]` table applied:
+/// `enabled = false` drops it, everything else configures it, and a
+/// declared `scope` narrows the instruments it sees.
+pub fn configured_plugins(
+    cfg: &delta_core::config::AppConfig,
+) -> Vec<std::sync::Arc<dyn DataPlugin>> {
+    default_plugins()
+        .into_iter()
+        .filter_map(|mut plugin| {
+            let table = cfg.plugins.get(plugin.name());
+            if table
+                .and_then(|value| value.get("enabled"))
+                .and_then(Value::as_bool)
+                == Some(false)
+            {
+                return None;
+            }
+            let mut settings = table
+                .cloned()
+                .unwrap_or_else(|| Value::Object(serde_json::Map::new()));
+            if matches!(plugin.name(), "yfinance" | "yfinance_calendar") {
+                let suffixes = crate::yahoo::configured_suffixes(cfg, plugin.name());
+                if let Some(object) = settings.as_object_mut() {
+                    object.insert("suffixes".into(), serde_json::json!(suffixes));
+                }
+            }
+            plugin.configure(&settings);
+            let scope = parse_scope(settings.get("scope"), plugin.market());
+            Some(std::sync::Arc::new(ConfiguredPlugin { plugin, scope })
+                as std::sync::Arc<dyn DataPlugin>)
+        })
+        .collect()
+}
+
+struct ConfiguredPlugin {
+    plugin: Box<dyn DataPlugin>,
+    scope: Scope,
+}
+
+#[async_trait::async_trait]
+impl DataPlugin for ConfiguredPlugin {
+    fn name(&self) -> &'static str {
+        self.plugin.name()
+    }
+
+    fn market(&self) -> Option<&'static str> {
+        self.plugin.market()
+    }
+
+    fn universe(&self, universe: &[Instrument]) -> Vec<Instrument> {
+        self.scope.filter(&self.plugin.universe(universe))
+    }
+
+    async fn fetch(
+        &self,
+        instruments: &[Instrument],
+        since: NaiveDateTime,
+    ) -> Result<Rows, PluginError> {
+        self.plugin.fetch(instruments, since).await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use delta_core::models::AssetClass;
+
+    #[test]
+    fn configured_registry_respects_enabled_and_scope() {
+        let mut cfg = delta_core::config::AppConfig::default();
+        cfg.plugins.insert(
+            "rss".to_string(),
+            serde_json::json!({
+                "enabled": true,
+                "feeds": ["https://example.test/feed"],
+                "scope": {"markets": ["us"]}
+            }),
+        );
+        cfg.plugins.insert(
+            "sec_edgar".to_string(),
+            serde_json::json!({"enabled": false}),
+        );
+        let plugins = configured_plugins(&cfg);
+        assert!(plugins.iter().any(|plugin| plugin.name() == "rss"));
+        assert!(!plugins.iter().any(|plugin| plugin.name() == "sec_edgar"));
+        let rss = plugins
+            .iter()
+            .find(|plugin| plugin.name() == "rss")
+            .unwrap();
+        let us = inst(&[], AssetClass::Equity, "us", &[]);
+        let asx = inst(&[], AssetClass::Equity, "asx", &[]);
+        let scoped = rss.universe(&[us.clone(), asx]);
+        assert_eq!(scoped.len(), 1);
+        assert_eq!(scoped[0].id, us.id);
+    }
 
     fn inst(watchlists: &[&str], class: AssetClass, market: &str, tags: &[&str]) -> Instrument {
         Instrument {

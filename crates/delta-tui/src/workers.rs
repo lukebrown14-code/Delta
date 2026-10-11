@@ -8,36 +8,64 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use delta_core::models::Instrument;
-use delta_plugins::{decode_stream_frame, yf_symbol, DataPlugin, YahooClient, YahooQuotes};
+use delta_plugins::{decode_stream_frame, DataPlugin, YahooClient, YahooQuotes};
 use tokio::sync::mpsc;
 
 use crate::desk::now_naive;
 use crate::Action;
 
-/// Spawn the background workers. Returns the gather-request channel the UI
-/// sends [`Action::Gather`] through.
+/// Active workers for the current watched universe. Replacing this handle
+/// stops obsolete subscriptions after a target is added or removed.
+pub struct Workers {
+    pub gather_tx: mpsc::UnboundedSender<Option<String>>,
+    pub metrics_tx: mpsc::UnboundedSender<(Instrument, String)>,
+    tasks: Vec<tokio::task::JoinHandle<()>>,
+}
+
+impl Drop for Workers {
+    fn drop(&mut self) {
+        for task in &self.tasks {
+            task.abort();
+        }
+    }
+}
+
+/// Spawn the background workers for the current watched universe.
 pub fn spawn(
     bus: mpsc::UnboundedSender<Action>,
     universe: Vec<Instrument>,
     db_path: Option<PathBuf>,
     quotes_enabled: bool,
-) -> mpsc::UnboundedSender<()> {
+) -> Workers {
+    let mut tasks = Vec::new();
+    let (metrics_tx, metrics_rx) = mpsc::unbounded_channel();
     if quotes_enabled {
-        tokio::spawn(stream_quotes_worker(bus.clone(), universe.clone()));
-        tokio::spawn(metrics_worker(bus.clone(), universe.clone()));
+        tasks.push(tokio::spawn(stream_quotes_worker(
+            bus.clone(),
+            universe.clone(),
+        )));
+        tasks.push(tokio::spawn(metrics_worker(
+            bus.clone(),
+            universe.clone(),
+            metrics_rx,
+        )));
     }
     let ids: Vec<String> = universe.iter().map(|i| i.id.clone()).collect();
-    let (gather_tx, gather_rx) = mpsc::unbounded_channel::<()>();
-    tokio::spawn(gather_worker(
+    let (gather_tx, gather_rx) = mpsc::unbounded_channel::<Option<String>>();
+    tasks.push(tokio::spawn(gather_worker(
         bus.clone(),
         universe,
         db_path.clone(),
         gather_rx,
-    ));
+    )));
     if let Some(db_path) = db_path {
-        tokio::spawn(home_refresh_worker(bus, db_path, ids));
+        tasks.push(tokio::spawn(home_refresh_worker(bus, db_path, ids)));
     }
-    gather_tx
+    Workers {
+        gather_tx,
+        metrics_tx,
+        tasks,
+    }
 }
 
 /// Re-run the Home analytics queries and push them to the bus, low-frequency
@@ -125,30 +153,39 @@ async fn stream_quotes_worker(bus: mpsc::UnboundedSender<Action>, universe: Vec<
 
 /// Refresh the inspector metrics (`quoteSummary`) every `METRICS_INTERVAL`.
 const METRICS_INTERVAL: Duration = Duration::from_secs(60);
-const METRICS_MODULES: &str = "price,summaryDetail,defaultKeyStatistics,financialData,assetProfile";
 
-async fn metrics_worker(bus: mpsc::UnboundedSender<Action>, universe: Vec<Instrument>) {
+async fn metrics_worker(
+    bus: mpsc::UnboundedSender<Action>,
+    universe: Vec<Instrument>,
+    mut requests: mpsc::UnboundedReceiver<(Instrument, String)>,
+) {
     let client = YahooClient::default();
+    let mut refresh = tokio::time::interval(METRICS_INTERVAL);
     loop {
-        for inst in &universe {
-            let symbol = yf_symbol(inst, &client.suffixes);
-            match client.quote_summary(&symbol, METRICS_MODULES).await {
-                Ok(payload) => {
-                    if let Some(info) = delta_plugins::merge_quote_summary(&payload) {
-                        let rows = delta_plugins::headline_values(&info);
-                        let _ = bus.send(Action::Metrics {
-                            instrument: inst.id.clone(),
-                            rows,
-                        });
-                    }
-                }
-                Err(e) => {
-                    let _ = bus.send(Action::Status(format!("metrics error: {e}")));
+        tokio::select! {
+            _ = refresh.tick() => {
+                for inst in &universe {
+                    send_metrics(&bus, &client, inst, "1m").await;
                 }
             }
+            Some((inst, range)) = requests.recv() => {
+                send_metrics(&bus, &client, &inst, &range).await;
+            }
         }
-        tokio::time::sleep(METRICS_INTERVAL).await;
     }
+}
+
+async fn send_metrics(
+    bus: &mpsc::UnboundedSender<Action>,
+    client: &YahooClient,
+    inst: &Instrument,
+    range: &str,
+) {
+    let data = delta_services::asset_metrics::fetch_asset_metrics(client, inst, range, None).await;
+    let _ = bus.send(Action::AssetMetrics {
+        range: range.to_string(),
+        data: Box::new(data),
+    });
 }
 
 /// Run the ingest pipeline over the universe on `Gather` requests.
@@ -156,7 +193,7 @@ async fn gather_worker(
     bus: mpsc::UnboundedSender<Action>,
     universe: Vec<Instrument>,
     db_path: Option<PathBuf>,
-    mut requests: mpsc::UnboundedReceiver<()>,
+    mut requests: mpsc::UnboundedReceiver<Option<String>>,
 ) {
     let Some(db_path) = db_path else {
         // Offline desk: acknowledge gathers so the UI can say so.
@@ -175,7 +212,7 @@ async fn gather_worker(
         Arc::new(delta_plugins::sec::SecEdgar::default()),
         Arc::new(delta_plugins::yahoo::YfinanceBars::default()),
     ];
-    while requests.recv().await.is_some() {
+    while let Some(company) = requests.recv().await {
         let _ = bus.send(Action::Status("gathering…".to_string()));
         let since = (now_naive() - chrono::Duration::days(30))
             .format("%Y-%m-%d")
@@ -187,10 +224,15 @@ async fn gather_worker(
                 continue;
             }
         };
+        let selected: Vec<Instrument> = universe
+            .iter()
+            .filter(|inst| company.as_ref().is_none_or(|id| &inst.id == id))
+            .cloned()
+            .collect();
         match delta_services::pipeline::ingest(
             &mut db,
             &plugins,
-            &universe,
+            &selected,
             None,
             None,
             Some(&since),
