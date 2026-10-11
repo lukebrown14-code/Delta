@@ -125,6 +125,90 @@
       "size": "200x50",
       "state": "live-ask",
       "tier": "B"
+    },
+    {
+      "file": "live-decisions-80x24.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "80x24",
+      "state": "live-decisions",
+      "tier": "A"
+    },
+    {
+      "file": "live-decisions-120x40.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "120x40",
+      "state": "live-decisions",
+      "tier": "A"
+    },
+    {
+      "file": "live-decisions-200x50.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "200x50",
+      "state": "live-decisions",
+      "tier": "A"
+    },
+    {
+      "file": "live-decisions-review-80x24.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "80x24",
+      "state": "live-decisions-review",
+      "tier": "A"
+    },
+    {
+      "file": "live-decisions-review-120x40.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "120x40",
+      "state": "live-decisions-review",
+      "tier": "A"
+    },
+    {
+      "file": "live-decisions-review-200x50.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "200x50",
+      "state": "live-decisions-review",
+      "tier": "A"
+    },
+    {
+      "file": "live-decisions-confirm-80x24.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "80x24",
+      "state": "live-decisions-confirm",
+      "tier": "A"
+    },
+    {
+      "file": "live-decisions-confirm-120x40.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "120x40",
+      "state": "live-decisions-confirm",
+      "tier": "A"
+    },
+    {
+      "file": "live-decisions-confirm-200x50.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "200x50",
+      "state": "live-decisions-confirm",
+      "tier": "A"
+    },
+    {
+      "file": "live-decisions-review-form-80x24.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "80x24",
+      "state": "live-decisions-review-form",
+      "tier": "A"
+    },
+    {
+      "file": "live-decisions-review-form-120x40.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "120x40",
+      "state": "live-decisions-review-form",
+      "tier": "A"
+    },
+    {
+      "file": "live-decisions-review-form-200x50.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "200x50",
+      "state": "live-decisions-review-form",
+      "tier": "A"
     }
   ],
   "seed": "fixtures/golden_seed.db"

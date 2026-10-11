@@ -70,4 +70,5 @@ LIVE_SCENARIOS: tuple[Scenario, ...] = (
     + theses.POPULATED_SCENARIOS
     + research.POPULATED_SCENARIOS
     + ask.POPULATED_SCENARIOS
+    + decisions.POPULATED_SCENARIOS
 )

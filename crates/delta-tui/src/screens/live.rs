@@ -12,6 +12,7 @@ use std::path::Path;
 use delta_core::config::AppConfig;
 
 use crate::screen::Screen;
+use crate::screens::decisions::{draw_decision_review_form, draw_decisions_live, DecisionsData};
 use crate::screens::research::{draw_research_live, ResearchData, ResearchState};
 use crate::screens::settings::{
     draw_settings, draw_settings_narrow, draw_settings_wide, SettingsData, SettingsState,
@@ -33,6 +34,10 @@ pub fn render_live(state: &str, fixture: &serde_json::Value, db_path: &Path) -> 
             Some(live_research(state, fixture, db_path, w, h))
         }
         "live-ask" => Some(live_ask(fixture, db_path, w, h)),
+        "live-decisions"
+        | "live-decisions-review"
+        | "live-decisions-confirm"
+        | "live-decisions-review-form" => live_decisions(fixture, db_path, w, h),
         _ => None,
     }
 }
@@ -169,6 +174,43 @@ fn live_ask(fixture: &serde_json::Value, db_path: &Path, w: usize, h: usize) -> 
         }
     }
     screen
+}
+
+fn live_decisions(
+    fixture: &serde_json::Value,
+    db_path: &Path,
+    w: usize,
+    h: usize,
+) -> Option<Screen> {
+    let db = delta_core::db::Db::open(db_path).ok()?;
+    let decisions = delta_services::list_decisions(&db, None, true).ok()?;
+    let selected = if fixture["state"] == "live-decisions-review" {
+        1
+    } else {
+        0
+    };
+    let decision = decisions.get(selected)?;
+    let reviews = delta_services::review_history(&db, &decision.id).ok()?;
+    let current_price = db
+        .bars(&decision.instrument_id)
+        .ok()?
+        .last()
+        .map(|bar| bar.close);
+    let data = DecisionsData {
+        decisions,
+        selected,
+        reviews,
+        current_price,
+        filter: String::new(),
+        spend: delta_services::analytics::total_spend(&db, None),
+        confirm_delete: fixture["state"] == "live-decisions-confirm",
+    };
+    let mut screen = Screen::new(w, h);
+    draw_decisions_live(&mut screen, &data);
+    if fixture["state"] == "live-decisions-review-form" {
+        draw_decision_review_form(&mut screen, "", "reviewed");
+    }
+    Some(screen)
 }
 
 /// The populated Settings screen: config, provider state and pinned sizes
