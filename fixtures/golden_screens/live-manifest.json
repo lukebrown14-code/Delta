@@ -20,6 +20,69 @@
       "size": "200x50",
       "state": "live-settings",
       "tier": "A"
+    },
+    {
+      "file": "live-research-80x24.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "80x24",
+      "state": "live-research",
+      "tier": "B"
+    },
+    {
+      "file": "live-research-120x40.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "120x40",
+      "state": "live-research",
+      "tier": "B"
+    },
+    {
+      "file": "live-research-200x50.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "200x50",
+      "state": "live-research",
+      "tier": "B"
+    },
+    {
+      "file": "live-research-search-80x24.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "80x24",
+      "state": "live-research-search",
+      "tier": "B"
+    },
+    {
+      "file": "live-research-search-120x40.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "120x40",
+      "state": "live-research-search",
+      "tier": "B"
+    },
+    {
+      "file": "live-research-search-200x50.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "200x50",
+      "state": "live-research-search",
+      "tier": "B"
+    },
+    {
+      "file": "live-research-citation-80x24.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "80x24",
+      "state": "live-research-citation",
+      "tier": "B"
+    },
+    {
+      "file": "live-research-citation-120x40.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "120x40",
+      "state": "live-research-citation",
+      "tier": "B"
+    },
+    {
+      "file": "live-research-citation-200x50.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "200x50",
+      "state": "live-research-citation",
+      "tier": "B"
     }
   ],
   "seed": "fixtures/golden_seed.db"

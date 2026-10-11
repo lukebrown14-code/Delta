@@ -17,7 +17,10 @@ mod watchlist;
 pub use ask::{draw_ask, draw_ask_narrow, draw_ask_wide};
 pub use decisions::{draw_decisions, draw_decisions_narrow, draw_decisions_wide};
 pub use home::{draw_home, draw_home_narrow, draw_home_wide, feed_seed, HomeFeed, HomeState};
-pub use research::{draw_research, draw_research_narrow, draw_research_wide};
+pub use research::{
+    draw_research, draw_research_live, draw_research_narrow, draw_research_wide, ResearchData,
+    ResearchState, ResearchView,
+};
 pub use settings::{
     comma, draw_settings, draw_settings_narrow, draw_settings_wide, exporter_world, human_size,
     stamp, SettingsData, SettingsDiagnostics, SettingsFocus, SettingsMarket, SettingsSource,

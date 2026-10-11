@@ -333,7 +333,7 @@ pub fn render_markdown(report: &Report, interactive: bool) -> String {
             for (index, evidence_id) in section_sources(claims).iter().enumerate() {
                 let citation = report
                     .citations
-                    .get(*evidence_id)
+                    .get(evidence_id)
                     .map(String::as_str)
                     .unwrap_or(evidence_id);
                 if interactive {

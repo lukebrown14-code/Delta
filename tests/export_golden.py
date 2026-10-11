@@ -172,6 +172,11 @@ def export_scenario(scenario: Scenario, tmp_path: Path, out_dir: Path) -> Path:
             rig = FakeRig(engine, [AAPL.model_copy(update={"watchlists": ("apple",)})])
             rig.cfg = build_config(config)
             rig.plugins = {"sec_edgar": SECEdgar()}
+            if scenario.name.startswith("live-research"):
+                shutil.copytree(
+                    Path(__file__).resolve().parent.parent / "fixtures/golden_reports",
+                    tmp_path / "reports",
+                )
             seed_block = {
                 "version": 1,
                 "now": NOW.isoformat(),
@@ -202,6 +207,8 @@ def export_scenario(scenario: Scenario, tmp_path: Path, out_dir: Path) -> Path:
                 async def run() -> list[list[dict]]:
                     async with app.run_test(size=scenario.size) as pilot:
                         await pilot.press(*scenario.keys)
+                        if scenario.name == "live-research-citation":
+                            await app.screen.inspect_evidence("news:news-aapl-chip")
                         # Workers (metrics fetch, refreshes) land over a few
                         # frames; mirror test_snapshots.py's run_before.
                         await pilot.pause(0.3)

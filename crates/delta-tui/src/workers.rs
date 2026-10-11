@@ -15,19 +15,19 @@ use crate::desk::now_naive;
 use crate::Action;
 
 /// Spawn the background workers. Returns the gather-request channel the UI
-/// sends [`Action::Gather`] through.
+/// sends [`Action::Gather`] or [`Action::GatherCompany`] through.
 pub fn spawn(
     bus: mpsc::UnboundedSender<Action>,
     universe: Vec<Instrument>,
     db_path: Option<PathBuf>,
     quotes_enabled: bool,
-) -> mpsc::UnboundedSender<()> {
+) -> mpsc::UnboundedSender<Option<String>> {
     if quotes_enabled {
         tokio::spawn(stream_quotes_worker(bus.clone(), universe.clone()));
         tokio::spawn(metrics_worker(bus.clone(), universe.clone()));
     }
     let ids: Vec<String> = universe.iter().map(|i| i.id.clone()).collect();
-    let (gather_tx, gather_rx) = mpsc::unbounded_channel::<()>();
+    let (gather_tx, gather_rx) = mpsc::unbounded_channel::<Option<String>>();
     tokio::spawn(gather_worker(
         bus.clone(),
         universe,
@@ -156,7 +156,7 @@ async fn gather_worker(
     bus: mpsc::UnboundedSender<Action>,
     universe: Vec<Instrument>,
     db_path: Option<PathBuf>,
-    mut requests: mpsc::UnboundedReceiver<()>,
+    mut requests: mpsc::UnboundedReceiver<Option<String>>,
 ) {
     let Some(db_path) = db_path else {
         // Offline desk: acknowledge gathers so the UI can say so.
@@ -175,7 +175,7 @@ async fn gather_worker(
         Arc::new(delta_plugins::sec::SecEdgar::default()),
         Arc::new(delta_plugins::yahoo::YfinanceBars::default()),
     ];
-    while requests.recv().await.is_some() {
+    while let Some(company) = requests.recv().await {
         let _ = bus.send(Action::Status("gathering…".to_string()));
         let since = (now_naive() - chrono::Duration::days(30))
             .format("%Y-%m-%d")
@@ -187,10 +187,15 @@ async fn gather_worker(
                 continue;
             }
         };
+        let selected: Vec<Instrument> = universe
+            .iter()
+            .filter(|inst| company.as_ref().is_none_or(|id| &inst.id == id))
+            .cloned()
+            .collect();
         match delta_services::pipeline::ingest(
             &mut db,
             &plugins,
-            &universe,
+            &selected,
             None,
             None,
             Some(&since),

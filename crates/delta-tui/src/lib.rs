@@ -93,6 +93,12 @@ pub enum Action {
     HomeRefresh(crate::screens::HomeFeed),
     /// Request a gather run (UI -> ingest worker).
     Gather,
+    /// Gather evidence for one selected company.
+    GatherCompany(String),
+    /// Generate the selected company's cited report on a background task.
+    GenerateReport,
+    /// Open a selected evidence source URL in the system browser.
+    OpenSource(String),
     /// One-line worker status for the status overlay.
     Status(String),
 }
