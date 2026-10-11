@@ -583,26 +583,26 @@ fn draw_theses_narrow_detail(screen: &mut Screen, state: &ThesesState) {
     let Some(row) = state.fleet.get(state.selected) else {
         return;
     };
-    let (title, hints) = if state.view == ThesesPane::Evidence {
-        (
-            "e evidence",
-            pane_hints(&[
-                ("a", "accept"),
-                ("x", "reject"),
-                ("u", "un-accept"),
-                ("esc", "back"),
-            ]),
-        )
+    let evidence = state.view == ThesesPane::Evidence;
+    let health = row.state().as_str();
+    let result = row.result.as_ref();
+    let accepted = state.links.iter().filter(|link| link.accepted).count();
+    let pending = state.links.len() - accepted;
+    let title = if evidence { "e evidence " } else { "t thesis " };
+    let badge = if evidence {
+        format!("· {pending} pending / {}", state.links.len())
     } else {
-        (
-            "t thesis",
-            pane_hints(&[
-                ("s", "summarise"),
-                ("d", "edit"),
-                ("e", "evidence"),
-                ("esc", "back"),
-            ]),
-        )
+        format!("· {} {health}", mark(health))
+    };
+    let hints = if evidence {
+        pane_hints(&[("u", "un-accept"), ("f", "find"), ("esc", "back")])
+    } else {
+        pane_hints(&[
+            ("s", "summarise"),
+            ("d", "edit"),
+            ("↑↓", "scroll"),
+            ("esc", "back"),
+        ])
     };
     screen.pane(
         1,
@@ -610,70 +610,216 @@ fn draw_theses_narrow_detail(screen: &mut Screen, state: &ThesesState) {
         screen.w - 2,
         bottom,
         true,
-        &[(title, Style::fg(color::MUTED).bold())],
+        &[
+            (title, Style::fg(color::BLUE).bold()),
+            (&badge, Style::fg(color::MUTED).bold()),
+        ],
         &hints,
     );
     screen.fill(2, 1, screen.w - 2, bottom, Style::fg(color::FG));
-    if state.view == ThesesPane::Detail {
-        screen.text(3, 1, &row.thesis.claim, Style::fg(color::FG).bold());
+    if !evidence {
+        let width = screen.w - 6;
+        let mut y = paint_wrapped(
+            screen,
+            3,
+            1,
+            width,
+            &row.thesis.claim,
+            Style::fg(color::FG).bold(),
+        ) + 1;
+        let tilt = result.map_or(String::new(), |r| format!(" · tilt {:+.2}", r.tilt));
         screen.text(
             3,
-            3,
-            &format!("{} {}", mark(row.state().as_str()), row.state().as_str()),
-            Style::fg(color::MUTED),
+            y,
+            &format!(" {} {health}{tilt} ", mark(health)),
+            Style::fg(color::MUTED).bold().bg(color::PANEL),
         );
         screen.text(
+            3 + 3 + health.len() + tilt.len(),
+            y,
+            &format!("  {accepted} accepted"),
+            Style::fg(color::MUTED).bold(),
+        );
+        y += 1;
+        screen.text(
             3,
-            5,
+            y,
             &format!(
-                "{} · horizon {}",
-                row.thesis.status, row.thesis.time_horizon
+                "{} · horizon {} · opened {}",
+                row.thesis.status,
+                row.thesis.time_horizon,
+                row.thesis.created_at.format("%d %b %Y")
             ),
             Style::fg(color::MUTED),
         );
-        screen.text(
+        y += 1;
+        if let Some(result) = result {
+            if !result.drivers.is_empty() {
+                let names = result
+                    .drivers
+                    .iter()
+                    .take(2)
+                    .map(|id| {
+                        state
+                            .items
+                            .get(id)
+                            .map_or(id.as_str(), |item| item.title.as_str())
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                screen.text(
+                    3,
+                    y,
+                    &truncate(&format!("moved by  {names}"), width),
+                    Style::fg(color::MUTED),
+                );
+                y += 1;
+            }
+        }
+        y += 1;
+        y = paint_field(
+            screen,
             3,
-            7,
-            &format!("targets   {}", row.thesis.targets.join(", ")),
-            Style::fg(color::FG),
+            y,
+            width,
+            "targets",
+            &row.thesis.targets.join(", "),
         );
-        screen.text(3, 9, "summary", Style::fg(color::MUTED).bold());
-        screen.text(
-            3,
-            10,
-            state
-                .summary
-                .as_ref()
-                .map_or("no summary yet — press s to summarise", |s| {
-                    s.summary.as_str()
-                }),
-            Style::fg(color::FG),
-        );
+        if !row.thesis.scope.is_empty() {
+            y = paint_field(screen, 3, y, width, "scope", &row.thesis.scope);
+        }
+        if !row.thesis.assumptions.is_empty() {
+            y = paint_field(
+                screen,
+                3,
+                y,
+                width,
+                "holds if",
+                &row.thesis.assumptions.join("; "),
+            );
+        }
+        if !row.thesis.falsifiers.is_empty() {
+            y = paint_field(
+                screen,
+                3,
+                y,
+                width,
+                "breaks if",
+                &row.thesis.falsifiers.join("; "),
+            );
+        }
+        y += 1;
+        screen.text(3, y, "summary", Style::fg(color::MUTED).bold());
+        let summary = state
+            .summary
+            .as_ref()
+            .map_or("no summary yet — press s to summarise", |s| {
+                s.summary.as_str()
+            });
+        paint_wrapped(screen, 3, y + 1, width, summary, Style::fg(color::MUTED));
     } else {
+        let (support, against, neutral) =
+            result.map_or((0, 0, 0), |r| (r.support, r.against, r.neutral));
+        screen.text(
+            3,
+            1,
+            &format!("+{support} support  −{against} against  ?{neutral} neutral"),
+            Style::fg(color::MUTED),
+        );
+        screen.fill(
+            2,
+            2,
+            screen.w - 2,
+            3,
+            Style::fg(color::FG).bold().bg(color::PANEL),
+        );
+        screen.text(
+            3,
+            2,
+            "   ±  age   note",
+            Style::fg(color::FG).bold().bg(color::PANEL),
+        );
         for (i, link) in state
             .links
             .iter()
             .enumerate()
-            .take(bottom.saturating_sub(7))
+            .take(bottom.saturating_sub(9))
         {
+            let glyph = if link.accepted { "✓" } else { "•" };
+            let side = match link.side.as_str() {
+                "support" => "+",
+                "against" => "−",
+                _ => "?",
+            };
+            let age = state
+                .items
+                .get(&link.evidence_id)
+                .map_or("—".to_string(), |item| {
+                    let days = (state.now.unwrap_or_else(|| chrono::Utc::now().naive_utc())
+                        - item.ts)
+                        .num_days();
+                    format!("{days}d")
+                });
             let style = if i == state.evidence_selected {
-                Style::fg(color::WHITE).bg("#494949").bold()
+                Style::fg(color::FG).bg("#242424")
             } else {
                 Style::fg(color::FG)
             };
-            let glyph = if link.accepted { "✓" } else { "•" };
+            if i == state.evidence_selected {
+                screen.fill(2, i + 3, screen.w - 2, i + 4, style);
+            }
+            let note = if link.note.is_empty() {
+                &link.evidence_id
+            } else {
+                &link.note
+            };
             screen.text(
                 3,
-                i + 1,
-                &format!("{glyph} {}  {}", link.side, link.note),
+                i + 3,
+                &format!(
+                    "{glyph}  {side}  {age:<4}  {}",
+                    truncate(note, screen.w - 24)
+                ),
                 style,
             );
         }
+        let separator = bottom - 8;
+        for x in 2..screen.w - 2 {
+            screen.put(x, separator, '─', Style::fg(color::BORDER_BLURRED));
+        }
         if let Some(link) = state.selected_link() {
-            screen.text(3, bottom - 3, &link.note, Style::fg(color::FG));
+            let side = match link.side.as_str() {
+                "support" => "Supporting",
+                "against" => "Against",
+                _ => "Neutral",
+            };
+            screen.text(
+                3,
+                separator + 1,
+                &format!(
+                    "{} · {side}",
+                    if link.accepted {
+                        "accepted"
+                    } else {
+                        "candidate"
+                    }
+                ),
+                Style::fg(color::MUTED),
+            );
+            screen.text(3, separator + 2, &link.note, Style::fg(color::FG));
+            if let Some(item) = state.items.get(&link.evidence_id) {
+                paint_wrapped(
+                    screen,
+                    3,
+                    separator + 4,
+                    screen.w - 6,
+                    &delta_services::cite(item),
+                    Style::fg(color::MUTED),
+                );
+            }
         }
     }
-    recolor_claims_focus(screen, screen.w - 2, bottom);
+    // Focus colours are retained for the active narrow detail and ledger panes.
 }
 
 fn truncate(text: &str, width: usize) -> String {
