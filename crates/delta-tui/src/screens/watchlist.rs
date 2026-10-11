@@ -623,6 +623,110 @@ pub fn draw_watchlist_narrow(screen: &mut Screen, state: &WatchlistState) {
     draw_status_bar(screen, screen.h - 1, w, true);
 }
 
+/// Narrow Watchlist before the user opens an instrument. Textual keeps the
+/// list pane visible until `enter`; the inspector painter above starts at
+/// that later state.
+pub fn draw_watchlist_narrow_list(screen: &mut Screen, state: &WatchlistState) {
+    let w = screen.w;
+    let bottom = screen.h - 3;
+    screen.pane(
+        1,
+        0,
+        w - 2,
+        bottom,
+        true,
+        &[
+            ("watchlist ", Style::fg(color::BLUE).bold()),
+            (
+                &format!("· ○ idle · {}", state.entries.len()),
+                Style::fg(color::MUTED).bold(),
+            ),
+        ],
+        &pane_hints(&[
+            ("a", "add"),
+            ("d", "remove"),
+            ("/", "filter"),
+            ("space", "fold"),
+        ]),
+    );
+    screen.fill(3, 2, w - 3, bottom, Style::fg(color::FG));
+    screen.fill(3, 1, w - 3, 2, Style::fg(color::MUTED));
+    screen.text(
+        3,
+        1,
+        "   Name              Last      Chg%   Age",
+        Style::fg(color::MUTED),
+    );
+    if state.entries.is_empty() {
+        screen.text(
+            4,
+            3,
+            "No instruments yet · press a to add",
+            Style::fg(color::MUTED),
+        );
+    }
+    let mut y = 2;
+    let mut last_class = "";
+    for (index, entry) in state.entries.iter().enumerate() {
+        if entry.asset_class != last_class {
+            last_class = &entry.asset_class;
+            if y >= bottom {
+                break;
+            }
+            let count = state
+                .entries
+                .iter()
+                .filter(|item| item.asset_class == last_class)
+                .count();
+            screen.text(4, y, "▾ ", Style::fg(color::BLUE).bold());
+            screen.text(6, y, last_class, Style::fg(color::BLUE).bold());
+            let count_x = 6 + last_class.len();
+            screen.put(count_x, y, ' ', Style::fg(color::BLUE).bold());
+            screen.text(
+                count_x + 1,
+                y,
+                &format!("({count})"),
+                Style::fg(color::MUTED).bold(),
+            );
+            y += 1;
+        }
+        if y >= bottom {
+            break;
+        }
+        let selected = index == state.selected;
+        if selected {
+            screen.fill(
+                3,
+                y,
+                w - 3,
+                y + 1,
+                Style::fg(color::WHITE).bg(color::BLUE_BG).bold(),
+            );
+            screen.fill(
+                18,
+                y,
+                44,
+                y + 1,
+                Style::fg(color::MUTED).bg(color::BLUE_BG).bold(),
+            );
+        }
+        let symbol_style = if selected {
+            Style::fg(color::WHITE).bg(color::BLUE_BG).bold()
+        } else {
+            Style::fg(color::FG)
+        };
+        let values_style = if selected {
+            Style::fg(color::MUTED).bg(color::BLUE_BG).bold()
+        } else {
+            Style::fg(color::MUTED)
+        };
+        screen.text(6, y, &entry.symbol, symbol_style);
+        screen.text(27, y, "—         —", values_style);
+        y += 1;
+    }
+    draw_status_bar(screen, screen.h - 1, w, true);
+}
+
 /// The equity glossary help entries: (label, help) per group, from
 /// `delta/metrics.toml` `[help]` and the equity group table, in card order.
 pub const GLOSSARY_EQUITY: &[(&str, &[(&str, &str)])] = &[

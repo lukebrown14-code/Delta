@@ -18,7 +18,10 @@ pub use ask::{draw_ask, draw_ask_narrow, draw_ask_wide, paint_ask_state, AskStat
 pub use decisions::{
     draw_decisions, draw_decisions_live, draw_decisions_narrow, draw_decisions_wide, DecisionsData,
 };
-pub use home::{draw_home, draw_home_narrow, draw_home_wide, feed_seed, HomeFeed, HomeState};
+pub use home::{
+    draw_home, draw_home_live, draw_home_narrow, draw_home_wide, feed_seed, HomeFeed, HomeLiveData,
+    HomeState,
+};
 pub use research::{
     draw_research, draw_research_live, draw_research_narrow, draw_research_wide, ResearchData,
     ResearchState, ResearchView,
@@ -34,8 +37,8 @@ pub use theses::{
 };
 pub use watchlist::{
     chart_window, draw_glossary_overlay, draw_watchlist, draw_watchlist_narrow,
-    draw_watchlist_wide, friendly_date, friendly_date_range, grouped, range_label, range_window,
-    MetricsData, WatchEntry, WatchlistState, GLOSSARY_EQUITY, RANGES,
+    draw_watchlist_narrow_list, draw_watchlist_wide, friendly_date, friendly_date_range, grouped,
+    range_label, range_window, MetricsData, WatchEntry, WatchlistState, GLOSSARY_EQUITY, RANGES,
 };
 
 /// A pane rectangle in golden-Screen coordinates: `(x0, y0, x1, y1)` with

@@ -22,12 +22,12 @@ use delta_tui::screen::{color, Screen, Style};
 use delta_tui::screens::decisions::{draw_decisions_live, DecisionsData};
 use delta_tui::screens::{
     draw_ask, draw_ask_narrow, draw_ask_wide, draw_decisions, draw_decisions_narrow,
-    draw_decisions_wide, draw_glossary_overlay, draw_home, draw_home_narrow, draw_home_wide,
-    draw_research, draw_research_live, draw_research_narrow, draw_research_wide, draw_settings,
-    draw_settings_narrow, draw_settings_wide, draw_theses_live, draw_watchlist,
-    draw_watchlist_narrow, draw_watchlist_wide, paint_ask_state, AskState, ResearchData,
-    ResearchState, ResearchView, SettingsFocus, SettingsState, SettingsView, ThesesPane,
-    ThesesState,
+    draw_decisions_wide, draw_glossary_overlay, draw_home, draw_home_live, draw_home_narrow,
+    draw_home_wide, draw_research, draw_research_live, draw_research_narrow, draw_research_wide,
+    draw_settings, draw_settings_narrow, draw_settings_wide, draw_theses_live, draw_watchlist,
+    draw_watchlist_narrow, draw_watchlist_narrow_list, draw_watchlist_wide, paint_ask_state,
+    AskState, ResearchData, ResearchState, ResearchView, SettingsFocus, SettingsState,
+    SettingsView, ThesesPane, ThesesState,
 };
 use delta_tui::theme::Palette;
 use delta_tui::{is_quit_key, workers, Action, Breakpoint, Component};
@@ -324,16 +324,29 @@ impl App {
             };
         }
         match self.tab {
-            Tab::Home => route!(
-                draw_home_wide(screen, &self.desk.home_state()),
-                draw_home(screen, &self.desk.home_state()),
-                draw_home_narrow(screen, &self.desk.home_state())
-            ),
-            Tab::Watchlist => route!(
-                draw_watchlist_wide(screen, &self.desk.watch_state()),
-                draw_watchlist(screen, &self.desk.watch_state()),
-                draw_watchlist_narrow(screen, &self.desk.watch_state())
-            ),
+            Tab::Home => {
+                if let Some(data) = &self.desk.home_live {
+                    draw_home_live(screen, &self.desk.home_state(), data);
+                } else {
+                    route!(
+                        draw_home_wide(screen, &self.desk.home_state()),
+                        draw_home(screen, &self.desk.home_state()),
+                        draw_home_narrow(screen, &self.desk.home_state())
+                    );
+                }
+            }
+            Tab::Watchlist => {
+                let state = self.desk.watch_state();
+                if narrow && !self.desk.watch_detail_open {
+                    draw_watchlist_narrow_list(screen, &state);
+                } else {
+                    route!(
+                        draw_watchlist_wide(screen, &state),
+                        draw_watchlist(screen, &state),
+                        draw_watchlist_narrow(screen, &state)
+                    );
+                }
+            }
             Tab::Research => {
                 if let Some(data) = &self.research {
                     draw_research_live(screen, data, &self.research_state);
@@ -2003,6 +2016,14 @@ impl Component for App {
         }
         if self.tab == Tab::Watchlist {
             match key.code {
+                KeyCode::Enter => {
+                    self.desk.watch_detail_open = true;
+                    return Some(Action::Noop);
+                }
+                KeyCode::Esc if self.desk.watch_detail_open => {
+                    self.desk.watch_detail_open = false;
+                    return Some(Action::Noop);
+                }
                 KeyCode::Char('a') => {
                     self.overlay = Some(Overlay::AddTarget(String::new()));
                     return Some(Action::Noop);
@@ -3047,12 +3068,40 @@ mod tests {
                 if tab == Tab::Watchlist {
                     let content = row_text(h - 3);
                     assert!(
-                        content.contains('\u{2500}') || content.contains('\u{2504}'),
+                        content.contains('\u{2500}')
+                            || content.contains('\u{2501}')
+                            || content.contains('\u{2504}'),
                         "watchlist pane bottom missing at {w}x{h}: {content:?}"
                     );
                 }
             }
         }
+    }
+
+    #[test]
+    fn narrow_watchlist_opens_metrics_and_returns_to_list() {
+        let mut app = app();
+        app.viewport = (80, 24);
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        let mut paint = |app: &mut App| {
+            terminal
+                .draw(|frame| app.draw(frame, frame.area()))
+                .unwrap();
+            terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .map(ratatui::buffer::Cell::symbol)
+                .collect::<String>()
+        };
+        let list = paint(&mut app);
+        assert!(list.contains("watchlist · ○ idle · 1"));
+        assert!(!list.contains("Available Metrics"));
+        app.handle_key(key(KeyCode::Enter));
+        assert!(paint(&mut app).contains("Available Metrics"));
+        app.handle_key(key(KeyCode::Esc));
+        assert!(paint(&mut app).contains("watchlist · ○ idle · 1"));
     }
 
     #[test]

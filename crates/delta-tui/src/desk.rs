@@ -13,7 +13,8 @@ use delta_services::{analytics, asset_metrics::AssetMetrics};
 
 use crate::braille::BrailleGraph;
 use crate::screens::{
-    grouped, Footer, HomeFeed, HomeState, MetricsData, SettingsData, WatchEntry, WatchlistState,
+    grouped, Footer, HomeFeed, HomeLiveData, HomeState, MetricsData, SettingsData, WatchEntry,
+    WatchlistState,
 };
 
 /// Golden-exporter constants: 80 seeded bars.
@@ -95,6 +96,8 @@ pub struct Desk {
     pub selected: usize,
     pub range_index: usize,
     pub scrub: Option<usize>,
+    /// Narrow Watchlist switches from the list to metrics on Enter.
+    pub watch_detail_open: bool,
     /// Live quotes keyed by instrument id (`regularMarketPrice`).
     pub live: BTreeMap<String, f64>,
     /// Inspector metric rows keyed by instrument id (metrics worker).
@@ -105,6 +108,7 @@ pub struct Desk {
     pub last_ingest: Option<BTreeMap<String, usize>>,
     /// Live Home overview values (headline, pulse, upcoming, staleness).
     pub feed: HomeFeed,
+    pub home_live: Option<HomeLiveData>,
     /// The Settings screen's data (config, providers, diagnostics).
     pub settings: SettingsData,
     /// The footer cells implied by `settings` at load time.
@@ -151,6 +155,7 @@ impl Desk {
         let feed = load_feed(&db, &ids);
         let env_path = PathBuf::from(".env");
         let now = now_naive();
+        let home_live = load_home_live(&db, &ids, now);
         let settings = SettingsData::load(&app, &db_path, &env_path, now);
         let settings_footer = settings.footer(now);
         Some(Desk {
@@ -158,12 +163,14 @@ impl Desk {
             selected: 0,
             range_index: 2, // "1m"
             scrub: None,
+            watch_detail_open: false,
             live: BTreeMap::new(),
             metrics: BTreeMap::new(),
             asset_metrics: BTreeMap::new(),
             source: Source::Real(db_path),
             last_ingest: None,
             feed,
+            home_live,
             settings,
             settings_footer,
             config_path: Some(config_path.to_path_buf()),
@@ -193,6 +200,7 @@ impl Desk {
             .retain(|(id, _), _| self.instruments.iter().any(|row| row.instrument.id == *id));
         self.source = refreshed.source;
         self.feed = refreshed.feed;
+        self.home_live = refreshed.home_live;
         self.settings = refreshed.settings;
         self.settings_footer = refreshed.settings_footer;
         self.config_path = refreshed.config_path;
@@ -208,12 +216,14 @@ impl Desk {
             selected: 0,
             range_index: 2, // "1m"
             scrub: None,
+            watch_detail_open: false,
             live: BTreeMap::new(),
             metrics: BTreeMap::new(),
             asset_metrics: BTreeMap::new(),
             source: Source::Offline,
             last_ingest: None,
             feed: HomeFeed::seed(),
+            home_live: None,
             settings,
             settings_footer,
             config_path: None,
@@ -514,6 +524,7 @@ impl Desk {
             .map(|d| d.instrument.id.clone())
             .collect();
         self.feed = load_feed(&db, &ids);
+        self.home_live = load_home_live(&db, &ids, now_naive());
     }
 }
 
@@ -565,6 +576,80 @@ pub fn load_feed(db: &Db, instrument_ids: &[String]) -> HomeFeed {
         }
     }
     feed
+}
+
+/// Assemble the populated Home read model from the same service seams used by
+/// the other desks. Cached by `Desk` so the clock repaint does no SQL work.
+pub fn load_home_live(db: &Db, ids: &[String], now: NaiveDateTime) -> Option<HomeLiveData> {
+    if ids.is_empty() {
+        return None;
+    }
+    let pulse = analytics::pulse(db, ids, now - Duration::days(7), 30, now).ok()?;
+    let headline = analytics::latest_headline(db, ids, 50).ok()?.map(|item| {
+        let days = (now - item.ts).num_days().max(0);
+        (item.title, format!("{days}d"))
+    });
+    let upcoming = analytics::upcoming_events(db, ids, 5, now)
+        .ok()?
+        .into_iter()
+        .map(|event| {
+            (
+                event
+                    .instrument_id
+                    .split(':')
+                    .next_back()
+                    .unwrap_or_default()
+                    .to_string(),
+                event.kind,
+                event.ts.format("%d %b").to_string(),
+                format!("in {}d", (event.ts.date() - now.date()).num_days()),
+                event.summary,
+            )
+        })
+        .collect();
+    let theses = delta_services::thesis_fleet(db, Some(now))
+        .ok()?
+        .into_iter()
+        .map(|row| {
+            let state = row.state().as_str().to_string();
+            let ratio = row.result.as_ref().map_or_else(
+                || "—".to_string(),
+                |result| format!("{} / {}", result.support, result.against),
+            );
+            (row.thesis.claim, ratio, state)
+        })
+        .collect();
+    let due_reviews = delta_services::due_reviews(db, Some(now.date()))
+        .ok()?
+        .len();
+    let decision_count = delta_services::list_decisions(db, None, false).ok()?.len();
+    let health = analytics::data_health(db).ok()?;
+    let first = ids.first();
+    let latest_bar = first.and_then(|id| health.latest_bar.get(id));
+    let stale_days = latest_bar.map_or(0, |last| (now - *last).num_days().max(0));
+    Some(HomeLiveData {
+        articles: pulse.articles,
+        filings: pulse.filings,
+        events: pulse.events,
+        pulse: pulse.daily,
+        busiest: pulse.busiest.map(|(id, count)| {
+            (
+                id.split(':').next_back().unwrap_or_default().to_string(),
+                count,
+            )
+        }),
+        headline,
+        stale_sources: usize::from(latest_bar.is_none() || stale_days > 0),
+        stale_text: if latest_bar.is_none() {
+            "no bars".into()
+        } else {
+            format!("{stale_days}d old")
+        },
+        due_reviews,
+        review_context: format!("{decision_count} decisions"),
+        upcoming,
+        theses,
+    })
 }
 
 /// Clamp a spend value at zero, normalizing IEEE negative zero: `f64::max`

@@ -1,6 +1,90 @@
 {
   "scenarios": [
     {
+      "file": "live-home-80x24.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "80x24",
+      "state": "live-home",
+      "tier": "A"
+    },
+    {
+      "file": "live-home-120x40.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "120x40",
+      "state": "live-home",
+      "tier": "A"
+    },
+    {
+      "file": "live-home-200x50.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "200x50",
+      "state": "live-home",
+      "tier": "A"
+    },
+    {
+      "file": "live-watchlist-80x24.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "80x24",
+      "state": "live-watchlist",
+      "tier": "A"
+    },
+    {
+      "file": "live-watchlist-120x40.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "120x40",
+      "state": "live-watchlist",
+      "tier": "A"
+    },
+    {
+      "file": "live-watchlist-200x50.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "200x50",
+      "state": "live-watchlist",
+      "tier": "A"
+    },
+    {
+      "file": "live-watchlist-inspector-80x24.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "80x24",
+      "state": "live-watchlist-inspector",
+      "tier": "A"
+    },
+    {
+      "file": "live-watchlist-inspector-120x40.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "120x40",
+      "state": "live-watchlist-inspector",
+      "tier": "A"
+    },
+    {
+      "file": "live-watchlist-inspector-200x50.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "200x50",
+      "state": "live-watchlist-inspector",
+      "tier": "A"
+    },
+    {
+      "file": "live-watchlist-range-80x24.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "80x24",
+      "state": "live-watchlist-range",
+      "tier": "A"
+    },
+    {
+      "file": "live-watchlist-range-120x40.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "120x40",
+      "state": "live-watchlist-range",
+      "tier": "A"
+    },
+    {
+      "file": "live-watchlist-range-200x50.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "200x50",
+      "state": "live-watchlist-range",
+      "tier": "A"
+    },
+    {
       "file": "live-settings-80x24.json",
       "seed": "fixtures/golden_seed.db",
       "size": "80x24",

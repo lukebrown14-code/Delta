@@ -47,3 +47,9 @@ full cutover validation (#35); the Python oracle has no scrub state yet.
 - [ ] All scenarios Tier A green at 3 sizes; existing 12 Home/Watchlist goldens still green.
 - [ ] Bindings match Python.
 - [ ] Scrub at 60 fps with frame log on (release build).
+
+## R4 populated-state follow-up
+
+- [x] Populated Home and Watchlist list/inspector/range states match the Python oracle at 80×24, 120×40, and 200×50 (12 Tier A fixtures).
+- [x] Home reads pulse, headline, events, thesis health, decision reviews, and bar freshness through Rust services; narrow Watchlist opens the inspector with Enter and returns to the list with Esc.
+- [ ] Add the Home first-run/empty oracles and Watchlist add/search/filter, glossary, and scrub scenarios. The Python app has no chart scrub key, so the Rust scrub behavior needs a separate acceptance oracle.

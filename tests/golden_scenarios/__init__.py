@@ -66,7 +66,9 @@ SCENARIOS: tuple[Scenario, ...] = (
 #: Populated scenarios (``live-*``): exported against the shared seed DB and
 #: listed in ``live-manifest.json``; each screen module appends its own.
 LIVE_SCENARIOS: tuple[Scenario, ...] = (
-    settings.POPULATED_SCENARIOS
+    home.POPULATED_SCENARIOS
+    + watchlist.POPULATED_SCENARIOS
+    + settings.POPULATED_SCENARIOS
     + theses.POPULATED_SCENARIOS
     + research.POPULATED_SCENARIOS
     + ask.POPULATED_SCENARIOS

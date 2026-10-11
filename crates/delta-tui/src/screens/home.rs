@@ -70,6 +70,447 @@ pub struct HomeState {
     pub feed: HomeFeed,
 }
 
+/// Service-backed values in the populated overview. The DB builder and the
+/// running app can both supply this read model without the painter querying
+/// storage.
+#[derive(Clone)]
+pub struct HomeLiveData {
+    pub articles: usize,
+    pub filings: usize,
+    pub events: usize,
+    pub pulse: Vec<usize>,
+    pub busiest: Option<(String, usize)>,
+    pub headline: Option<(String, String)>,
+    pub stale_sources: usize,
+    pub stale_text: String,
+    pub due_reviews: usize,
+    pub review_context: String,
+    pub upcoming: Vec<(String, String, String, String, String)>,
+    pub theses: Vec<(String, String, String)>,
+}
+
+/// Paint the populated Home panels over the base geometry. The base painter
+/// continues to handle the empty/offline screen while these rows come from
+/// analytics, decisions, calendar events and accepted thesis evidence.
+pub fn draw_home_live(screen: &mut Screen, home: &HomeState, data: &HomeLiveData) {
+    if screen.w < 100 {
+        draw_home_narrow(screen, home);
+    } else if screen.w >= 160 {
+        draw_home_wide(screen, home);
+    } else {
+        draw_home(screen, home);
+    }
+    let muted = Style::fg(color::MUTED);
+    let warn = Style::fg(color::AMBER);
+    let count = data.articles + data.filings + data.events;
+    let counts = [
+        (data.articles, "article"),
+        (data.filings, "filing"),
+        (data.events, "event"),
+    ]
+    .into_iter()
+    .filter(|(n, _)| *n > 0)
+    .map(|(n, noun)| format!("{n} {noun}{}", if n == 1 { "" } else { "s" }))
+    .collect::<Vec<_>>();
+    if screen.w < 100 {
+        screen.fill(3, 5, screen.w - 3, 7, muted);
+        screen.text(3, 5, &home.since_stamp, muted);
+        let mut x = 3 + home.since_stamp.len() + 2;
+        for (i, label) in counts.iter().enumerate() {
+            if i > 0 {
+                x += 1;
+            }
+            x = screen.text(x, 5, label, muted.bold());
+        }
+        if counts.is_empty() {
+            screen.text(x, 5, "nothing new", muted);
+            x += "nothing new".len();
+        }
+        x += 3;
+        if data.stale_sources > 0 {
+            screen.text(
+                x,
+                5,
+                &format!("⚠ {} {}", home.symbol, data.stale_text),
+                warn,
+            );
+        }
+        screen.text(3, 6, "next  ", muted);
+        if let Some((symbol, kind, date, _, _)) = data.upcoming.first() {
+            screen.text(9, 6, &format!("{symbol} {kind} {date}"), muted);
+        } else {
+            screen.text(9, 6, "nothing scheduled", muted);
+        }
+        if !data.theses.is_empty() {
+            screen.text(
+                32,
+                6,
+                &format!("● {} theses tracked", data.theses.len()),
+                muted,
+            );
+        }
+        screen.fill(55, 5, screen.w - 3, 6, Style::DEFAULT);
+        screen.fill(50, 6, screen.w - 3, 7, Style::DEFAULT);
+        let agenda_bottom = screen.h - 3;
+        screen.pane(
+            1,
+            15,
+            screen.w - 2,
+            agenda_bottom,
+            false,
+            &[
+                ("needs you today ", Style::fg(color::BLUE).bold()),
+                (
+                    &format!("· {}", data.due_reviews + data.stale_sources),
+                    muted.bold(),
+                ),
+            ],
+            &pane_hints(&[("enter", "open"), ("tab", "next box")]),
+        );
+        paint_due_row(screen, 16, data.due_reviews);
+        paint_stale_row(screen, 19, data.stale_sources);
+        return;
+    }
+
+    let (right, top_bottom, mid_top, mid_bottom, agenda_top) = if screen.w >= 160 {
+        (100, 20, 21, 40, 41)
+    } else {
+        (
+            60,
+            screen.h - 25,
+            screen.h - 24,
+            screen.h - 10,
+            screen.h - 9,
+        )
+    };
+    let rx1 = screen.w - 2;
+    let inner = right + 2;
+    let left_end = right - 1;
+    let right_width = rx1 - inner - 1;
+    let since_title = if count == 0 {
+        "since you last looked"
+    } else {
+        "since you last looked "
+    };
+    let since_badge = if count == 0 {
+        String::new()
+    } else {
+        format!("· {count} new")
+    };
+    screen.pane(
+        right,
+        1,
+        rx1,
+        top_bottom,
+        false,
+        &[
+            (since_title, Style::fg(color::BLUE).bold()),
+            (&since_badge, muted.bold()),
+        ],
+        &pane_hints(&[("3", "research")]),
+    );
+    screen.fill(inner, 2, rx1, 13, Style::DEFAULT);
+    let mut x = inner;
+    for (i, label) in counts.iter().enumerate() {
+        if i > 0 {
+            x += 3;
+        }
+        x = screen.text(x, 2, label, Style::fg(color::FG).bold());
+    }
+    if counts.is_empty() {
+        screen.text(inner, 2, "nothing new since your last visit", muted);
+    }
+    screen.text_right(rx1 - 1, 2, &home.since_stamp, muted);
+    screen.fill(inner + 10, 2, inner + 13, 3, Style::fg(color::FG));
+    if data.pulse.iter().any(|n| *n > 0) {
+        let values: Vec<f64> = data.pulse.iter().map(|n| *n as f64).collect();
+        let graph = crate::braille::BrailleGraph::filled(values).rows(right_width, 2);
+        for (offset, row) in graph.iter().enumerate() {
+            screen.text(
+                inner,
+                4 + offset,
+                row,
+                Style::fg(if offset == 0 { color::BLUE } else { "#3d3d3d" }),
+            );
+        }
+        screen.text(inner, 6, "30 days ago", muted);
+        screen.text_right(rx1 - 1, 6, "today", muted);
+    }
+    if let Some((symbol, n)) = &data.busiest {
+        screen.text(inner, 8, "busiest", muted);
+        screen.fill(inner + 7, 8, inner + 9, 9, Style::fg(color::FG));
+        screen.text(inner + 9, 8, symbol, Style::fg(color::FG));
+        screen.put(inner + 9 + symbol.len(), 8, ' ', Style::fg(color::FG));
+        screen.text(inner + 10 + symbol.len(), 8, &format!("({n})"), muted);
+    } else {
+        screen.text(inner, 8, "no activity in the last 30 days", muted);
+    }
+    if let Some((title, age)) = &data.headline {
+        screen.text(inner, 9, "newest", muted);
+        screen.fill(inner + 6, 9, inner + 9, 10, Style::fg(color::FG));
+        let available = rx1 - inner - age.len() - 12;
+        let title = truncate_home(title, available);
+        screen.text(inner + 9, 9, &title, Style::fg(color::FG));
+        screen.text_right(rx1 - 1, 9, age, muted);
+    } else {
+        screen.text(inner, 9, "newest   no articles yet", muted);
+    }
+    if data.stale_sources > 0 {
+        screen.text(
+            inner,
+            11,
+            &format!("⚠ {} {}", home.symbol, data.stale_text),
+            warn,
+        );
+    } else {
+        screen.text(
+            inner,
+            11,
+            "✓ bars and reports fresh · all plugins on",
+            muted,
+        );
+    }
+    if data.due_reviews > 0 {
+        screen.text(
+            inner,
+            12,
+            &format!(
+                "⚠ {} decision review{} due · {}",
+                data.due_reviews,
+                if data.due_reviews == 1 { "" } else { "s" },
+                data.review_context
+            ),
+            warn,
+        );
+    } else {
+        screen.text(inner, 12, "✓ no decision or evidence reviews due", muted);
+    }
+
+    screen.pane(
+        1,
+        mid_top,
+        left_end,
+        mid_bottom,
+        false,
+        &[
+            ("upcoming ", Style::fg(color::BLUE).bold()),
+            (&format!("· {}", data.upcoming.len()), muted.bold()),
+        ],
+        &pane_hints(&[("enter", "open evidence")]),
+    );
+    if data.upcoming.is_empty() {
+        screen.fill(2, mid_top + 1, left_end, mid_bottom, Style::DEFAULT);
+        screen.text(
+            3,
+            mid_top + 1,
+            "nothing scheduled — press 3, then U to gather evidence",
+            muted,
+        );
+    } else {
+        screen.fill(2, mid_top + 1, left_end, mid_bottom, Style::fg(color::FG));
+        screen.text(
+            3,
+            mid_top + 1,
+            "Symbol   Event        Date    When     Detail",
+            Style::fg(color::FG),
+        );
+        for (index, (symbol, kind, date, when, detail)) in data.upcoming.iter().enumerate() {
+            let y = mid_top + 2 + index;
+            screen.text(3, y, symbol, Style::fg(color::FG).bold());
+            screen.text(12, y, kind, Style::fg(color::FG));
+            screen.text(25, y, date, Style::fg(color::FG));
+            screen.text(33, y, when, Style::fg(color::FG));
+            screen.text(42, y, detail, Style::fg(color::FG));
+        }
+    }
+    screen.text(
+        3,
+        mid_bottom - 1,
+        "calendar plugin: earnings & dividends only",
+        muted,
+    );
+
+    screen.pane(
+        right,
+        mid_top,
+        rx1,
+        mid_bottom,
+        false,
+        &[
+            ("theses ", Style::fg(color::BLUE).bold()),
+            (&format!("· {}", data.theses.len()), muted.bold()),
+        ],
+        &pane_hints(&[("enter", "open thesis"), ("4", "all")]),
+    );
+    screen.fill(right + 1, mid_top + 1, rx1, mid_bottom, Style::DEFAULT);
+    if !data.theses.is_empty() {
+        screen.fill(
+            right + 1,
+            mid_top + 3,
+            rx1,
+            mid_bottom,
+            Style::fg(color::FG),
+        );
+        let mut summary_x = inner;
+        for state in [
+            "challenged",
+            "weakening",
+            "mixed",
+            "idle",
+            "emerging",
+            "building",
+        ] {
+            let count = data.theses.iter().filter(|row| row.2 == state).count();
+            if count == 0 {
+                continue;
+            }
+            if summary_x > inner {
+                summary_x += 3;
+            }
+            let color = match state {
+                "challenged" => color::RED,
+                "weakening" | "mixed" => color::AMBER,
+                "building" => color::GREEN,
+                _ => color::MUTED,
+            };
+            summary_x = screen.text(
+                summary_x,
+                mid_top + 1,
+                &format!("● {count} {state}"),
+                Style::fg(color),
+            );
+        }
+        screen.text(
+            inner + 3,
+            mid_top + 3,
+            "Most at risk",
+            Style::fg(color::FG).bold(),
+        );
+        screen.text_right(
+            rx1 - 1,
+            mid_top + 3,
+            "for/against",
+            Style::fg(color::FG).bold(),
+        );
+        for (index, (claim, ratio, _state)) in data.theses.iter().enumerate() {
+            let y = mid_top + 4 + index;
+            screen.text(inner, y, "●", Style::fg(color::FG));
+            screen.text(
+                inner + 3,
+                y,
+                &truncate_home(claim, rx1 - inner - 17),
+                Style::fg(color::FG),
+            );
+            screen.text_right(rx1 - 1, y, ratio, Style::fg(color::FG));
+        }
+    } else {
+        screen.text(inner, mid_top + 1, "no theses yet", muted);
+        screen.text(
+            inner,
+            mid_top + 3,
+            "4 opens the theses desk — n tracks a claim",
+            muted,
+        );
+    }
+
+    if !data.upcoming.is_empty() {
+        style_table_row(screen, 2, left_end, mid_top + 1, color::PANEL, true);
+        style_table_row(screen, 2, left_end, mid_top + 2, "#242424", false);
+    }
+    if !data.theses.is_empty() {
+        style_table_row(screen, right + 1, rx1, mid_top + 3, color::PANEL, true);
+        style_table_row(screen, right + 1, rx1, mid_top + 4, "#242424", false);
+    }
+    screen.fill(45, mid_bottom - 1, left_end, mid_bottom, Style::DEFAULT);
+    screen.put(2, mid_bottom - 1, ' ', Style::DEFAULT);
+    if !data.theses.is_empty() {
+        for x in inner..inner + 12 {
+            screen.cells[(mid_top + 1) * screen.w + x].fg = Some(color::MUTED);
+        }
+        screen.cells[(mid_top + 5) * screen.w + inner].fg = Some(color::MUTED);
+        for x in rx1 - 12..rx1 - 1 {
+            screen.cells[(mid_top + 5) * screen.w + x].fg = Some(color::MUTED);
+        }
+    }
+
+    screen.pane(
+        1,
+        agenda_top,
+        rx1,
+        screen.h - 3,
+        false,
+        &[
+            ("needs you today ", Style::fg(color::BLUE).bold()),
+            (
+                &format!("· {}", data.due_reviews + data.stale_sources),
+                muted.bold(),
+            ),
+        ],
+        &pane_hints(&[("enter", "open"), ("tab", "next box")]),
+    );
+    paint_due_row(screen, agenda_top + 1, data.due_reviews);
+    paint_stale_row(screen, agenda_top + 4, data.stale_sources);
+}
+
+fn style_table_row(
+    screen: &mut Screen,
+    x0: usize,
+    x1: usize,
+    y: usize,
+    bg: &'static str,
+    bold: bool,
+) {
+    for x in x0..x1 {
+        let cell = &mut screen.cells[y * screen.w + x];
+        cell.fg = Some(color::FG);
+        cell.bg = Some(bg);
+        cell.bold = bold || cell.bold;
+    }
+}
+
+fn paint_due_row(screen: &mut Screen, y: usize, due: usize) {
+    screen.fill(8, y, screen.w - 4, y + 1, Style::DEFAULT);
+    if due > 0 {
+        screen.text(
+            8,
+            y,
+            &format!("{due} decision review due"),
+            Style::fg(color::MUTED).bold(),
+        );
+    } else {
+        screen.text(8, y, "✓ no decision reviews due", Style::fg(color::MUTED));
+    }
+}
+
+fn paint_stale_row(screen: &mut Screen, y: usize, stale: usize) {
+    screen.fill(8, y, screen.w - 4, y + 1, Style::DEFAULT);
+    if stale > 0 {
+        screen.text(
+            8,
+            y,
+            &format!(
+                "⚠ {stale} stale source{}",
+                if stale == 1 { "" } else { "s" }
+            ),
+            Style::fg(color::AMBER),
+        );
+    } else {
+        screen.text(8, y, "✓ bars and reports fresh", Style::fg(color::MUTED));
+    }
+}
+
+fn truncate_home(text: &str, width: usize) -> String {
+    if text.chars().count() <= width {
+        return text.to_string();
+    }
+    format!(
+        "{}…",
+        text.chars()
+            .take(width.saturating_sub(1))
+            .collect::<String>()
+    )
+}
+
 /// The Home screen: header chip + clock, watchlist / since-you-last-looked,
 /// upcoming / theses, the agenda, and the status bar with `1 Home` active
 /// (port of `delta/tui/screens/home.py` at the captured 120x40 layout).
