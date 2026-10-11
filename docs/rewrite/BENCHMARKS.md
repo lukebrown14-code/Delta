@@ -1,5 +1,28 @@
 # R4 benchmarks — Rust vs the post-audit Python app
 
+## Populated V1 integration build (11 Oct 2026)
+
+macOS arm64 release build, 120x40 pseudo-terminal. The app used a copy of
+`fixtures/golden_seed.db` under `/private/tmp`, with network quotes disabled.
+The 50-ticker case duplicated AAPL's 80 stored bars for 49 synthetic US
+tickers in that temporary database. Three warm launches were sampled. A
+Python `subprocess` timer measured spawn to first terminal output, so this
+includes process startup and terminal setup but does not prove the whole first
+frame was painted. RSS is the child-process maximum from `getrusage`.
+
+| Case | First terminal output, median | Maximum RSS | Draw timing from `DELTA_FRAME_LOG` |
+|---|---:|---:|---:|
+| Populated seed, one configured ticker | 52.2 ms | — | 25 chart scrub keys: 29 frames, 1.37 ms average, 8.56 ms maximum |
+| 50 configured tickers, 80 bars each | 28.8 ms | 18.0 MiB | 25 chart scrub keys: 78 frames, 0.59 ms average, 1.08 ms maximum |
+
+The 50-ticker warm result is faster than the one-ticker run because the
+measurements were taken at different cache temperatures and first output is
+an imprecise marker. A separate 30-run `delta --version` check measured
+9.86 ms median including Python's subprocess overhead and 6.4 MiB maximum
+RSS. `hyperfine` is unavailable on this machine. These figures are local
+smoke benchmarks; CI and a repeatable first-frame benchmark still gate the
+release assessment.
+
 Recorded 2026-09 on the rewrite/rust branch, macOS arm64, release build
 (`cargo build --release -p delta-tui`). The plan's estimates
 (docs/RUST_REWRITE_PLAN.md) vs measured:

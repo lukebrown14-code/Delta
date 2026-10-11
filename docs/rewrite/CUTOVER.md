@@ -1,24 +1,26 @@
 # Cutover checklist (R4 -> main)
 
-**Not ready.** Five screens are still static and several services are unported;
-see `docs/rewrite/REMAINING.md`. Cutover is one PR from `rewrite/rust` into
-`main` (per `docs/RUST_REWRITE_PLAN.md`); the human steps are marked **[gate]**.
+**Not ready.** The Rust app and shared services are integrated on
+`spec/26-rust-v1` in draft PR #37. The expanded populated golden matrix,
+release packaging, and maintainer gates remain. The cutover is one PR into
+`main`; the human steps are marked **[gate]**.
 
 - [ ] Every R3 task card in `docs/rewrite/tasks/` is done and merged.
 - [ ] Full 3-size golden matrix green over every scenario, including populated
       and dialog states (Tier A cell-for-cell, Tier B triaged, approved
-      deviations only). The 28 landing-state goldens are green today.
+      deviations only). The integrated landing and initial populated states
+      are green; extended R4 scenarios are in progress.
 - [ ] Service parity: every `delta/services.py` operation plus reports, chat,
       theses, decisions and review match Python on the shared seed.
 - [ ] End-of-phase adversarial reviewer pass, findings triaged.
 - [ ] Benchmarks re-recorded on the populated app (`docs/rewrite/BENCHMARKS.md`):
-      launch, RSS, chart scrub, 50 live tickers. Launch (< 2 ms) and RSS
-      (~6 MB) are recorded for the current partial app.
-- [x] Packaging: cargo-dist config in `Cargo.toml` +
-      `.github/workflows/release.yml` (tag-push builds). Release binaries only;
-      no Homebrew tap (decision D12).
+      launch, RSS, chart scrub, 50 live tickers. Local smoke measurements are
+      recorded; a repeatable first-frame run remains.
+- [ ] Packaging: validate cargo-dist archives and publish a GitHub Release
+      from the tag workflow. Release binaries only; no Homebrew tap (D12).
 - [ ] Manual pass: `cargo run --release` on a copy of the real `data/delta.db`,
-      every panel.
+      every panel. A seed database pass succeeded; repository instructions
+      currently forbid reading `data/*.db`.
 - [ ] **[gate]** Tag `python-final` on `main` before the merge lands.
 - [ ] **[gate]** Approve the PR merging `rewrite/rust` into `main`.
 - [ ] In the cutover PR: remove `delta/`, `tests/`, `uv.lock`, `pyproject.toml`
