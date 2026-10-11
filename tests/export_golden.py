@@ -141,6 +141,7 @@ def _capture_screen(app: DeltaApp) -> list[list[dict]]:
 
 def export_scenario(scenario: Scenario, tmp_path: Path, out_dir: Path) -> Path:
     import shutil
+
     import time_machine
     import tomli_w
 
@@ -202,6 +203,22 @@ def export_scenario(scenario: Scenario, tmp_path: Path, out_dir: Path) -> Path:
                 async def run() -> list[list[dict]]:
                     async with app.run_test(size=scenario.size) as pilot:
                         await pilot.press(*scenario.keys)
+                        if scenario.name == "live-ask":
+                            from delta.chat import ChatMessage
+                            from delta.tui.screens.chat import Chat
+
+                            with engine.connect() as connection:
+                                turns = connection.exec_driver_sql(
+                                    "SELECT role, text, citations, source FROM chatmessage ORDER BY seq"
+                                ).all()
+                            chat_screen = app.screen
+                            assert isinstance(chat_screen, Chat)
+                            chat_screen.history = [
+                                ChatMessage(role=role, text=text, citations=tuple(json.loads(citations)), source=source)
+                                for role, text, citations, source in turns
+                            ]
+                            chat_screen.selected_answer = len(chat_screen.history) - 1
+                            await chat_screen._render_transcript()
                         # Workers (metrics fetch, refreshes) land over a few
                         # frames; mirror test_snapshots.py's run_before.
                         await pilot.pause(0.3)

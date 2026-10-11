@@ -14,7 +14,7 @@ mod status_bar;
 mod theses;
 mod watchlist;
 
-pub use ask::{draw_ask, draw_ask_narrow, draw_ask_wide};
+pub use ask::{draw_ask, draw_ask_narrow, draw_ask_wide, paint_ask_state, AskState};
 pub use decisions::{draw_decisions, draw_decisions_narrow, draw_decisions_wide};
 pub use home::{draw_home, draw_home_narrow, draw_home_wide, feed_seed, HomeFeed, HomeState};
 pub use research::{draw_research, draw_research_narrow, draw_research_wide};

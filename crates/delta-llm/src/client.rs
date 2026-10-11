@@ -22,7 +22,7 @@ pub const SYSTEM_PROMPT: &str = "You are an investment analyst.";
 /// given, a cached response failing the check is treated as a miss (and never
 /// re-served), so a previously-poisoned key is re-attempted live rather than
 /// replaying the same failure on every call.
-pub type CacheValidator<'a> = &'a dyn Fn(&str) -> bool;
+pub type CacheValidator<'a> = &'a (dyn Fn(&str) -> bool + Send + Sync);
 
 /// Arguments for [`LlmClient::complete`] / [`LlmClient::chat`].
 #[derive(Clone, Copy, Default)]

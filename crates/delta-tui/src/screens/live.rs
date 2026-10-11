@@ -26,8 +26,107 @@ pub fn render_live(state: &str, fixture: &serde_json::Value, db_path: &Path) -> 
         // One line per populated screen state; each later screen ticket
         // registers its builder here.
         "live-settings" => Some(live_settings(fixture, db_path, w, h)),
+        "live-ask" => Some(live_ask(fixture, db_path, w, h)),
         _ => None,
     }
+}
+
+fn live_ask(fixture: &serde_json::Value, db_path: &Path, w: usize, h: usize) -> Screen {
+    use crate::screens::ask::{
+        draw_ask, draw_ask_narrow, draw_ask_wide, paint_ask_state, AskState,
+    };
+    use delta_services::chat::ChatMessage;
+    let db = delta_core::db::Db::open(db_path).expect("golden seed database");
+    let mut state = AskState {
+        provider: fixture["seed"]["config"]["llm"]["provider"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string(),
+        model: fixture["seed"]["config"]["llm"]["model"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string(),
+        ..Default::default()
+    };
+    let targets = fixture["seed"]["config"]["targets"]
+        .as_object()
+        .expect("seed targets");
+    state.set_targets(
+        targets
+            .iter()
+            .map(|(id, spec)| {
+                delta_services::target_from_spec(id, spec, false).expect("target spec")
+            })
+            .collect(),
+    );
+    let mut query = db
+        .conn()
+        .prepare("SELECT role, text, citations, source FROM chatmessage ORDER BY seq")
+        .expect("chatmessage table");
+    state.history = query
+        .query_map([], |row| {
+            let citations: String = row.get(2)?;
+            Ok(ChatMessage {
+                role: row.get(0)?,
+                text: row.get(1)?,
+                citations: serde_json::from_str(&citations).unwrap_or_default(),
+                source: row.get(3)?,
+            })
+        })
+        .expect("chat turns")
+        .map(|turn| turn.expect("chat row"))
+        .collect();
+    let ids: Vec<String> = state
+        .history
+        .iter()
+        .flat_map(|turn| turn.citations.iter().cloned())
+        .collect();
+    for id in ids {
+        if let Some(item) = delta_services::evidence_by_ids(&db, std::slice::from_ref(&id))
+            .expect("citation evidence")
+            .into_iter()
+            .next()
+        {
+            let label = format!("{} · {}", item.title, item.ts.format("%-d %b"));
+            state.sidebar_labels.insert(id.clone(), label.clone());
+            if item.id == id {
+                state.citation_labels.insert(id, label);
+            }
+        }
+    }
+    let mut screen = Screen::new(w, h);
+    if w < 100 {
+        draw_ask_narrow(&mut screen);
+    } else if w >= 160 {
+        draw_ask_wide(&mut screen);
+    } else {
+        draw_ask(&mut screen);
+    }
+    paint_ask_state(&mut screen, &state);
+    let spend: f64 = db
+        .conn()
+        .query_row(
+            "SELECT COALESCE(SUM(cost_usd), 0) FROM llmcall",
+            [],
+            |row| row.get(0),
+        )
+        .expect("seed spend");
+    let cost_x = if w < 100 { w - 19 } else { w - 34 };
+    screen.text(
+        cost_x,
+        h - 1,
+        &format!("${spend:.2}"),
+        crate::screen::Style::fg(crate::screen::color::FG).bg(crate::screen::color::PANEL),
+    );
+    for cell in &mut screen.cells[(h - 1) * w..h * w] {
+        if cell.bg == Some(crate::screen::color::BLUE_BG) {
+            cell.bg = Some("#494949");
+        }
+        if cell.ch == '●' && cell.fg == Some(crate::screen::color::AMBER) {
+            cell.fg = Some("#a6a6a6");
+        }
+    }
+    screen
 }
 
 /// The populated Settings screen: config, provider state and pinned sizes
