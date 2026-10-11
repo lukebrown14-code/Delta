@@ -303,8 +303,7 @@ pub fn get_thesis(db: &Db, id: &str) -> Result<Thesis, ServiceError> {
         .conn()
         .prepare(&format!("SELECT {THESIS_COLUMNS} FROM thesis"))
         .map_err(db_err)?;
-    // Python's `startswith` is literal; filter in Rust so `%`/`_` in a
-    // user-typed prefix cannot act as LIKE wildcards.
+    // Thesis ids are generated hex strings. Match their prefixes literally.
     let matches: Vec<Thesis> = stmt
         .query_map([], row_to_thesis)
         .map_err(db_err)?

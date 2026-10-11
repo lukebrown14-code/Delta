@@ -160,12 +160,12 @@ impl DataPlugin for YfinanceCalendar {
         });
         let results = futures::future::join_all(reads).await;
         let mut events: Vec<Event> = Vec::new();
-        for result in results {
+        for (inst, result) in instruments.iter().zip(results) {
             let (inst, cal) = match result {
                 Ok(pair) => pair,
                 Err(err) => {
                     // One failed symbol must not abort the whole batch.
-                    log::error!("calendar fetch failed: {err}");
+                    log::error!("calendar fetch failed for {}: {err}", inst.id);
                     continue;
                 }
             };

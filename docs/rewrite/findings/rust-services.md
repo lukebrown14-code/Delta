@@ -87,7 +87,7 @@ the Python SQLModel models (verified green).
   `crates/delta-services/tests/extract_sentiment.rs` cover the skip and the
   inclusive boundaries.
 
-## R3.1b review findings (7 Oct, reviewer agent — triage pending)
+## R3.1b review findings (7 Oct, resolved on the V1 integration branch)
 
 | # | Category | Location | Evidence | Proposed fix |
 |---|---|---|---|---|
@@ -98,3 +98,8 @@ the Python SQLModel models (verified green).
 | R5 | note | crates/delta-plugins/src/calendar.rs | Calendar fetch error log drops the instrument id Python logs | Add the id to the log line |
 | R6 | note | tests/shared_parity.rs | Parity harness never compares the dumped `raw` field ("field for field" overstated); verified equivalent by code read | Add `raw` to the comparison |
 | R7 | note | crates/delta-services/src/decisions.rs | No now-path `created_at` round-trip regression test (theses has one); the µs fix itself is verified correct | Add a test mirroring theses |
+
+R1–R3 are covered by `setup` regression tests. R4's comment now describes
+generated hex ids. R5 includes the instrument id in calendar errors. R6 checks
+the evidence `raw` JSON against Python's dump. R7 checks the default timestamp
+after a database round trip.

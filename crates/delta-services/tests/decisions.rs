@@ -80,6 +80,30 @@ fn create_list_and_get_round_trip() {
 }
 
 #[test]
+fn created_at_defaults_to_now_and_round_trips() {
+    let db = db();
+    let created = create_decision(
+        &db,
+        INST,
+        "Services revenue is growing.",
+        "Trading at 20x forward earnings.",
+        "5 years",
+        date("2026-04-01"),
+        "Services revenue growth turns negative.",
+        None,
+        None,
+    )
+    .unwrap();
+    let now = chrono::Utc::now().naive_utc();
+    assert!(created.created_at <= now);
+    assert!(now - created.created_at < chrono::Duration::minutes(1));
+    assert_eq!(
+        get_decision(&db, &created.id).unwrap().created_at,
+        created.created_at
+    );
+}
+
+#[test]
 fn original_framing_fields_are_required() {
     let cases: Vec<(&str, String, String)> = vec![
         ("instrument_id", "instrument_id".into(), " ".into()),

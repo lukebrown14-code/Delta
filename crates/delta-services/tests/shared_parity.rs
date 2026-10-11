@@ -84,6 +84,7 @@ fn evidence_pool_matches_python() {
         );
         assert_eq!(item.sentiment, want["sentiment"].as_f64(), "{}", item.id);
         assert_eq!(item.quality, json_str(&want["quality"]), "{}", item.id);
+        assert_eq!(item.raw, want["raw"], "{}", item.id);
         assert_eq!(
             delta_services::evidence::cite(item),
             json_str(&want["cite"]),
