@@ -191,11 +191,10 @@ fn live_decisions(
     };
     let decision = decisions.get(selected)?;
     let reviews = delta_services::review_history(&db, &decision.id).ok()?;
-    let current_price = db
-        .bars(&decision.instrument_id)
+    let current_price = delta_services::recent_closes(&db, &decision.instrument_id, 1)
         .ok()?
         .last()
-        .map(|bar| bar.close);
+        .copied();
     let data = DecisionsData {
         decisions,
         selected,

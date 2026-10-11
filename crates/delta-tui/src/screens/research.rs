@@ -105,6 +105,56 @@ const KINDS: [(&str, &str); 6] = [
 ];
 
 impl ResearchState {
+    /// Bring the first claim citing this evidence to the top of the report.
+    pub fn reveal_claim(
+        &mut self,
+        data: &ResearchData,
+        evidence_id: &str,
+        screen_width: usize,
+    ) -> bool {
+        let Some(report) = &data.report else {
+            return false;
+        };
+        let claim = [
+            &report.draft.bull,
+            &report.draft.bear,
+            &report.draft.risks,
+            &report.draft.catalysts,
+            &report.draft.sentiment_reasons,
+        ]
+        .into_iter()
+        .flat_map(|claims| claims.iter())
+        .find(|claim| claim.evidence_ids.iter().any(|id| id == evidence_id));
+        let Some(claim) = claim else {
+            return false;
+        };
+        let report_width = if screen_width < 100 {
+            screen_width.saturating_sub(10)
+        } else if screen_width >= 160 {
+            screen_width.saturating_sub(88)
+        } else {
+            32
+        };
+        let needle: String = claim.text.chars().take(12).collect();
+        let markdown = render_markdown(report, true);
+        let mut line_number = 0;
+        for block in crate::markdown::render(&markdown, report_width) {
+            line_number += block.margin_top;
+            for line in block.lines {
+                let text: String = line.iter().map(|run| run.text.as_str()).collect();
+                if text.contains(&needle) {
+                    self.report_scroll = line_number;
+                    self.view = ResearchView::Report;
+                    self.detail_open = false;
+                    return true;
+                }
+                line_number += 1;
+            }
+            line_number += block.margin_bottom;
+        }
+        false
+    }
+
     pub fn cycle_kind(&mut self) {
         self.kind_index = (self.kind_index + 1) % KINDS.len();
         self.selected = 0;
@@ -875,7 +925,7 @@ fn paint_report(
     for block in crate::markdown::render(&markdown, width) {
         y += block.margin_top;
         for line in block.lines {
-            if y >= screen.h - 3 {
+            if y.saturating_sub(state.report_scroll) >= screen.h - 3 {
                 break;
             }
             if y >= start_y + state.report_scroll {

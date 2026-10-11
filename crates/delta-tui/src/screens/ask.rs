@@ -410,16 +410,20 @@ pub fn paint_ask_state(screen: &mut Screen, state: &AskState) {
         && !state.clear_pending
         && !state.targets_focus
         && !state.scope_changed
+        && !state.zoomed
     {
         return;
     }
-    let narrow = screen.w < 100;
+    let narrow = screen.w < 100 || state.zoomed;
     let right = if narrow {
         screen.w.saturating_sub(2)
     } else {
         screen.w.saturating_sub(38)
     };
     let bottom = screen.h.saturating_sub(3);
+    if state.zoomed {
+        screen.fill(1, 0, screen.w.saturating_sub(1), bottom + 1, Style::DEFAULT);
+    }
     if state.scope_changed {
         let ids = state.instrument_ids();
         let names = state
@@ -841,6 +845,20 @@ pub fn paint_ask_state(screen: &mut Screen, state: &AskState) {
 #[cfg(test)]
 mod state_tests {
     use super::*;
+
+    #[test]
+    fn zoom_uses_full_width_and_hides_side_panes() {
+        let mut screen = Screen::new(120, 40);
+        draw_ask(&mut screen);
+        let state = AskState {
+            zoomed: true,
+            ..Default::default()
+        };
+        paint_ask_state(&mut screen, &state);
+        let text: String = screen.cells.iter().map(|cell| cell.ch).collect();
+        assert!(!text.contains("t targets · 1"));
+        assert_eq!(screen.cells[118].ch, '┓');
+    }
 
     #[test]
     fn clearing_invalidates_an_in_flight_answer() {

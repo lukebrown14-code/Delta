@@ -296,8 +296,9 @@ impl App {
                 Some(Action::Noop)
             }
             KeyCode::Char('v') if state.selected_id.is_some() => {
-                state.view = ResearchView::Report;
-                state.detail_open = false;
+                if let (Some(data), Some(id)) = (&self.research, state.selected_id.clone()) {
+                    state.reveal_claim(data, &id, self.viewport.0 as usize);
+                }
                 Some(Action::Noop)
             }
             _ => None,
@@ -350,7 +351,6 @@ impl App {
                     draw_ask(screen),
                     draw_ask_narrow(screen)
                 );
-                paint_ask_state(screen, &self.ask);
             }
             Tab::Decisions => {
                 if let Some(data) = self
@@ -558,10 +558,9 @@ impl App {
         let selected = selected.min(decisions.len().saturating_sub(1));
         let (reviews, current_price) = if let Some(decision) = decisions.get(selected) {
             let reviews = delta_services::review_history(&db, &decision.id).unwrap_or_default();
-            let price = db
-                .bars(&decision.instrument_id)
+            let price = delta_services::recent_closes(&db, &decision.instrument_id, 1)
                 .ok()
-                .and_then(|bars| bars.last().map(|bar| bar.close));
+                .and_then(|closes| closes.last().copied());
             (reviews, price)
         } else {
             (Vec::new(), None)
@@ -2483,6 +2482,13 @@ mod tests {
             Some(Action::OpenSource(url)) if url == "https://example.com/news/aapl-chip"
         ));
         assert!(app.research_state.detail_open);
+        app.handle_key(key(KeyCode::Char('v')));
+        assert_eq!(app.research_state.view, ResearchView::Report);
+        assert!(app.research_state.report_scroll > 0);
+        let mut frame = Screen::new(120, 40);
+        app.paint(&mut frame);
+        let visible: String = frame.cells.iter().map(|cell| cell.ch).collect();
+        assert!(visible.contains("The announced chip"));
         app.handle_key(key(KeyCode::Esc));
         assert!(!app.research_state.detail_open);
         app.handle_key(key(KeyCode::Char('/')));
