@@ -169,6 +169,24 @@ fn unknown_provider_and_settings_are_rejected() {
     );
 }
 
+#[test]
+fn unknown_market_precedes_missing_required_field() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config.toml");
+    let env = dir.path().join(".env");
+    assert_invalid(
+        configure_data_provider(
+            &config,
+            &env,
+            &licensed_specs(),
+            "licensed",
+            &values(&[("endpoint", ""), ("api_key", "")]),
+            Some(&["nowhere".to_string()]),
+        ),
+        "unknown markets: nowhere",
+    );
+}
+
 /// A secret whose spec forgot its env var cannot be accepted: it must never
 /// land in config.toml.
 #[test]
@@ -250,6 +268,52 @@ fn data_provider_status_reads_config_and_env() {
     let statuses = data_provider_status(&cfg, &env, &licensed_specs());
     assert!(statuses[0].configured);
     assert!(statuses[0].enabled);
+}
+
+#[test]
+fn data_provider_status_uses_python_truthiness() {
+    let dir = tempfile::tempdir().unwrap();
+    let env = dir.path().join(".env");
+    let specs = delta_plugins::provider_specs();
+    for falsy in [
+        serde_json::json!(null),
+        serde_json::json!(false),
+        serde_json::json!(0),
+        serde_json::json!(""),
+        serde_json::json!([]),
+        serde_json::json!({}),
+    ] {
+        let cfg = AppConfig {
+            plugins: BTreeMap::from([(
+                "sec_edgar".to_string(),
+                serde_json::json!({"contact": falsy, "enabled": falsy}),
+            )]),
+            ..AppConfig::default()
+        };
+        let status = data_provider_status(&cfg, &env, &specs);
+        assert!(!status[0].configured);
+        assert!(!status[0].enabled);
+    }
+}
+
+#[test]
+fn whitespace_provider_key_matches_python_setup_check() {
+    let dir = tempfile::tempdir().unwrap();
+    let settings = delta_core::config::Settings {
+        openrouter_api_key: "   ".to_string(),
+        ..Default::default()
+    };
+    let cfg = AppConfig::default();
+    let db = Db::open_memory().unwrap();
+    let checks = setup_checks(
+        &settings,
+        &cfg,
+        &db,
+        &dir.path().join("config.toml"),
+        &dir.path().join(".env"),
+    )
+    .unwrap();
+    assert!(checks[0].ok);
 }
 
 /// `test_setup_checks_flag_missing_key` (test_services.py): no key, no

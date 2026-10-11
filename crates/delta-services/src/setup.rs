@@ -48,7 +48,7 @@ fn provider_key(settings: &Settings, spec_env_var: &str, env_path: &Path) -> Str
                 "anthropic_api_key" => &settings.anthropic_api_key,
                 _ => "",
             };
-            value.trim().to_string()
+            value.to_string()
         }
         None => read_env_value_named(spec_env_var, env_path),
     }
@@ -153,12 +153,20 @@ pub struct DataProviderStatus {
 /// `[plugins.<name>] enabled` (default true). Python stores `bool(value)`.
 fn plugin_enabled(cfg: &AppConfig, name: &str) -> bool {
     match cfg.plugins.get(name).and_then(|t| t.get("enabled")) {
-        Some(Value::Bool(b)) => *b,
-        Some(Value::Number(n)) => n.as_f64().is_none_or(|v| v != 0.0),
-        Some(Value::String(s)) => !s.is_empty(),
-        Some(Value::Null) | None => true,
-        Some(Value::Array(a)) => !a.is_empty(),
-        Some(Value::Object(_)) => true,
+        Some(value) => python_truthy(value),
+        None => true,
+    }
+}
+
+/// `bool(value)` for the JSON shapes `config.toml` can hold.
+fn python_truthy(value: &Value) -> bool {
+    match value {
+        Value::Null => false,
+        Value::Bool(value) => *value,
+        Value::Number(value) => value.as_f64().is_none_or(|n| n != 0.0),
+        Value::String(value) => !value.is_empty(),
+        Value::Array(value) => !value.is_empty(),
+        Value::Object(value) => !value.is_empty(),
     }
 }
 
@@ -177,11 +185,7 @@ pub fn data_provider_status(
                 || (if field.secret && !field.env_var.is_empty() {
                     !read_env_value_named(field.env_var, env_path).is_empty()
                 } else {
-                    // bool(table.get(field.name)): missing/None/false are falsy.
-                    table
-                        .get(field.name)
-                        .map(|value| !value.is_null() && value != &Value::Bool(false))
-                        .unwrap_or(false)
+                    table.get(field.name).is_some_and(python_truthy)
                 })
         });
         result.push(DataProviderStatus {
@@ -314,15 +318,6 @@ pub fn configure_data_provider(
                 field.label
             )));
         }
-        // Python raises this from inside the config mutation (for secret and
-        // plain fields alike), before any file is written; validating here
-        // has the same effect.
-        if field.required && value.trim().is_empty() {
-            return Err(ServiceError::invalid(format!(
-                "{} is required",
-                field.label
-            )));
-        }
     }
     if let Some(markets) = markets {
         let known = crate::config_ops::market_profiles(config_path)?;
@@ -336,6 +331,18 @@ pub fn configure_data_provider(
             return Err(ServiceError::invalid(format!(
                 "unknown markets: {}",
                 names.join(", ")
+            )));
+        }
+    }
+    // Python checks market scope before its config mutation validates
+    // required fields. Preserve that error precedence and avoid a partial
+    // write when validation fails.
+    for (field_name, value) in values {
+        let field = fields[field_name.as_str()];
+        if field.required && value.trim().is_empty() {
+            return Err(ServiceError::invalid(format!(
+                "{} is required",
+                field.label
             )));
         }
     }
