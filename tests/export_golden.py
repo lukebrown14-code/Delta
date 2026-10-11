@@ -31,6 +31,7 @@ import asyncio
 import json
 import math
 import sys
+import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -210,7 +211,9 @@ def export_scenario(scenario: Scenario, tmp_path: Path, out_dir: Path) -> Path:
                         await pilot.press(*scenario.keys)
                         if scenario.name == "live-research-citation":
                             await app.screen.inspect_evidence("news:news-aapl-chip")
-                        if scenario.name == "live-ask":
+                        if scenario.name.startswith("live-ask"):
+                            from textual.widgets import Input
+
                             from delta.chat import ChatMessage
                             from delta.tui.screens.chat import Chat
 
@@ -224,7 +227,22 @@ def export_scenario(scenario: Scenario, tmp_path: Path, out_dir: Path) -> Path:
                                 ChatMessage(role=role, text=text, citations=tuple(json.loads(citations)), source=source)
                                 for role, text, citations, source in turns
                             ]
+                            if scenario.name in ("live-ask-typing", "live-ask-waiting", "live-ask-error"):
+                                chat_screen.history.clear()
                             chat_screen.selected_answer = len(chat_screen.history) - 1
+                            if scenario.name == "live-ask-typing":
+                                chat_screen.action_focus_input()
+                                chat_screen.query_one("#chat-input", Input).value = "What changed at Apple?"
+                            elif scenario.name == "live-ask-waiting":
+                                chat_screen.history.append(ChatMessage(role="user", text="What changed at Apple?", source="user"))
+                                chat_screen.busy_since = time.monotonic()
+                            elif scenario.name == "live-ask-citation-selected":
+                                chat_screen.action_next_citation()
+                            elif scenario.name == "live-ask-confirm":
+                                chat_screen.action_clear_transcript()
+                            elif scenario.name == "live-ask-error":
+                                chat_screen.history.append(ChatMessage(role="user", text="What changed at Apple?", source="user"))
+                                chat_screen.notify("ask failed: offline test — press i to try again", severity="error")
                             await chat_screen._render_transcript()
                         # Workers (metrics fetch, refreshes) land over a few
                         # frames; mirror test_snapshots.py's run_before.

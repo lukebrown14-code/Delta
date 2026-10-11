@@ -826,6 +826,39 @@ impl App {
             }
             KeyCode::Left => self.ask.walk_citation(-1),
             KeyCode::Right => self.ask.walk_citation(1),
+            KeyCode::Char('o') => {
+                let citation = self
+                    .ask
+                    .citations()
+                    .get(self.ask.selected_citation)
+                    .cloned()?;
+                if citation.starts_with("https://") || citation.starts_with("http://") {
+                    return Some(Action::OpenSource(citation));
+                }
+                let target_ids = self
+                    .thesis_db()
+                    .and_then(|db| {
+                        delta_services::evidence_by_ids(&db, std::slice::from_ref(&citation)).ok()
+                    })
+                    .and_then(|items| items.into_iter().next())
+                    .map(|item| item.target_ids)
+                    .unwrap_or_default();
+                let instrument = self
+                    .ask
+                    .targets
+                    .iter()
+                    .filter(|target| target_ids.contains(&target.id))
+                    .flat_map(|target| target.instruments())
+                    .map(|instrument| instrument.id)
+                    .next()
+                    .or_else(|| self.ask.instrument_ids().into_iter().next());
+                if let Some(instrument) = instrument {
+                    self.open_research_for_instrument(&instrument);
+                    self.research_state.view = ResearchView::Evidence;
+                    self.research_state.selected_id = Some(citation);
+                    self.research_state.detail_open = true;
+                }
+            }
             KeyCode::Char('z') => self.ask.zoomed = !self.ask.zoomed,
             KeyCode::Char('x') if !self.ask.history.is_empty() => self.ask.clear_pending = true,
             _ => return None,
@@ -2443,6 +2476,23 @@ mod tests {
 
     fn ctrl(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::CONTROL)
+    }
+
+    #[test]
+    fn ask_opens_a_web_citation_without_switching_panes() {
+        let mut app = app();
+        app.tab = Tab::Ask;
+        app.ask.history.push(delta_services::chat::ChatMessage {
+            role: "assistant".into(),
+            text: "Source-backed answer".into(),
+            citations: vec!["https://example.com/source".into()],
+            source: "web".into(),
+        });
+        assert!(matches!(
+            app.handle_key(key(KeyCode::Char('o'))),
+            Some(Action::OpenSource(url)) if url == "https://example.com/source"
+        ));
+        assert_eq!(app.tab, Tab::Ask);
     }
 
     #[test]

@@ -33,7 +33,13 @@ pub fn render_live(state: &str, fixture: &serde_json::Value, db_path: &Path) -> 
         "live-research" | "live-research-search" | "live-research-citation" => {
             Some(live_research(state, fixture, db_path, w, h))
         }
-        "live-ask" => Some(live_ask(fixture, db_path, w, h)),
+        "live-ask"
+        | "live-ask-typing"
+        | "live-ask-waiting"
+        | "live-ask-answered"
+        | "live-ask-citation-selected"
+        | "live-ask-confirm"
+        | "live-ask-error" => Some(live_ask(state, fixture, db_path, w, h)),
         "live-decisions"
         | "live-decisions-review"
         | "live-decisions-confirm"
@@ -78,7 +84,13 @@ fn live_research(
     screen
 }
 
-fn live_ask(fixture: &serde_json::Value, db_path: &Path, w: usize, h: usize) -> Screen {
+fn live_ask(
+    state_name: &str,
+    fixture: &serde_json::Value,
+    db_path: &Path,
+    w: usize,
+    h: usize,
+) -> Screen {
     use crate::screens::ask::{
         draw_ask, draw_ask_narrow, draw_ask_wide, paint_ask_state, AskState,
     };
@@ -123,6 +135,29 @@ fn live_ask(fixture: &serde_json::Value, db_path: &Path, w: usize, h: usize) -> 
         .expect("chat turns")
         .map(|turn| turn.expect("chat row"))
         .collect();
+    match state_name {
+        "live-ask-typing" => {
+            state.history.clear();
+            state.input = "What changed at Apple?".into();
+            state.editing = true;
+        }
+        "live-ask-waiting" | "live-ask-error" => {
+            state.history.clear();
+            state.history.push(ChatMessage {
+                role: "user".into(),
+                text: "What changed at Apple?".into(),
+                citations: vec![],
+                source: "user".into(),
+            });
+            state.busy = state_name == "live-ask-waiting";
+            if state_name == "live-ask-error" {
+                state.error = Some("offline test — press i to try again".into());
+            }
+        }
+        "live-ask-citation-selected" => state.walk_citation(1),
+        "live-ask-confirm" => state.clear_pending = true,
+        _ => {}
+    }
     let ids: Vec<String> = state
         .history
         .iter()
