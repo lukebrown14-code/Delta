@@ -17,3 +17,9 @@ SCENARIOS = (
     + matrix("glossary", ("2", "enter", "i"), "B")
     + (Scenario("narrow", (80, 24), "A", ("2", "enter")),)
 )
+
+POPULATED_SCENARIOS = (
+    matrix("live-watchlist", ("2",), "A")
+    + matrix("live-watchlist-inspector", ("2", "enter"), "A")
+    + matrix("live-watchlist-range", ("2", "enter", "r"), "A")
+)

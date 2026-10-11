@@ -13,12 +13,17 @@ use delta_core::config::AppConfig;
 
 use crate::screen::Screen;
 use crate::screens::decisions::{draw_decision_review_form, draw_decisions_live, DecisionsData};
+use crate::screens::home::{draw_home_live, HomeFeed, HomeLiveData, HomeState};
 use crate::screens::research::{draw_research_live, ResearchData, ResearchState};
 use crate::screens::settings::{
     draw_settings, draw_settings_narrow, draw_settings_wide, SettingsData, SettingsState,
     SettingsView,
 };
 use crate::screens::theses::{draw_theses_live, ThesesState};
+use crate::screens::watchlist::{
+    draw_watchlist, draw_watchlist_narrow, draw_watchlist_narrow_list, draw_watchlist_wide,
+    grouped, MetricsData, WatchEntry, WatchlistState,
+};
 
 /// Render one live scenario at its manifest size, or `None` when no builder
 /// is registered for `state`.
@@ -29,6 +34,10 @@ pub fn render_live(state: &str, fixture: &serde_json::Value, db_path: &Path) -> 
         // One line per populated screen state; each later screen ticket
         // registers its builder here.
         "live-settings" => Some(live_settings(fixture, db_path, w, h)),
+        "live-home" => Some(live_home(db_path, w, h)),
+        "live-watchlist" | "live-watchlist-inspector" | "live-watchlist-range" => {
+            Some(live_watchlist(state, db_path, w, h))
+        }
         "live-theses" => Some(live_theses(fixture, db_path, w, h)),
         "live-research" | "live-research-search" | "live-research-citation" => {
             Some(live_research(state, fixture, db_path, w, h))
@@ -39,6 +48,217 @@ pub fn render_live(state: &str, fixture: &serde_json::Value, db_path: &Path) -> 
         | "live-decisions-confirm"
         | "live-decisions-review-form" => live_decisions(fixture, db_path, w, h),
         _ => None,
+    }
+}
+
+fn live_home(db_path: &Path, w: usize, h: usize) -> Screen {
+    let db = delta_core::db::Db::open(db_path).expect("golden seed database");
+    let bars = db.bars("US:AAPL").expect("seed AAPL bars");
+    let closes: Vec<f64> = bars[bars.len() - 40..]
+        .iter()
+        .map(|bar| bar.close)
+        .collect();
+    let last = closes[closes.len() - 1];
+    let prev = closes[closes.len() - 2];
+    let state = HomeState {
+        clock: "Monday 21 September 2026 · 09:30:00 UTC".into(),
+        symbol: "AAPL".into(),
+        last: grouped(last),
+        chg_label: format!("{:+.2}%", (last / prev - 1.0) * 100.0),
+        spark: crate::braille::BrailleGraph::filled(closes.clone()).rows(17, 1)[0].clone(),
+        since_stamp: "since Mon 09:30".into(),
+        closes,
+        feed: HomeFeed::seed(),
+    };
+    let now = chrono::NaiveDate::from_ymd_opt(2026, 9, 21)
+        .expect("frozen date")
+        .and_hms_opt(9, 30, 0)
+        .expect("frozen time");
+    let ids = vec!["US:AAPL".to_string()];
+    let pulse =
+        delta_services::analytics::pulse(&db, &ids, now - chrono::Duration::days(7), 30, now)
+            .expect("seed pulse");
+    let headline = delta_services::analytics::latest_headline(&db, &ids, 50)
+        .expect("seed headline")
+        .map(|item| {
+            let days = (now - item.ts).num_days();
+            (item.title, format!("{days}d"))
+        });
+    let upcoming = delta_services::analytics::upcoming_events(&db, &ids, 5, now)
+        .expect("seed upcoming")
+        .into_iter()
+        .map(|event| {
+            (
+                event
+                    .instrument_id
+                    .split(':')
+                    .next_back()
+                    .unwrap_or_default()
+                    .to_string(),
+                event.kind,
+                event.ts.format("%d %b").to_string(),
+                format!("in {}d", (event.ts.date() - now.date()).num_days()),
+                event.summary,
+            )
+        })
+        .collect();
+    let theses = delta_services::thesis_fleet(&db, Some(now))
+        .expect("seed thesis fleet")
+        .into_iter()
+        .map(|row| {
+            let state = row.state().as_str().to_string();
+            let ratio = row.result.as_ref().map_or_else(
+                || "—".to_string(),
+                |result| format!("{} / {}", result.support, result.against),
+            );
+            (row.thesis.claim, ratio, state)
+        })
+        .collect();
+    let due_reviews = delta_services::due_reviews(&db, Some(now.date()))
+        .expect("seed due reviews")
+        .len();
+    let health = delta_services::analytics::data_health(&db).expect("seed health");
+    let stale_days = health
+        .latest_bar
+        .get("US:AAPL")
+        .map_or(0, |last| (now - *last).num_days().max(0));
+    let data = HomeLiveData {
+        articles: pulse.articles,
+        filings: pulse.filings,
+        events: pulse.events,
+        pulse: pulse.daily,
+        busiest: pulse.busiest.map(|(id, count)| {
+            (
+                id.split(':').next_back().unwrap_or_default().to_string(),
+                count,
+            )
+        }),
+        headline,
+        stale_sources: usize::from(stale_days > 0),
+        stale_text: format!("{stale_days}d old"),
+        due_reviews,
+        review_context: "6 decisions".into(),
+        upcoming,
+        theses,
+    };
+    let mut screen = Screen::new(w, h);
+    draw_home_live(&mut screen, &state, &data);
+    apply_populated_focus(&mut screen);
+    paint_spend(
+        &mut screen,
+        delta_services::analytics::total_spend(&db, None),
+    );
+    screen
+}
+
+fn live_watchlist(state_name: &str, db_path: &Path, w: usize, h: usize) -> Screen {
+    let db = delta_core::db::Db::open(db_path).expect("golden seed database");
+    let bars = db.bars("US:AAPL").expect("seed AAPL bars");
+    let window = &bars[bars.len() - 30..];
+    let series: Vec<f64> = window.iter().map(|bar| bar.close).collect();
+    let times: Vec<String> = window
+        .iter()
+        .map(|bar| format!("{}+00:00", bar.ts.format("%Y-%m-%dT%H:%M:%S")))
+        .collect();
+    let first = series[0];
+    let last = *series.last().expect("nonempty seed bars");
+    let card = |name: &str| -> String {
+        let value = db
+            .fundamentals("US:AAPL")
+            .expect("seed fundamentals")
+            .iter()
+            .find(|row| row.metric == name)
+            .expect("seed metric")
+            .value;
+        if value.abs() >= 1e12 {
+            format!("{:.1}T", value / 1e12)
+        } else {
+            format!("{value:.1}")
+        }
+    };
+    let data = WatchlistState {
+        range: if state_name == "live-watchlist-range" {
+            "6m"
+        } else {
+            "1m"
+        },
+        scrub: None,
+        entries: vec![WatchEntry {
+            symbol: "AAPL".into(),
+            asset_class: "equity".into(),
+        }],
+        selected: 0,
+        metric: Some(MetricsData {
+            symbol: "AAPL".into(),
+            market: "us".into(),
+            asset_class: "equity".into(),
+            currency: "USD".into(),
+            current: grouped(last),
+            change_label: Some(format!("{:+.1}%", (last / first - 1.0) * 100.0)),
+            period_high: Some(series.iter().copied().fold(f64::NEG_INFINITY, f64::max)),
+            period_low: Some(series.iter().copied().fold(f64::INFINITY, f64::min)),
+            history_start: times.first().cloned(),
+            history_end: times.last().cloned(),
+            series,
+            series_times: times,
+            source: "Yahoo Finance".into(),
+            values: vec![
+                ("Current price".into(), grouped(last)),
+                ("Market cap".into(), card("Market cap")),
+                ("P/E".into(), card("P/E")),
+            ],
+        }),
+    };
+    let mut screen = Screen::new(w, h);
+    if w < 100 {
+        if state_name == "live-watchlist" {
+            draw_watchlist_narrow_list(&mut screen, &data);
+        } else {
+            draw_watchlist_narrow(&mut screen, &data);
+        }
+    } else if w >= 160 {
+        draw_watchlist_wide(&mut screen, &data);
+    } else {
+        draw_watchlist(&mut screen, &data);
+    }
+    apply_populated_focus(&mut screen);
+    paint_spend(
+        &mut screen,
+        delta_services::analytics::total_spend(&db, None),
+    );
+    screen
+}
+
+/// Textual's populated fixture starts with the TUI unfocused: its primary
+/// blue, positive chart line and active chip resolve to these subdued tokens.
+fn apply_populated_focus(screen: &mut Screen) {
+    for cell in &mut screen.cells {
+        cell.fg = match cell.fg {
+            Some(crate::screen::color::BLUE) => Some("#898989"),
+            Some(crate::screen::color::GREEN) => Some("#9b9b9b"),
+            Some(crate::screen::color::AMBER) => Some("#a6a6a6"),
+            other => other,
+        };
+        if cell.bg == Some(crate::screen::color::BLUE_BG) {
+            cell.bg = Some("#494949");
+        }
+    }
+}
+
+fn paint_spend(screen: &mut Screen, spend: f64) {
+    let text = format!("${:.2}", spend.max(0.0));
+    let y = screen.h - 1;
+    let row: Vec<char> = screen.cells[y * screen.w..(y + 1) * screen.w]
+        .iter()
+        .map(|cell| cell.ch)
+        .collect();
+    if let Some(x) = row
+        .windows(5)
+        .position(|window| window == ['$', '0', '.', '0', '0'])
+    {
+        for (offset, ch) in text.chars().enumerate() {
+            screen.cells[y * screen.w + x + offset].ch = ch;
+        }
     }
 }
 
