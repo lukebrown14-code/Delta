@@ -459,27 +459,40 @@ pub fn paint_ask_state(screen: &mut Screen, state: &AskState) {
         .filter(|turn| turn.role == "assistant")
         .count();
     let count = state.history.len();
-    let title = if count == 1 {
+    let title = if count == 0 {
+        String::new()
+    } else if count == 1 {
         " · 1 message".to_string()
     } else {
         format!(" · {count} messages")
     };
-    let mut hints = vec![("i", "ask")];
-    if narrow {
-        hints.push(("t", "targets"));
+    let hints = if state.clear_pending {
+        vec![("y", "confirm clear"), ("esc", "cancel")]
+    } else if state.editing {
+        let mut hints = vec![("enter", "send"), ("esc", "leave input")];
+        if !narrow {
+            hints.push(("↑↓", "scroll"));
+        }
+        hints
     } else {
-        hints.push(("↑↓", "scroll"));
-    }
-    if !state.citations().is_empty() {
-        hints.extend([("←→", "citation"), ("o", "open citation")]);
-    }
-    if answers > 0 {
-        hints.push(("s", "save"));
-    }
-    if count > 0 {
-        hints.push(("x", "clear"));
-    }
-    hints.push(("z", "zoom"));
+        let mut hints = vec![("i", "ask")];
+        if narrow {
+            hints.push(("t", "targets"));
+        } else {
+            hints.push(("↑↓", "scroll"));
+        }
+        if !state.citations().is_empty() {
+            hints.extend([("←→", "citation"), ("o", "open citation")]);
+        }
+        if answers > 0 {
+            hints.push(("s", "save"));
+        }
+        if count > 0 {
+            hints.push(("x", "clear"));
+        }
+        hints.push(("z", "zoom"));
+        hints
+    };
     let runs = pane_hints(&hints)
         .into_iter()
         .map(|(text, style)| {
@@ -497,10 +510,14 @@ pub fn paint_ask_state(screen: &mut Screen, state: &AskState) {
         .iter()
         .map(|(text, style)| (text.clone(), *style))
         .collect::<Vec<_>>();
-    let title_parts = [
-        ("5 ask ", Style::fg("#898989").bold()),
-        (title.trim_start(), Style::fg(color::MUTED).bold()),
-    ];
+    let title_parts = if count == 0 {
+        vec![("5 ask", Style::fg("#898989").bold())]
+    } else {
+        vec![
+            ("5 ask ", Style::fg("#898989").bold()),
+            (title.trim_start(), Style::fg(color::MUTED).bold()),
+        ]
+    };
     screen.pane(1, 0, right, bottom, true, &title_parts, &refs);
     // Textual fades the focused Ask pane while its transcript is selected.
     for y in 0..=bottom {
@@ -557,6 +574,14 @@ pub fn paint_ask_state(screen: &mut Screen, state: &AskState) {
         bottom.saturating_sub(2),
         Style::DEFAULT.bg(color::BLACK),
     );
+    if state.history.is_empty() {
+        screen.text(
+            3,
+            2,
+            "no messages yet — press t to pick targets, then i to ask",
+            Style::fg(color::MUTED),
+        );
+    }
     let mut y = 2;
     for turn in &state.history {
         if y + 2 >= bottom {
@@ -695,23 +720,28 @@ pub fn paint_ask_state(screen: &mut Screen, state: &AskState) {
         }
     }
     if state.busy && y + 2 < bottom {
-        screen.text(3, y, "assistant · answering…", Style::fg(color::MUTED));
-    }
-    if let Some(error) = &state.error {
+        screen.put(2, y, '█', Style::fg("#494949"));
+        screen.text(4, y, "assistant", Style::fg("#898989").bold());
+        screen.put(13, y, ' ', Style::fg(color::FG));
+        let provider = if state.provider.is_empty() {
+            "—"
+        } else {
+            &state.provider
+        };
+        let model = if state.model.is_empty() {
+            "—"
+        } else {
+            &state.model
+        };
         screen.text(
-            3,
-            bottom.saturating_sub(3),
-            &format!("ask failed: {error}"),
+            14,
+            y,
+            &format!("· {provider} · {model} · "),
             Style::fg(color::MUTED),
         );
-    }
-    if state.clear_pending {
-        screen.text(
-            3,
-            bottom.saturating_sub(3),
-            "clear transcript? y confirm · esc cancel",
-            Style::fg(color::MUTED),
-        );
+        let marker_x = 14 + crate::wrap::cell_width(&format!("· {provider} · {model} · "));
+        screen.put(marker_x - 1, y, ' ', Style::fg(color::FG));
+        screen.text(marker_x, y, "● answering… 0s", Style::fg("#a6a6a6"));
     }
     screen.fill(
         5,
@@ -726,8 +756,21 @@ pub fn paint_ask_state(screen: &mut Screen, state: &AskState) {
             5,
             bottom.saturating_sub(1),
             &state.input,
-            Style::fg(color::FG),
+            if state.editing {
+                Style::fg(color::FG).bg("#242424")
+            } else {
+                Style::fg(color::FG)
+            },
         );
+        if state.editing {
+            let cursor_x = 5 + crate::wrap::cell_width(&state.input);
+            screen.put(
+                cursor_x,
+                bottom.saturating_sub(1),
+                ' ',
+                Style::fg(color::BLACK).bg(color::FG),
+            );
+        }
     } else {
         screen.text(
             5,
@@ -756,73 +799,75 @@ pub fn paint_ask_state(screen: &mut Screen, state: &AskState) {
         let cite_x = screen.w.saturating_sub(36);
         let cite_y = if screen.w >= 160 { 26 } else { 21 };
         let cite_bottom = bottom.saturating_sub(1);
-        let header = Style::fg(color::FG).bold().bg(color::PANEL);
-        screen.fill(
-            cite_x,
-            cite_y - 1,
-            screen.w.saturating_sub(2),
-            cite_y,
-            header,
-        );
-        screen.text(cite_x, cite_y - 1, " #    Evidence", header);
-        screen.fill(
-            cite_x,
-            cite_y,
-            screen.w.saturating_sub(2),
-            cite_bottom,
-            Style::fg(color::FG),
-        );
-        for (index, id) in state
-            .citations()
-            .iter()
-            .enumerate()
-            .take(cite_bottom.saturating_sub(cite_y))
-        {
-            let label = state
-                .sidebar_labels
-                .get(id)
-                .map(String::as_str)
-                .unwrap_or(id);
-            let label: String = label.chars().take(28).collect();
-            let row_style = if index == state.selected_citation {
-                Style::fg(color::FG).bg("#242424")
-            } else {
-                Style::fg(color::FG)
-            };
+        if !state.citations().is_empty() {
+            let header = Style::fg(color::FG).bold().bg(color::PANEL);
             screen.fill(
                 cite_x,
-                cite_y + index,
+                cite_y - 1,
                 screen.w.saturating_sub(2),
-                cite_y + index + 1,
-                row_style,
+                cite_y,
+                header,
             );
-            screen.text(
-                cite_x + 1,
-                cite_y + index,
-                &format!("{}    {label}", index + 1),
-                row_style,
+            screen.text(cite_x, cite_y - 1, " #    Evidence", header);
+            screen.fill(
+                cite_x,
+                cite_y,
+                screen.w.saturating_sub(2),
+                cite_bottom,
+                Style::fg(color::FG),
+            );
+            for (index, id) in state
+                .citations()
+                .iter()
+                .enumerate()
+                .take(cite_bottom.saturating_sub(cite_y))
+            {
+                let label = state
+                    .sidebar_labels
+                    .get(id)
+                    .map(String::as_str)
+                    .unwrap_or(id);
+                let label: String = label.chars().take(28).collect();
+                let row_style = if index == state.selected_citation {
+                    Style::fg(color::FG).bg("#242424")
+                } else {
+                    Style::fg(color::FG)
+                };
+                screen.fill(
+                    cite_x,
+                    cite_y + index,
+                    screen.w.saturating_sub(2),
+                    cite_y + index + 1,
+                    row_style,
+                );
+                screen.text(
+                    cite_x + 1,
+                    cite_y + index,
+                    &format!("{}    {label}", index + 1),
+                    row_style,
+                );
+            }
+            screen.fill(
+                cite_x,
+                cite_bottom - 1,
+                cite_x + 15,
+                cite_bottom,
+                Style::fg(color::SURFACE_SCROLLBAR),
+            );
+            screen.put(
+                cite_x + 15,
+                cite_bottom - 1,
+                '▏',
+                Style::fg(color::SURFACE_SCROLLBAR).bg("#0d0d0d"),
+            );
+            screen.fill(
+                cite_x + 16,
+                cite_bottom - 1,
+                screen.w.saturating_sub(2),
+                cite_bottom,
+                Style::fg(color::FG).bg("#0d0d0d"),
             );
         }
-        screen.fill(
-            cite_x,
-            cite_bottom - 1,
-            cite_x + 15,
-            cite_bottom,
-            Style::fg(color::SURFACE_SCROLLBAR),
-        );
-        screen.put(
-            cite_x + 15,
-            cite_bottom - 1,
-            '▏',
-            Style::fg(color::SURFACE_SCROLLBAR).bg("#0d0d0d"),
-        );
-        screen.fill(
-            cite_x + 16,
-            cite_bottom - 1,
-            screen.w.saturating_sub(2),
-            cite_bottom,
-            Style::fg(color::FG).bg("#0d0d0d"),
-        );
         screen.fill(
             cite_x,
             bottom - 1,
