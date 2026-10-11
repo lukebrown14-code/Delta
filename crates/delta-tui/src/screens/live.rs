@@ -58,7 +58,8 @@ pub fn render_live(state: &str, fixture: &serde_json::Value, db_path: &Path) -> 
         "live-decisions"
         | "live-decisions-review"
         | "live-decisions-confirm"
-        | "live-decisions-review-form" => live_decisions(fixture, db_path, w, h),
+        | "live-decisions-review-form"
+        | "live-decisions-empty" => live_decisions(fixture, db_path, w, h),
         _ => None,
     }
 }
@@ -462,18 +463,27 @@ fn live_decisions(
     h: usize,
 ) -> Option<Screen> {
     let db = delta_core::db::Db::open(db_path).ok()?;
-    let decisions = delta_services::list_decisions(&db, None, true).ok()?;
+    let decisions = if fixture["state"] == "live-decisions-empty" {
+        Vec::new()
+    } else {
+        delta_services::list_decisions(&db, None, true).ok()?
+    };
     let selected = if fixture["state"] == "live-decisions-review" {
         1
     } else {
         0
     };
-    let decision = decisions.get(selected)?;
-    let reviews = delta_services::review_history(&db, &decision.id).ok()?;
-    let current_price = delta_services::recent_closes(&db, &decision.instrument_id, 1)
-        .ok()?
-        .last()
-        .copied();
+    let (reviews, current_price) = if let Some(decision) = decisions.get(selected) {
+        (
+            delta_services::review_history(&db, &decision.id).ok()?,
+            delta_services::recent_closes(&db, &decision.instrument_id, 1)
+                .ok()?
+                .last()
+                .copied(),
+        )
+    } else {
+        (Vec::new(), None)
+    };
     let data = DecisionsData {
         decisions,
         selected,

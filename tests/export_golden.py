@@ -171,6 +171,10 @@ def export_scenario(scenario: Scenario, tmp_path: Path, out_dir: Path) -> Path:
             tmp_path.joinpath("config.toml").write_text(tomli_w.dumps(config), "utf-8")
             shutil.copy2(Path(__file__).resolve().parent.parent / SEED, tmp_path / "delta.db")
             engine = init_engine(tmp_path / "delta.db")
+            if scenario.name == "live-decisions-empty":
+                with engine.begin() as connection:
+                    connection.exec_driver_sql("DELETE FROM decision_review")
+                    connection.exec_driver_sql("DELETE FROM decision")
             rig = FakeRig(engine, [AAPL.model_copy(update={"watchlists": ("apple",)})])
             rig.cfg = build_config(config)
             rig.plugins = {"sec_edgar": SECEdgar()}

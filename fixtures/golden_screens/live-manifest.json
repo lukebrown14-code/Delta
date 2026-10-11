@@ -337,6 +337,132 @@
       "tier": "B"
     },
     {
+      "file": "live-ask-typing-80x24.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "80x24",
+      "state": "live-ask-typing",
+      "tier": "B"
+    },
+    {
+      "file": "live-ask-typing-120x40.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "120x40",
+      "state": "live-ask-typing",
+      "tier": "A"
+    },
+    {
+      "file": "live-ask-typing-200x50.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "200x50",
+      "state": "live-ask-typing",
+      "tier": "B"
+    },
+    {
+      "file": "live-ask-waiting-80x24.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "80x24",
+      "state": "live-ask-waiting",
+      "tier": "B"
+    },
+    {
+      "file": "live-ask-waiting-120x40.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "120x40",
+      "state": "live-ask-waiting",
+      "tier": "A"
+    },
+    {
+      "file": "live-ask-waiting-200x50.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "200x50",
+      "state": "live-ask-waiting",
+      "tier": "B"
+    },
+    {
+      "file": "live-ask-answered-80x24.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "80x24",
+      "state": "live-ask-answered",
+      "tier": "B"
+    },
+    {
+      "file": "live-ask-answered-120x40.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "120x40",
+      "state": "live-ask-answered",
+      "tier": "A"
+    },
+    {
+      "file": "live-ask-answered-200x50.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "200x50",
+      "state": "live-ask-answered",
+      "tier": "B"
+    },
+    {
+      "file": "live-ask-citation-selected-80x24.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "80x24",
+      "state": "live-ask-citation-selected",
+      "tier": "B"
+    },
+    {
+      "file": "live-ask-citation-selected-120x40.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "120x40",
+      "state": "live-ask-citation-selected",
+      "tier": "A"
+    },
+    {
+      "file": "live-ask-citation-selected-200x50.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "200x50",
+      "state": "live-ask-citation-selected",
+      "tier": "B"
+    },
+    {
+      "file": "live-ask-confirm-80x24.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "80x24",
+      "state": "live-ask-confirm",
+      "tier": "B"
+    },
+    {
+      "file": "live-ask-confirm-120x40.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "120x40",
+      "state": "live-ask-confirm",
+      "tier": "A"
+    },
+    {
+      "file": "live-ask-confirm-200x50.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "200x50",
+      "state": "live-ask-confirm",
+      "tier": "B"
+    },
+    {
+      "file": "live-ask-error-80x24.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "80x24",
+      "state": "live-ask-error",
+      "tier": "B"
+    },
+    {
+      "file": "live-ask-error-120x40.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "120x40",
+      "state": "live-ask-error",
+      "tier": "A"
+    },
+    {
+      "file": "live-ask-error-200x50.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "200x50",
+      "state": "live-ask-error",
+      "tier": "B"
+    },
+    {
       "file": "live-decisions-80x24.json",
       "seed": "fixtures/golden_seed.db",
       "size": "80x24",
@@ -421,130 +547,25 @@
       "tier": "A"
     },
     {
-      "file": "live-ask-answered-120x40.json",
+      "file": "live-decisions-empty-80x24.json",
       "seed": "fixtures/golden_seed.db",
-      "size": "120x40",
-      "state": "live-ask-answered",
+      "size": "80x24",
+      "state": "live-decisions-empty",
       "tier": "A"
     },
     {
-      "file": "live-ask-answered-200x50.json",
-      "seed": "fixtures/golden_seed.db",
-      "size": "200x50",
-      "state": "live-ask-answered",
-      "tier": "B"
-    },
-    {
-      "file": "live-ask-answered-80x24.json",
-      "seed": "fixtures/golden_seed.db",
-      "size": "80x24",
-      "state": "live-ask-answered",
-      "tier": "B"
-    },
-    {
-      "file": "live-ask-citation-selected-120x40.json",
+      "file": "live-decisions-empty-120x40.json",
       "seed": "fixtures/golden_seed.db",
       "size": "120x40",
-      "state": "live-ask-citation-selected",
+      "state": "live-decisions-empty",
       "tier": "A"
     },
     {
-      "file": "live-ask-citation-selected-200x50.json",
+      "file": "live-decisions-empty-200x50.json",
       "seed": "fixtures/golden_seed.db",
       "size": "200x50",
-      "state": "live-ask-citation-selected",
-      "tier": "B"
-    },
-    {
-      "file": "live-ask-citation-selected-80x24.json",
-      "seed": "fixtures/golden_seed.db",
-      "size": "80x24",
-      "state": "live-ask-citation-selected",
-      "tier": "B"
-    },
-    {
-      "file": "live-ask-confirm-120x40.json",
-      "seed": "fixtures/golden_seed.db",
-      "size": "120x40",
-      "state": "live-ask-confirm",
+      "state": "live-decisions-empty",
       "tier": "A"
-    },
-    {
-      "file": "live-ask-confirm-200x50.json",
-      "seed": "fixtures/golden_seed.db",
-      "size": "200x50",
-      "state": "live-ask-confirm",
-      "tier": "B"
-    },
-    {
-      "file": "live-ask-confirm-80x24.json",
-      "seed": "fixtures/golden_seed.db",
-      "size": "80x24",
-      "state": "live-ask-confirm",
-      "tier": "B"
-    },
-    {
-      "file": "live-ask-error-120x40.json",
-      "seed": "fixtures/golden_seed.db",
-      "size": "120x40",
-      "state": "live-ask-error",
-      "tier": "A"
-    },
-    {
-      "file": "live-ask-error-200x50.json",
-      "seed": "fixtures/golden_seed.db",
-      "size": "200x50",
-      "state": "live-ask-error",
-      "tier": "B"
-    },
-    {
-      "file": "live-ask-error-80x24.json",
-      "seed": "fixtures/golden_seed.db",
-      "size": "80x24",
-      "state": "live-ask-error",
-      "tier": "B"
-    },
-    {
-      "file": "live-ask-typing-120x40.json",
-      "seed": "fixtures/golden_seed.db",
-      "size": "120x40",
-      "state": "live-ask-typing",
-      "tier": "A"
-    },
-    {
-      "file": "live-ask-typing-200x50.json",
-      "seed": "fixtures/golden_seed.db",
-      "size": "200x50",
-      "state": "live-ask-typing",
-      "tier": "B"
-    },
-    {
-      "file": "live-ask-typing-80x24.json",
-      "seed": "fixtures/golden_seed.db",
-      "size": "80x24",
-      "state": "live-ask-typing",
-      "tier": "B"
-    },
-    {
-      "file": "live-ask-waiting-120x40.json",
-      "seed": "fixtures/golden_seed.db",
-      "size": "120x40",
-      "state": "live-ask-waiting",
-      "tier": "A"
-    },
-    {
-      "file": "live-ask-waiting-200x50.json",
-      "seed": "fixtures/golden_seed.db",
-      "size": "200x50",
-      "state": "live-ask-waiting",
-      "tier": "B"
-    },
-    {
-      "file": "live-ask-waiting-80x24.json",
-      "seed": "fixtures/golden_seed.db",
-      "size": "80x24",
-      "state": "live-ask-waiting",
-      "tier": "B"
     }
   ],
   "seed": "fixtures/golden_seed.db"

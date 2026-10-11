@@ -10,4 +10,4 @@ POPULATED_SCENARIOS = matrix("live-decisions", ("6",), "A") + matrix(
     "live-decisions-review", ("6", "down"), "A"
 ) + matrix("live-decisions-confirm", ("6", "d"), "A") + matrix(
     "live-decisions-review-form", ("6", "r"), "A"
-)
+) + matrix("live-decisions-empty", ("6",), "A")

@@ -68,7 +68,11 @@ pub fn draw_decisions_live(screen: &mut Screen, data: &DecisionsData) {
             }
         }
     }
-    let review_count = format!(" · {} reviews", data.reviews.len());
+    let review_count = if data.decisions.is_empty() {
+        String::new()
+    } else {
+        format!(" · {} reviews", data.reviews.len())
+    };
     screen.pane(
         right,
         0,
@@ -113,6 +117,30 @@ pub fn draw_decisions_live(screen: &mut Screen, data: &DecisionsData) {
             && screen.cells[status + x + 2].ch == '.'
     }) {
         screen.text(footer_x, screen.h - 1, &footer, Style::fg(color::FG));
+    }
+
+    if data.decisions.is_empty() {
+        let mut empty = Screen::new(screen.w, screen.h);
+        if screen.w < 100 {
+            draw_decisions_narrow(&mut empty);
+        } else if screen.w >= 160 {
+            draw_decisions_wide(&mut empty);
+        } else {
+            draw_decisions(&mut empty);
+        }
+        for y in 1..bottom {
+            for x in 2..left {
+                screen.cells[y * screen.w + x] = empty.cells[y * screen.w + x].clone();
+            }
+            for x in right + 1..screen.w - 2 {
+                let mut cell = empty.cells[y * screen.w + x].clone();
+                if cell.fg == Some(color::BLUE) {
+                    cell.fg = Some("#898989");
+                }
+                screen.cells[y * screen.w + x] = cell;
+            }
+        }
+        return;
     }
 
     let list_style = Style::fg(color::FG);
