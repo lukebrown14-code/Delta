@@ -80,6 +80,11 @@ pub enum Action {
     ShowProviderPicker,
     /// A form submitted successfully (carries the form title).
     FormSubmitted(String),
+    /// Long-running thesis model calls are dispatched by the event loop.
+    ThesisFind(String),
+    ThesisSummarize(String),
+    ThesisFound(usize),
+    ThesisSummary(Box<delta_services::ThesisSummary>),
     /// Live quote prices keyed by instrument id (from the quotes worker).
     Quotes(BTreeMap<String, f64>),
     /// Inspector metric rows (label, formatted value) for one instrument.

@@ -66,10 +66,11 @@ pub use setup::{
 pub use targets::{target_from_spec, WatchTarget, DEFAULT_KIND, KNOWN_KINDS, LEGACY_KIND};
 pub use theses::{
     accepted_items, add_evidence, create_thesis, ensure_tables, evidence_for, get_thesis,
-    list_theses, remove_evidence, set_accepted, set_status, thesis_id, update_thesis,
-    ThesisEvidence, SIDES,
+    list_theses, propose_evidence, propose_evidence_configured, remove_evidence, set_accepted,
+    set_status, thesis_id, update_thesis, ThesisEvidence, SIDES,
 };
 pub use thesis_health::{
     badge_text, compute_health, state_style, thesis_fleet, EvidenceSide, HealthResult, HealthState,
     Thesis, ThesisHealth, RECENT_DAYS,
 };
+pub use thesis_summary::{summarize_thesis, summarize_thesis_configured, ThesisSummary};

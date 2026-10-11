@@ -22,8 +22,8 @@ use delta_tui::screens::{
     draw_ask, draw_ask_narrow, draw_ask_wide, draw_decisions, draw_decisions_narrow,
     draw_decisions_wide, draw_glossary_overlay, draw_home, draw_home_narrow, draw_home_wide,
     draw_research, draw_research_narrow, draw_research_wide, draw_settings, draw_settings_narrow,
-    draw_settings_wide, draw_theses, draw_theses_narrow, draw_theses_wide, draw_watchlist,
-    draw_watchlist_narrow, draw_watchlist_wide, SettingsFocus, SettingsState, SettingsView,
+    draw_settings_wide, draw_theses_live, draw_watchlist, draw_watchlist_narrow,
+    draw_watchlist_wide, SettingsFocus, SettingsState, SettingsView, ThesesPane, ThesesState,
 };
 use delta_tui::theme::Palette;
 use delta_tui::{is_quit_key, workers, Action, Breakpoint, Component};
@@ -67,6 +67,8 @@ enum FormMode {
     AddTarget,
     EditTarget(String),
     RemoveTarget,
+    AddThesis,
+    EditThesis(String),
 }
 
 /// The seven panes: 1-6 plus `c`.
@@ -139,6 +141,7 @@ pub(crate) struct App {
     overlay: Option<Overlay>,
     /// The Settings screen's interaction state.
     settings: SettingsState,
+    theses: ThesesState,
     /// The terminal size the last frame painted (breakpoint decisions).
     viewport: (u16, u16),
 }
@@ -177,11 +180,7 @@ impl App {
                 draw_research(screen),
                 draw_research_narrow(screen)
             ),
-            Tab::Theses => route!(
-                draw_theses_wide(screen),
-                draw_theses(screen),
-                draw_theses_narrow(screen)
-            ),
+            Tab::Theses => draw_theses_live(screen, &self.theses),
             Tab::Ask => route!(
                 draw_ask_wide(screen),
                 draw_ask(screen),
@@ -239,11 +238,15 @@ impl App {
                 );
             }
             Some(Overlay::SettingsForm(modal)) => {
-                let width = delta_tui::dialog::MODAL_WIDTH.min(screen.w.saturating_sub(4));
-                let height = (modal.form.height(width) + 5).min(screen.h.saturating_sub(2));
-                let (x, y, w, _h) = delta_tui::dialog::dialog_frame(screen, width, height);
-                screen.text(x, y, &modal.form.title, Style::fg(color::BLUE).bold());
-                modal.form.draw_screen(screen, x, y + 2, w);
+                if matches!(modal.mode, FormMode::AddThesis | FormMode::EditThesis(_)) {
+                    draw_thesis_modal(screen, &modal.form);
+                } else {
+                    let width = delta_tui::dialog::MODAL_WIDTH.min(screen.w.saturating_sub(4));
+                    let height = (modal.form.height(width) + 5).min(screen.h.saturating_sub(2));
+                    let (x, y, w, _h) = delta_tui::dialog::dialog_frame(screen, width, height);
+                    screen.text(x, y, &modal.form.title, Style::fg(color::BLUE).bold());
+                    modal.form.draw_screen(screen, x, y + 2, w);
+                }
             }
             Some(Overlay::ProviderPicker(selected)) => {
                 let (x, y, w, _) = delta_tui::dialog::dialog_frame(screen, 58, 11);
@@ -386,7 +389,10 @@ impl App {
             KeyCode::Char('1') => self.tab = Tab::Home,
             KeyCode::Char('2') => self.tab = Tab::Watchlist,
             KeyCode::Char('3') => self.tab = Tab::Research,
-            KeyCode::Char('4') => self.tab = Tab::Theses,
+            KeyCode::Char('4') => {
+                self.tab = Tab::Theses;
+                self.reload_theses();
+            }
             KeyCode::Char('5') => self.tab = Tab::Ask,
             KeyCode::Char('6') => self.tab = Tab::Decisions,
             KeyCode::Char('c') => self.tab = Tab::Settings,
@@ -434,6 +440,135 @@ impl App {
             _ => {}
         }
         None
+    }
+
+    fn thesis_db(&self) -> Option<delta_core::db::Db> {
+        let delta_tui::desk::Source::Real(path) = &self.desk.source else {
+            return None;
+        };
+        delta_core::db::Db::open(path).ok()
+    }
+
+    fn reload_theses(&mut self) {
+        if let Some(db) = self.thesis_db() {
+            if let Err(err) = self.theses.load(&db) {
+                self.status = err.to_string();
+            }
+        }
+    }
+
+    fn handle_theses_key(&mut self, key: KeyEvent) -> Option<Action> {
+        use delta_services::{remove_evidence, set_accepted};
+        if self.theses.filtering {
+            match key.code {
+                KeyCode::Esc | KeyCode::Enter => self.theses.filtering = false,
+                KeyCode::Backspace => {
+                    self.theses.filter.pop();
+                }
+                KeyCode::Char(ch) => self.theses.filter.push(ch),
+                _ => {}
+            }
+            return Some(Action::Noop);
+        }
+        match key.code {
+            KeyCode::Esc if self.theses.view != ThesesPane::Claims => {
+                self.theses.view = ThesesPane::Claims;
+                Some(Action::Noop)
+            }
+            KeyCode::Char('/') => {
+                self.theses.filtering = true;
+                self.theses.view = ThesesPane::Claims;
+                Some(Action::Noop)
+            }
+            KeyCode::Char('t') | KeyCode::Enter => {
+                self.theses.view = ThesesPane::Detail;
+                Some(Action::Noop)
+            }
+            KeyCode::Char('e') => {
+                self.theses.view = ThesesPane::Evidence;
+                Some(Action::Noop)
+            }
+            KeyCode::Char('n') => {
+                self.overlay = Some(Overlay::SettingsForm(thesis_form(None)));
+                Some(Action::Noop)
+            }
+            KeyCode::Char('d') => {
+                let row = self.theses.fleet.get(self.theses.selected)?;
+                self.overlay = Some(Overlay::SettingsForm(thesis_form(Some(&row.thesis))));
+                Some(Action::Noop)
+            }
+            KeyCode::Up => {
+                if self.theses.view == ThesesPane::Evidence {
+                    self.theses.evidence_selected = self.theses.evidence_selected.saturating_sub(1);
+                    return Some(Action::Noop);
+                }
+                self.theses.selected = self.theses.selected.saturating_sub(1);
+                if let Some(db) = self.thesis_db() {
+                    let _ = self.theses.select(&db);
+                }
+                Some(Action::Noop)
+            }
+            KeyCode::Down => {
+                if self.theses.view == ThesesPane::Evidence {
+                    self.theses.evidence_selected = (self.theses.evidence_selected + 1)
+                        .min(self.theses.links.len().saturating_sub(1));
+                    return Some(Action::Noop);
+                }
+                self.theses.selected =
+                    (self.theses.selected + 1).min(self.theses.fleet.len().saturating_sub(1));
+                if let Some(db) = self.thesis_db() {
+                    let _ = self.theses.select(&db);
+                }
+                Some(Action::Noop)
+            }
+            KeyCode::Char('f') => self
+                .theses
+                .selected_id()
+                .map(|id| Action::ThesisFind(id.to_string()))
+                .or_else(|| Some(Action::Status("select a thesis first".to_string()))),
+            KeyCode::Char('s') => self
+                .theses
+                .selected_id()
+                .map(|id| Action::ThesisSummarize(id.to_string()))
+                .or_else(|| Some(Action::Status("select a thesis first".to_string()))),
+            KeyCode::Char('a' | 'x' | 'u') => {
+                if self.viewport_width() < 100 && self.theses.view != ThesesPane::Evidence {
+                    return Some(Action::Status(
+                        "press e to review evidence first".to_string(),
+                    ));
+                }
+                let Some(link) = self.theses.selected_link().cloned() else {
+                    return Some(Action::Status("no evidence to review".to_string()));
+                };
+                let Some(db) = self.thesis_db() else {
+                    return Some(Action::Status("offline: no database".to_string()));
+                };
+                let result = match key.code {
+                    KeyCode::Char('a') if !link.accepted => {
+                        set_accepted(&db, &link.thesis_id, &link.evidence_id, true).map(|_| ())
+                    }
+                    KeyCode::Char('u') if link.accepted => {
+                        set_accepted(&db, &link.thesis_id, &link.evidence_id, false).map(|_| ())
+                    }
+                    KeyCode::Char('x') if !link.accepted => {
+                        remove_evidence(&db, &link.thesis_id, &link.evidence_id)
+                    }
+                    _ => {
+                        return Some(Action::Status(
+                            "review that item's current state first".to_string(),
+                        ))
+                    }
+                };
+                match result {
+                    Ok(()) => {
+                        self.reload_theses();
+                        Some(Action::Noop)
+                    }
+                    Err(err) => Some(Action::Status(err.to_string())),
+                }
+            }
+            _ => None,
+        }
     }
 }
 
@@ -735,6 +870,67 @@ impl App {
                 &config,
                 values.get("Name").map(String::as_str).unwrap_or(""),
             ),
+            FormMode::AddThesis | FormMode::EditThesis(_) => {
+                let Some(db) = self.thesis_db() else {
+                    return (Action::Status("offline: no database".to_string()), false);
+                };
+                let csv = |name: &str| {
+                    values
+                        .get(name)
+                        .map(|s| {
+                            s.split(',')
+                                .map(str::trim)
+                                .filter(|part| !part.is_empty())
+                                .map(str::to_string)
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default()
+                };
+                let claim = values.get("Claim").map(String::as_str).unwrap_or("");
+                let targets = csv("Targets");
+                let assumptions = csv("Holds if");
+                let falsifiers = csv("Breaks if");
+                let scope = values.get("Scope").map(String::as_str).unwrap_or("");
+                let horizon = values.get("Horizon").map(String::as_str).unwrap_or("");
+                let saved = match &modal.mode {
+                    FormMode::AddThesis => delta_services::create_thesis(
+                        &db,
+                        claim,
+                        scope,
+                        &assumptions,
+                        &falsifiers,
+                        &targets,
+                        horizon,
+                        None,
+                    ),
+                    FormMode::EditThesis(id) => delta_services::update_thesis(
+                        &db,
+                        id,
+                        claim,
+                        &targets,
+                        horizon,
+                        values.get("Status").map(String::as_str).unwrap_or("active"),
+                        Some(scope),
+                        Some(&assumptions),
+                        Some(&falsifiers),
+                    ),
+                    _ => unreachable!(),
+                };
+                match saved {
+                    Ok(thesis) => {
+                        self.reload_theses();
+                        self.theses.selected = self
+                            .theses
+                            .fleet
+                            .iter()
+                            .position(|row| row.thesis.id == thesis.id)
+                            .unwrap_or(0);
+                        let _ = self.theses.select(&db);
+                        Ok(())
+                    }
+                    Err(err) => Err(err),
+                }
+            }
         };
         match result {
             Ok(()) => {
@@ -746,6 +942,7 @@ impl App {
                     FormMode::AddTarget => "target added".to_string(),
                     FormMode::EditTarget(_) => "target saved".to_string(),
                     FormMode::RemoveTarget => "target removed".to_string(),
+                    FormMode::AddThesis | FormMode::EditThesis(_) => "thesis saved".to_string(),
                 };
                 self.desk.reload_settings();
                 let data = &self.desk.settings;
@@ -851,6 +1048,116 @@ fn target_form(current: Option<&delta_services::targets::WatchTarget>) -> FormMo
         }
     }
     FormModal { form, mode }
+}
+
+fn thesis_claim_required(value: &str) -> Result<(), String> {
+    if value.trim().is_empty() {
+        Err("claim is required".to_string())
+    } else {
+        Ok(())
+    }
+}
+
+fn draw_thesis_modal(screen: &mut Screen, form: &Form) {
+    let width = 68.min(screen.w.saturating_sub(4));
+    let height = (form.fields.len() * 2 + 6).min(screen.h.saturating_sub(2));
+    let (x, y, w, _) = delta_tui::dialog::dialog_frame(screen, width, height);
+    screen.text(x, y, &form.title, Style::fg(color::BLUE).bold());
+    for (index, field) in form.fields.iter().enumerate() {
+        let row = y + 2 + index * 2;
+        let focused = index == form.focus;
+        screen.text(
+            x,
+            row,
+            &field.label,
+            Style::fg(if focused { color::BLUE } else { color::MUTED }).bold(),
+        );
+        screen.fill(
+            x,
+            row + 1,
+            x + w,
+            row + 2,
+            Style::fg(color::FG).bg(color::PANEL),
+        );
+        screen.put(
+            x,
+            row + 1,
+            '▌',
+            Style::fg(if focused { color::BLUE } else { color::PANEL }),
+        );
+        let value = field.value();
+        screen.text(
+            x + 2,
+            row + 1,
+            &value.chars().take(w.saturating_sub(3)).collect::<String>(),
+            Style::fg(if field.value().is_empty() {
+                color::MUTED
+            } else {
+                color::FG
+            })
+            .bg(color::PANEL),
+        );
+        if let Some(error) = &field.error {
+            screen.text(
+                x + w.saturating_sub(error.len()),
+                row,
+                error,
+                Style::fg(color::RED),
+            );
+        }
+    }
+    screen.text(
+        x,
+        y + 2 + form.fields.len() * 2,
+        "tab next · enter save · esc cancel",
+        Style::fg(color::MUTED),
+    );
+}
+
+fn thesis_form(current: Option<&delta_services::Thesis>) -> FormModal {
+    use delta_tui::form::Field;
+    let mut fields = vec![
+        Field::new("Claim", "Claim", Some(thesis_claim_required)),
+        Field::new("Targets", "US:AAPL", None),
+        Field::new("Horizon", "5y", None),
+        Field::new("Scope", "what the claim is about", None),
+        Field::new("Holds if", "assumptions, comma separated", None),
+        Field::new("Breaks if", "what would disprove it", None),
+    ];
+    if current.is_some() {
+        fields.push(Field::new(
+            "Status",
+            "active",
+            Some(delta_tui::form::required),
+        ));
+    }
+    let mut form = Form::new(
+        if current.is_some() {
+            "edit thesis"
+        } else {
+            "new thesis"
+        },
+        fields,
+    );
+    if let Some(thesis) = current {
+        for (field, value) in form.fields.iter_mut().zip([
+            thesis.claim.clone(),
+            thesis.targets.join(", "),
+            thesis.time_horizon.clone(),
+            thesis.scope.clone(),
+            thesis.assumptions.join(", "),
+            thesis.falsifiers.join(", "),
+            thesis.status.clone(),
+        ]) {
+            field.input.set_value(&value);
+        }
+    }
+    FormModal {
+        form,
+        mode: current.map_or(FormMode::AddThesis, |thesis| {
+            FormMode::EditThesis(thesis.id.clone())
+        }),
+    }
 }
 
 fn remove_target_form() -> FormModal {
@@ -1066,6 +1373,11 @@ impl Component for App {
         if self.tab == Tab::Settings && key.code == KeyCode::Esc {
             return self.handle_settings_key(key);
         }
+        if self.tab == Tab::Theses {
+            if let Some(action) = self.handle_theses_key(key) {
+                return Some(action);
+            }
+        }
         if let Some(action) = self.handle_shell_key(key) {
             return Some(action);
         }
@@ -1112,6 +1424,19 @@ impl Component for App {
                 }
             }
             Action::Status(msg) => self.status = msg,
+            Action::ThesisFound(count) => {
+                self.reload_theses();
+                self.status = format!(
+                    "{count} candidate{} to review",
+                    if count == 1 { "" } else { "s" }
+                );
+            }
+            Action::ThesisSummary(summary) => {
+                if self.theses.selected_id() == Some(summary.thesis_id.as_str()) {
+                    self.theses.summary = Some(*summary);
+                    self.status = "thesis summarised".to_string();
+                }
+            }
             Action::HomeRefresh(feed) => self.desk.feed = feed,
             Action::ToggleTheme => {
                 // `action_toggle_theme`: swap the palette and notify.
@@ -1124,6 +1449,9 @@ impl Component for App {
             Action::GotoScreen(name) => {
                 if let Some(tab) = Tab::from_screen_name(&name) {
                     self.tab = tab;
+                    if tab == Tab::Theses {
+                        self.reload_theses();
+                    }
                     self.overlay = None;
                     self.glossary = false;
                 }
@@ -1147,6 +1475,8 @@ impl Component for App {
             | Action::OpenDialog(_)
             | Action::CloseDialog
             | Action::Goto(_)
+            | Action::ThesisFind(_)
+            | Action::ThesisSummarize(_)
             | Action::Gather => {}
         }
     }
@@ -1191,8 +1521,10 @@ pub(crate) async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> st
         palette: Palette::Dark,
         overlay: None,
         settings: SettingsState::default(),
+        theses: ThesesState::default(),
         viewport: (120, 40),
     };
+    app.reload_theses();
 
     let mut events = EventStream::new();
     let mut tick = tokio::time::interval(Duration::from_millis(50));
@@ -1217,10 +1549,15 @@ pub(crate) async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> st
                         let previous_range = app.desk.range();
                         let previous_selected = app.desk.current().map(|row| row.instrument.id.clone());
                         if let Some(action) = app.handle_key(key) {
-                            if action == Action::Gather {
-                                let _ = active_workers.gather_tx.send(());
-                            } else {
-                                app.update(action);
+                            match action {
+                                Action::Gather => { let _ = active_workers.gather_tx.send(()); }
+                                Action::ThesisFind(id) => {
+                                    spawn_thesis_job(&app, id, true, bus_tx.clone());
+                                }
+                                Action::ThesisSummarize(id) => {
+                                    spawn_thesis_job(&app, id, false, bus_tx.clone());
+                                }
+                                other => app.update(other),
                             }
                         }
                         let current_ids: Vec<_> = app.desk.instruments.iter().map(|row| row.instrument.id.clone()).collect();
@@ -1265,6 +1602,47 @@ pub(crate) async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> st
     }
 }
 
+/// The thesis model work runs off the Textual event path and reports a result
+/// through the same action bus used by ingest and quotes.
+fn spawn_thesis_job(app: &App, id: String, find: bool, bus: mpsc::UnboundedSender<Action>) {
+    let Some(config_path) = app.desk.config_path.clone() else {
+        let _ = bus.send(Action::Status("offline: no config.toml".to_string()));
+        return;
+    };
+    let delta_tui::desk::Source::Real(db_path) = &app.desk.source else {
+        let _ = bus.send(Action::Status("offline: no database".to_string()));
+        return;
+    };
+    let db_path = db_path.clone();
+    tokio::task::spawn_blocking(move || {
+        let result: Result<Action, String> = tokio::runtime::Handle::current().block_on(async {
+            let (_, cfg) =
+                delta_core::config::load_config(&config_path).map_err(|e| e.to_string())?;
+            let mut db = delta_core::db::Db::open(&db_path).map_err(|e| e.to_string())?;
+            let env_path = config_path
+                .parent()
+                .unwrap_or(std::path::Path::new("."))
+                .join(".env");
+            if find {
+                let found =
+                    delta_services::propose_evidence_configured(&mut db, &cfg, &env_path, &id)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                Ok(Action::ThesisFound(found.len()))
+            } else {
+                let summary =
+                    delta_services::summarize_thesis_configured(&mut db, &cfg, &env_path, &id)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                Ok(Action::ThesisSummary(Box::new(summary)))
+            }
+        });
+        let action =
+            result.unwrap_or_else(|error| Action::Status(format!("thesis model failed: {error}")));
+        let _ = bus.send(action);
+    });
+}
+
 impl App {
     fn draw_frame(
         &mut self,
@@ -1295,6 +1673,7 @@ mod tests {
             palette: Palette::Dark,
             overlay: None,
             settings: SettingsState::default(),
+            theses: ThesesState::default(),
             viewport: (120, 40),
         }
     }
@@ -2151,5 +2530,72 @@ mod settings_tests {
         assert_eq!(state.focus, SettingsFocus::Provider);
         assert_eq!(state.provider_selected, 0);
         assert_eq!(state.diagnostics_open, None);
+    }
+
+    #[test]
+    fn thesis_form_requires_claim_and_creates_visible_thesis() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut a = real_desk_app(dir.path());
+        a.desk.source = delta_tui::desk::Source::Real(dir.path().join("delta.db"));
+        a.handle_key(key(KeyCode::Char('4')));
+        a.handle_key(key(KeyCode::Char('n')));
+        a.handle_key(key(KeyCode::Enter));
+        assert_eq!(a.status, "claim is required");
+        assert!(a.overlay.is_some());
+        for ch in "Apple grows".chars() {
+            a.handle_key(key(KeyCode::Char(ch)));
+        }
+        a.handle_key(key(KeyCode::Enter));
+        assert!(a.overlay.is_none());
+        assert_eq!(a.theses.fleet.len(), 1);
+        assert!(screen_text(&mut a, 120, 40).contains("Apple grows"));
+    }
+
+    #[test]
+    fn reviewing_candidate_changes_live_health_and_rejects_only_pending() {
+        use delta_core::db::StoreItem;
+        use delta_core::models::NewsItem;
+        let dir = tempfile::tempdir().unwrap();
+        let mut a = real_desk_app(dir.path());
+        let path = dir.path().join("delta.db");
+        a.desk.source = delta_tui::desk::Source::Real(path.clone());
+        let mut db = delta_core::db::Db::open(&path).unwrap();
+        db.store_items(&[StoreItem::News(NewsItem {
+            id: "n1".to_string(),
+            instrument_ids: vec!["US:AAPL".to_string()],
+            published: chrono::Utc::now().naive_utc(),
+            title: "Services grow".to_string(),
+            url: "https://example.test/n1".to_string(),
+            body: None,
+            source: "rss".to_string(),
+        })])
+        .unwrap();
+        let thesis = delta_services::create_thesis(
+            &db,
+            "Apple grows",
+            "",
+            &[],
+            &[],
+            &["US:AAPL".to_string()],
+            "5y",
+            None,
+        )
+        .unwrap();
+        delta_services::add_evidence(&db, &thesis.id, "news:n1", "support", "growth", None)
+            .unwrap();
+        a.handle_key(key(KeyCode::Char('4')));
+        assert!(a.theses.fleet[0].result.is_none());
+        a.handle_key(key(KeyCode::Char('e')));
+        a.handle_key(key(KeyCode::Char('a')));
+        assert_eq!(a.theses.fleet[0].result.as_ref().unwrap().support, 1);
+        assert!(a.theses.selected_link().unwrap().accepted);
+        assert!(matches!(
+            a.handle_key(key(KeyCode::Char('x'))),
+            Some(Action::Status(_))
+        ));
+        a.handle_key(key(KeyCode::Char('u')));
+        assert!(a.theses.fleet[0].result.is_none());
+        a.handle_key(key(KeyCode::Char('x')));
+        assert!(a.theses.links.is_empty());
     }
 }
