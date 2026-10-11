@@ -12,6 +12,7 @@ use std::path::Path;
 use delta_core::config::AppConfig;
 
 use crate::screen::Screen;
+use crate::screens::research::{draw_research_live, ResearchData, ResearchState};
 use crate::screens::settings::{
     draw_settings, draw_settings_narrow, draw_settings_wide, SettingsData, SettingsState,
     SettingsView,
@@ -28,6 +29,9 @@ pub fn render_live(state: &str, fixture: &serde_json::Value, db_path: &Path) -> 
         // registers its builder here.
         "live-settings" => Some(live_settings(fixture, db_path, w, h)),
         "live-theses" => Some(live_theses(fixture, db_path, w, h)),
+        "live-research" | "live-research-search" | "live-research-citation" => {
+            Some(live_research(state, fixture, db_path, w, h))
+        }
         _ => None,
     }
 }
@@ -42,6 +46,29 @@ fn live_theses(fixture: &serde_json::Value, db_path: &Path, w: usize, h: usize) 
     state.load_at(&db, Some(now)).expect("load live theses");
     let mut screen = Screen::new(w, h);
     draw_theses_live(&mut screen, &state);
+    screen
+}
+
+fn live_research(
+    state_name: &str,
+    _fixture: &serde_json::Value,
+    db_path: &Path,
+    w: usize,
+    h: usize,
+) -> Screen {
+    let reports = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/golden_reports");
+    let data = ResearchData::load(db_path, &reports, "US:AAPL", "apple", "company", "USD")
+        .expect("load shared research seed");
+    let mut screen = Screen::new(w, h);
+    let mut state = ResearchState::default();
+    if state_name == "live-research-search" {
+        state.search_active = true;
+    } else if state_name == "live-research-citation" {
+        state.selected_id = Some("news:news-aapl-chip".into());
+        state.detail_open = true;
+        state.view = crate::screens::research::ResearchView::Report;
+    }
+    draw_research_live(&mut screen, &data, &state);
     screen
 }
 

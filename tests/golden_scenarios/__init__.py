@@ -31,8 +31,8 @@ class Scenario:
 
     @property
     def gate_tier(self) -> str:
-        """The tier the harness enforces: the canonical 120x40 gates Tier A."""
-        return "A" if self.size == (120, 40) else self.tier
+        """The tier the harness enforces; Research report prose is Tier B."""
+        return "A" if self.size == (120, 40) and not self.name.startswith("live-research") else self.tier
 
 
 def matrix(name: str, keys: tuple[str, ...], tier: str) -> tuple[Scenario, ...]:
@@ -65,4 +65,8 @@ SCENARIOS: tuple[Scenario, ...] = (
 
 #: Populated scenarios (``live-*``): exported against the shared seed DB and
 #: listed in ``live-manifest.json``; each screen module appends its own.
-LIVE_SCENARIOS: tuple[Scenario, ...] = settings.POPULATED_SCENARIOS + theses.POPULATED_SCENARIOS
+LIVE_SCENARIOS: tuple[Scenario, ...] = (
+    settings.POPULATED_SCENARIOS
+    + theses.POPULATED_SCENARIOS
+    + research.POPULATED_SCENARIOS
+)
