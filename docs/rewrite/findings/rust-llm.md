@@ -61,3 +61,7 @@ Stream: `delta-llm`. Reviewed against `delta/llm/*.py`.
 | 6 | parity | crates/delta-llm/src/providers.rs `EventDraft.sentiment` | `#[serde(default)]` makes an omitted sentiment store 0.0 in Rust; Python's `Field(ge=-1, le=1)` is required and rejects the whole batch (delta/extract.py:34) | Make the field required for full pydantic parity |
 | 7 | docs | crates/delta-llm/src/fake.rs | FakeLlm serialises `text` compact (`serde_json::to_string`) vs Python `json.dumps` space-y separators — semantically identical JSON; the "exactly as Python serialises" doc claim is overstated | Soften the doc comment |
 | 8 | note | crates/delta-llm/src/providers.rs | D7 also retries connect errors (`is_connect`) — a harmless superset of the card's 429/5xx/timeouts; no duplicate reaches the server | None (document) |
+
+Findings 5 and 6 are fixed in the V1 integration branch: `Retry-After`
+conversion falls back to the bounded delay when the numeric value exceeds
+`Duration`, and extract batches require an explicit sentiment in [-1, 1].

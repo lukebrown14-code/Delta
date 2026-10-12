@@ -48,7 +48,7 @@ pub const RETRY_JITTER: Duration = Duration::from_millis(250);
 /// over the computed exponential backoff; jitter is added only to backoff.
 pub fn retry_delay(attempt: u32, retry_after: Option<f64>) -> Duration {
     if let Some(seconds) = retry_after.filter(|s| *s >= 0.0 && s.is_finite()) {
-        return Duration::from_secs_f64(seconds);
+        return Duration::try_from_secs_f64(seconds).unwrap_or(RETRY_MAX_DELAY);
     }
     let factor = 2u32.saturating_pow(attempt.saturating_sub(1));
     let backoff = RETRY_BASE_DELAY.saturating_mul(factor).min(RETRY_MAX_DELAY);

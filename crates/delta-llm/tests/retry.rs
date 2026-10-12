@@ -289,6 +289,7 @@ fn retry_delay_is_exponential_with_bounded_jitter() {
     assert!(d(10, None) >= RETRY_MAX_DELAY);
     // Retry-After wins verbatim over the computed backoff.
     assert_eq!(d(3, Some(7.5)), Duration::from_secs_f64(7.5));
+    assert_eq!(d(3, Some(1e300)), RETRY_MAX_DELAY);
     // A nonsensical Retry-After falls back to backoff.
     assert!(d(1, Some(-1.0)) >= RETRY_BASE_DELAY);
     assert!(d(1, Some(f64::NAN)) >= RETRY_BASE_DELAY);

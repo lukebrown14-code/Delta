@@ -11,6 +11,14 @@ use delta_core::models::{AssetClass, Instrument, NewsItem};
 use delta_llm::client::LlmClient;
 use delta_llm::providers::{CompletionRequest, Provider, ProviderError, ProviderResult};
 use delta_services::pipeline::extract_events;
+use delta_services::pipeline::EventBatch;
+
+#[test]
+fn missing_sentiment_rejects_the_batch() {
+    let payload =
+        r#"{"events": [{"kind": "earnings", "summary": "good quarter", "evidence_ids": ["n1"]}]}"#;
+    assert!(serde_json::from_str::<EventBatch>(payload).is_err());
+}
 
 fn inst(id: &str, symbol: &str) -> Instrument {
     Instrument {

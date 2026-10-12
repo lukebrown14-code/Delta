@@ -318,7 +318,7 @@ pub struct EventBatch {
 pub struct EventDraft {
     pub kind: EventKind,
     pub summary: String,
-    #[serde(default, deserialize_with = "sentiment_in_range")]
+    #[serde(deserialize_with = "sentiment_in_range")]
     pub sentiment: f64,
     #[cfg_attr(test, allow(dead_code))]
     #[serde(default)]
