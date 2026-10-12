@@ -17,7 +17,9 @@ release packaging, and maintainer gates remain. The cutover is one PR into
       launch, RSS, chart scrub, 50 live tickers. Local smoke measurements are
       recorded; a repeatable first-frame run remains.
 - [ ] Packaging: validate cargo-dist archives and publish a GitHub Release
-      from the tag workflow. Release binaries only; no Homebrew tap (D12).
+      from the tag workflow. The macOS arm64 archive and checksum were checked
+      locally, and the dist plan passed in PR #37; a tag publish remains.
+      Release binaries only; no Homebrew tap (D12).
 - [ ] Manual pass: `cargo run --release` on a copy of the real `data/delta.db`,
       every panel. A seed database pass succeeded; repository instructions
       currently forbid reading `data/*.db`.
