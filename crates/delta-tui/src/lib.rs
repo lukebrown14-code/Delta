@@ -78,6 +78,8 @@ pub enum Action {
     ShowModelPicker,
     /// Open the provider picker (`p`; the picker screen lands with R3.2).
     ShowProviderPicker,
+    /// A Settings screen request that needs an app-level service or modal.
+    SettingsCommand(crate::screens::SettingsCommand),
     /// A form submitted successfully (carries the form title).
     FormSubmitted(String),
     /// Long-running thesis model calls are dispatched by the event loop.

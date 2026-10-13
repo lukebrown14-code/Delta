@@ -8,16 +8,22 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
+use crossterm::event::{KeyCode, KeyEvent};
+use ratatui::{layout::Rect, Frame};
+
 use chrono::NaiveDateTime;
 use delta_core::config::AppConfig;
 use delta_services::analytics::{CostRow, DataHealth};
 use unicode_width::UnicodeWidthStr;
 
+use super::pane_layout;
 use super::status_bar::{
     draw_status_bar_wide_with_footer, pane_hints, settings_status_bar,
     status_bar_narrow_with_footer, Footer, NarrowTab,
 };
 use crate::screen::{color, Screen, Style};
+use crate::theme::Palette;
+use crate::{Action, Component};
 
 // ------------------------------------------------------------------ state
 
@@ -431,6 +437,166 @@ pub struct SettingsView<'a> {
     pub footer: &'a Footer,
 }
 
+/// Side effects requested by Settings. The app performs I/O and opens modals;
+/// selection, focus and diagnostics state stay in this screen component.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettingsCommand {
+    Refresh,
+    OpenSource,
+    AddMarket,
+    EditMarket,
+    RemoveMarket,
+    TogglePlugin,
+    AddTarget,
+    RemoveTarget,
+    OpenTargetPicker,
+}
+
+pub struct SettingsComponent {
+    pub state: SettingsState,
+    pub data: SettingsData,
+    pub footer: Footer,
+    viewport_width: usize,
+    palette: Palette,
+}
+
+impl SettingsComponent {
+    pub fn new(data: SettingsData, footer: Footer) -> Self {
+        Self {
+            state: SettingsState::default(),
+            data,
+            footer,
+            viewport_width: 120,
+            palette: Palette::Dark,
+        }
+    }
+
+    pub fn sync_data(&mut self, data: &SettingsData, footer: &Footer) {
+        self.data.clone_from(data);
+        self.footer.clone_from(footer);
+        self.state.reconcile(
+            self.data.plugins.len(),
+            self.data.sources.len(),
+            self.data.markets.len(),
+        );
+    }
+
+    pub fn set_viewport_width(&mut self, width: usize) {
+        self.viewport_width = width;
+    }
+
+    pub fn set_palette(&mut self, palette: Palette) {
+        self.palette = palette;
+    }
+
+    pub fn paint_into(&self, screen: &mut Screen) {
+        let view = SettingsView {
+            data: &self.data,
+            state: &self.state,
+            footer: &self.footer,
+        };
+        paint(screen, &view);
+    }
+
+    fn enter(&self) -> Option<Action> {
+        match self.state.focus {
+            SettingsFocus::Provider => Some(if self.state.provider_selected == 0 {
+                Action::ShowProviderPicker
+            } else {
+                Action::ShowModelPicker
+            }),
+            SettingsFocus::Plugins => {
+                self.data
+                    .plugins
+                    .get(self.state.plugin_selected)
+                    .map(|(id, enabled)| {
+                        Action::Status(format!(
+                            "{id}: {} · t toggle",
+                            if *enabled { "enabled" } else { "disabled" }
+                        ))
+                    })
+            }
+            SettingsFocus::Sources => Some(Action::SettingsCommand(SettingsCommand::OpenSource)),
+            SettingsFocus::Markets => Some(Action::SettingsCommand(SettingsCommand::EditMarket)),
+            SettingsFocus::Diagnostics => Some(Action::Noop),
+        }
+    }
+}
+
+impl Component for SettingsComponent {
+    fn handle_key(&mut self, key: KeyEvent) -> Option<Action> {
+        let counts = (
+            self.data.plugins.len(),
+            self.data.sources.len(),
+            self.data.markets.len(),
+        );
+        match key.code {
+            KeyCode::Esc => {
+                self.state.close_diagnostics(self.viewport_width);
+                Some(Action::Noop)
+            }
+            KeyCode::Up => {
+                self.state.move_selection(-1, counts.0, counts.1, counts.2);
+                Some(Action::Noop)
+            }
+            KeyCode::Down => {
+                self.state.move_selection(1, counts.0, counts.1, counts.2);
+                Some(Action::Noop)
+            }
+            KeyCode::Tab => {
+                self.state.cycle_focus(false);
+                Some(Action::Noop)
+            }
+            KeyCode::BackTab => {
+                self.state.cycle_focus(true);
+                Some(Action::Noop)
+            }
+            KeyCode::Enter => self.enter(),
+            KeyCode::Char('d') => {
+                self.state.toggle_diagnostics(self.viewport_width);
+                Some(Action::Noop)
+            }
+            KeyCode::Char('l') => {
+                self.state.focus = SettingsFocus::Plugins;
+                Some(Action::Noop)
+            }
+            KeyCode::Char('r') => Some(Action::SettingsCommand(SettingsCommand::Refresh)),
+            KeyCode::Char('s') => Some(Action::SettingsCommand(SettingsCommand::OpenSource)),
+            KeyCode::Char('a') => Some(Action::SettingsCommand(SettingsCommand::AddMarket)),
+            KeyCode::Char('e') => Some(Action::SettingsCommand(SettingsCommand::EditMarket)),
+            KeyCode::Char('x') => Some(Action::SettingsCommand(SettingsCommand::RemoveMarket)),
+            KeyCode::Char('t') => Some(Action::SettingsCommand(SettingsCommand::TogglePlugin)),
+            KeyCode::Char('n') => Some(Action::SettingsCommand(SettingsCommand::AddTarget)),
+            KeyCode::Char('X') => Some(Action::SettingsCommand(SettingsCommand::RemoveTarget)),
+            KeyCode::Char('w') => Some(Action::SettingsCommand(SettingsCommand::OpenTargetPicker)),
+            _ => None,
+        }
+    }
+
+    fn update(&mut self, _action: Action) {}
+
+    fn draw(&mut self, frame: &mut Frame, area: Rect) {
+        self.viewport_width = area.width as usize;
+        let mut screen = Screen::themed(self.palette, area.width as usize, area.height as usize);
+        self.paint_into(&mut screen);
+        crate::screen::blit(frame, &screen, area);
+    }
+}
+
+impl crate::Screen for SettingsComponent {
+    fn name(&self) -> &'static str {
+        "config"
+    }
+
+    fn handle_key(&mut self, key: KeyEvent) -> Option<Action> {
+        <Self as Component>::handle_key(self, key)
+    }
+
+    fn draw(&mut self, frame: &mut Frame, area: Rect) {
+        <Self as Component>::draw(self, frame, area);
+    }
+}
+
 /// The Settings screen at the normal breakpoint (100..160 columns).
 pub fn draw_settings(screen: &mut Screen, view: &SettingsView) {
     paint(screen, view);
@@ -455,22 +621,51 @@ fn paint(screen: &mut Screen, view: &SettingsView) {
     let bottom = h - 3;
     let narrow = w < 100;
     let expanded = view.state.diagnostics_expanded(w);
+    // Rectangles are computed from the content area. The setup column has
+    // Textual's 62-cell width; the diagnostics column receives the remainder.
+    let columns = if narrow { &[w - 2][..] } else { &[62, 0][..] };
+    let panes = pane_layout(1, 0, w - 1, bottom + 1, &[bottom + 1], columns);
+    let setup = panes[0][0];
     if narrow && expanded {
         // `-diag-full`: diagnostics takes the whole screen; setup is hidden.
-        diagnostics_pane(screen, (1, 0, w - 2, bottom), view, true);
+        diagnostics_pane(
+            screen,
+            (setup.0, setup.1, setup.2 - 1, setup.3 - 1),
+            view,
+            true,
+        );
     } else {
-        let pane_right = if narrow { w - 2 } else { 62 };
-        let end = setup_column(screen, view, pane_right, narrow);
-        if !narrow {
+        let end = setup_column(screen, view, setup.2 - 1, narrow);
+        if narrow {
+            let y = end.min(bottom.saturating_sub(3));
+            let folded = pane_layout(1, y, w - 1, y + 3, &[3], &[w - 2]);
+            let rect = folded[0][0];
             diagnostics_pane(
                 screen,
-                (63, 0, w - 2, if expanded { bottom } else { 2 }),
+                (rect.0, rect.1, rect.2 - 1, rect.3 - 1),
+                view,
+                false,
+            );
+        } else {
+            let diagnostic = panes[0][1];
+            let rect = if expanded {
+                diagnostic
+            } else {
+                pane_layout(
+                    diagnostic.0,
+                    diagnostic.1,
+                    diagnostic.2,
+                    diagnostic.3,
+                    &[3, 0],
+                    &[diagnostic.2 - diagnostic.0],
+                )[0][0]
+            };
+            diagnostics_pane(
+                screen,
+                (rect.0, rect.1, rect.2 - 1, rect.3 - 1),
                 view,
                 expanded,
             );
-        } else {
-            let y = end.min(bottom.saturating_sub(3));
-            diagnostics_pane(screen, (1, y, pane_right, y + 2), view, false);
         }
     }
     let y = h - 1;
@@ -515,13 +710,24 @@ fn setup_column(
     } else {
         data.plugins.len().min(plugin_cap)
     };
+    let rows = pane_layout(
+        1,
+        0,
+        pane_right + 1,
+        screen.h - 2,
+        &[4, plugin_rows + 2, 0],
+        &[pane_right],
+    );
+    let provider_pane = rows[0][0];
+    let plugins_pane = rows[1][0];
+    let sources_pane = rows[2][0];
 
     // Provider & model pane.
     screen.pane(
-        1,
-        0,
-        pane_right,
-        3,
+        provider_pane.0,
+        provider_pane.1,
+        provider_pane.2 - 1,
+        provider_pane.3 - 1,
         state.focus == SettingsFocus::Provider,
         &[("provider & model", Style::fg(color::BLUE).bold())],
         &pane_hints(&[("↑↓", "choose"), ("enter", "change")]),
@@ -529,21 +735,21 @@ fn setup_column(
     let provider_focused = state.focus == SettingsFocus::Provider;
     provider_row(
         screen,
-        1,
+        provider_pane.1 + 1,
         pane_right,
         provider_focused && state.provider_selected == 0,
         data,
     );
     model_row(
         screen,
-        2,
+        provider_pane.1 + 2,
         pane_right,
         provider_focused && state.provider_selected == 1,
         data,
     );
 
     // Plugins pane.
-    let plugin_y = 4;
+    let plugin_y = plugins_pane.1;
     let enabled = data.plugins.iter().filter(|(_, on)| *on).count();
     let mut title = vec![("plugins ".to_string(), Style::fg(color::BLUE).bold())];
     if !data.plugins.is_empty() {
@@ -557,10 +763,10 @@ fn setup_column(
         .map(|(text, style)| (text.as_str(), *style))
         .collect();
     screen.pane(
-        1,
+        plugins_pane.0,
         plugin_y,
-        pane_right,
-        plugin_y + plugin_rows + 1,
+        plugins_pane.2 - 1,
+        plugins_pane.3 - 1,
         state.focus == SettingsFocus::Plugins,
         &title_refs,
         &pane_hints(&[("↑↓", "plugin"), ("enter", "details")]),
@@ -611,7 +817,7 @@ fn setup_column(
     }
 
     // Data sources & markets pane.
-    let y = plugin_y + plugin_rows + 2;
+    let y = sources_pane.1;
     let mut cursor = y + 1;
     section_heading(screen, cursor, pane_right, "sources", data.sources.len());
     cursor += 1;
@@ -700,7 +906,7 @@ fn setup_column(
         cursor += 1;
     }
     screen.pane(
-        1,
+        sources_pane.0,
         y,
         pane_right,
         cursor,
@@ -1294,6 +1500,51 @@ fn table_row_at(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crossterm::event::KeyModifiers;
+
+    #[test]
+    fn component_owns_navigation_and_requests_service_actions() {
+        let mut screen = SettingsComponent::new(exporter_world(), Footer::default());
+        screen.set_viewport_width(80);
+        let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+        assert_eq!(
+            <SettingsComponent as crate::Screen>::name(&screen),
+            "config"
+        );
+        assert_eq!(
+            Component::handle_key(&mut screen, key(KeyCode::Char('d'))),
+            Some(Action::Noop)
+        );
+        assert_eq!(screen.state.focus, SettingsFocus::Diagnostics);
+        assert!(screen.state.diagnostics_expanded(80));
+        assert_eq!(
+            Component::handle_key(&mut screen, key(KeyCode::Esc)),
+            Some(Action::Noop)
+        );
+        assert_eq!(screen.state.focus, SettingsFocus::Provider);
+        assert_eq!(
+            Component::handle_key(&mut screen, key(KeyCode::Enter)),
+            Some(Action::ShowProviderPicker)
+        );
+        assert_eq!(
+            Component::handle_key(&mut screen, key(KeyCode::Char('r'))),
+            Some(Action::SettingsCommand(SettingsCommand::Refresh))
+        );
+        screen.data.plugins.clear();
+        screen.state.plugin_selected = 4;
+        screen.sync_data(&exporter_world(), &Footer::default());
+        assert_eq!(screen.state.plugin_selected, 0);
+
+        let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 24))
+            .expect("test terminal");
+        terminal
+            .draw(|frame| Component::draw(&mut screen, frame, frame.area()))
+            .expect("component draw");
+        let row: String = (0..80)
+            .map(|x| terminal.backend().buffer()[(x, 0)].symbol().to_string())
+            .collect();
+        assert!(row.contains("provider & model"), "{row}");
+    }
 
     fn state() -> SettingsState {
         SettingsState::default()

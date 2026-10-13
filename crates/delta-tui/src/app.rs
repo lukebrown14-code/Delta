@@ -20,14 +20,15 @@ use delta_tui::dialog::{GoPicker, HelpDialog};
 use delta_tui::form::Form;
 use delta_tui::screen::{color, Screen, Style};
 use delta_tui::screens::decisions::{draw_decisions_live, DecisionsData};
+#[cfg(test)]
+use delta_tui::screens::SettingsFocus;
 use delta_tui::screens::{
     draw_ask, draw_ask_narrow, draw_ask_wide, draw_decisions, draw_decisions_narrow,
     draw_decisions_wide, draw_glossary_overlay, draw_home, draw_home_live, draw_home_narrow,
     draw_home_wide, draw_research, draw_research_live, draw_research_narrow, draw_research_wide,
-    draw_settings, draw_settings_narrow, draw_settings_wide, draw_theses_live,
-    draw_thesis_form_runtime, draw_watchlist, draw_watchlist_narrow, draw_watchlist_narrow_list,
-    draw_watchlist_wide, paint_ask_state, AskState, ResearchData, ResearchState, ResearchView,
-    SettingsFocus, SettingsState, SettingsView, ThesesPane, ThesesState,
+    draw_theses_live, draw_thesis_form_runtime, draw_watchlist, draw_watchlist_narrow,
+    draw_watchlist_narrow_list, draw_watchlist_wide, paint_ask_state, AskState, ResearchData,
+    ResearchState, ResearchView, SettingsCommand, SettingsComponent, ThesesPane, ThesesState,
 };
 use delta_tui::theme::Palette;
 use delta_tui::{is_quit_key, workers, Action, Breakpoint, Component};
@@ -158,7 +159,7 @@ pub(crate) struct App {
     /// The floating shell modal, if any.
     overlay: Option<Overlay>,
     /// The Settings screen's interaction state.
-    settings: SettingsState,
+    settings: SettingsComponent,
     theses: ThesesState,
     research: Option<ResearchData>,
     research_state: ResearchState,
@@ -382,16 +383,10 @@ impl App {
                 }
             }
             Tab::Settings => {
-                let view = SettingsView {
-                    data: &self.desk.settings,
-                    state: &self.settings,
-                    footer: &self.desk.settings_footer,
-                };
-                route!(
-                    draw_settings_wide(screen, &view),
-                    draw_settings(screen, &view),
-                    draw_settings_narrow(screen, &view)
-                )
+                self.settings
+                    .sync_data(&self.desk.settings, &self.desk.settings_footer);
+                self.settings.set_palette(self.palette);
+                self.settings.paint_into(screen);
             }
         }
         if self.tab == Tab::Ask {
@@ -1148,43 +1143,24 @@ impl App {
 }
 
 impl App {
-    /// The Settings screen's keys (`config.py::BINDINGS`): `d` diagnostics,
-    /// `r` refresh, `l` plugins, `s` configure source, `a`/`e`/`x`
-    /// add/edit/remove market, `esc` back; plus the table keys (↑↓/tab/
-    /// enter) and `t` to toggle a plugin.
+    /// Settings owns navigation and focus. The app performs requested I/O and opens modals.
     fn handle_settings_key(&mut self, key: KeyEvent) -> Option<Action> {
-        let data = &self.desk.settings;
-        let counts = (data.plugins.len(), data.sources.len(), data.markets.len());
-        match key.code {
-            KeyCode::Esc => {
-                self.settings.close_diagnostics(self.viewport_width());
-                Some(Action::Noop)
-            }
-            KeyCode::Up => {
-                self.settings
-                    .move_selection(-1, counts.0, counts.1, counts.2);
-                Some(Action::Noop)
-            }
-            KeyCode::Down => {
-                self.settings
-                    .move_selection(1, counts.0, counts.1, counts.2);
-                Some(Action::Noop)
-            }
-            KeyCode::Tab => {
-                self.settings.cycle_focus(false);
-                Some(Action::Noop)
-            }
-            KeyCode::BackTab => {
-                self.settings.cycle_focus(true);
-                Some(Action::Noop)
-            }
-            KeyCode::Enter => Some(self.settings_enter()),
-            KeyCode::Char('d') => {
-                self.settings.toggle_diagnostics(self.viewport_width());
-                Some(Action::Noop)
-            }
-            KeyCode::Char('r') => {
+        self.settings
+            .sync_data(&self.desk.settings, &self.desk.settings_footer);
+        self.settings.set_viewport_width(self.viewport_width());
+        let action = Component::handle_key(&mut self.settings, key)?;
+        Some(match action {
+            Action::SettingsCommand(command) => self.execute_settings_command(command),
+            other => other,
+        })
+    }
+
+    fn execute_settings_command(&mut self, command: SettingsCommand) -> Action {
+        match command {
+            SettingsCommand::Refresh => {
                 self.desk.reload_settings();
+                self.settings
+                    .sync_data(&self.desk.settings, &self.desk.settings_footer);
                 let refreshed = self
                     .desk
                     .settings
@@ -1193,56 +1169,25 @@ impl App {
                     .map(|d| d.refreshed.clone())
                     .unwrap_or_default();
                 self.status = format!("diagnostics refreshed {refreshed}");
-                Some(Action::Noop)
+                Action::Noop
             }
-            KeyCode::Char('l') => {
-                self.settings.focus = SettingsFocus::Plugins;
-                Some(Action::Noop)
-            }
-            KeyCode::Char('s') => Some(self.open_source_form()),
-            KeyCode::Char('a') => {
+            SettingsCommand::OpenSource => self.open_source_form(),
+            SettingsCommand::AddMarket => {
                 self.overlay = Some(Overlay::SettingsForm(market_form(None)));
-                Some(Action::Noop)
+                Action::Noop
             }
-            KeyCode::Char('e') => Some(self.edit_market()),
-            KeyCode::Char('x') => Some(self.remove_market()),
-            KeyCode::Char('t') => Some(self.toggle_plugin()),
-            KeyCode::Char('n') => {
+            SettingsCommand::EditMarket => self.edit_market(),
+            SettingsCommand::RemoveMarket => self.remove_market(),
+            SettingsCommand::TogglePlugin => self.toggle_plugin(),
+            SettingsCommand::AddTarget => {
                 self.overlay = Some(Overlay::SettingsForm(target_form(None)));
-                Some(Action::Noop)
+                Action::Noop
             }
-            KeyCode::Char('X') => {
+            SettingsCommand::RemoveTarget => {
                 self.overlay = Some(Overlay::SettingsForm(remove_target_form()));
-                Some(Action::Noop)
+                Action::Noop
             }
-            KeyCode::Char('w') => Some(self.open_target_picker()),
-            _ => None,
-        }
-    }
-
-    /// `enter` on the focused table's row (`on_data_table_row_selected`).
-    fn settings_enter(&mut self) -> Action {
-        match self.settings.focus {
-            SettingsFocus::Provider => {
-                if self.settings.provider_selected == 0 {
-                    Action::ShowProviderPicker
-                } else {
-                    Action::ShowModelPicker
-                }
-            }
-            SettingsFocus::Plugins => {
-                let data = &self.desk.settings;
-                match data.plugins.get(self.settings.plugin_selected) {
-                    Some((id, enabled)) => Action::Status(format!(
-                        "{id}: {} · t toggle",
-                        if *enabled { "enabled" } else { "disabled" }
-                    )),
-                    None => Action::Noop,
-                }
-            }
-            SettingsFocus::Sources => self.open_source_form(),
-            SettingsFocus::Markets => self.edit_market(),
-            SettingsFocus::Diagnostics => Action::Noop,
+            SettingsCommand::OpenTargetPicker => self.open_target_picker(),
         }
     }
 
@@ -1252,7 +1197,7 @@ impl App {
             .desk
             .settings
             .sources
-            .get(self.settings.source_selected)
+            .get(self.settings.state.source_selected)
             .map(|s| s.id.clone())
         else {
             return Action::Status("no data source selected".to_string());
@@ -1261,7 +1206,7 @@ impl App {
             .desk
             .settings
             .sources
-            .get(self.settings.source_selected)
+            .get(self.settings.state.source_selected)
             .map(|source| source.contact.clone());
         self.overlay = Some(Overlay::SettingsForm(source_form(&id, current)));
         Action::Noop
@@ -1273,7 +1218,7 @@ impl App {
             .desk
             .settings
             .markets
-            .get(self.settings.market_selected)
+            .get(self.settings.state.market_selected)
             .cloned()
         else {
             return Action::Status("no market selected".to_string());
@@ -1286,6 +1231,7 @@ impl App {
     fn remove_market(&mut self) -> Action {
         let Some(id) = self
             .settings
+            .state
             .selected_market_id(&self.desk.settings)
             .map(str::to_string)
         else {
@@ -1298,8 +1244,11 @@ impl App {
             Ok(()) => {
                 self.desk.reload_settings();
                 let data = &self.desk.settings;
-                self.settings
-                    .reconcile(data.plugins.len(), data.sources.len(), data.markets.len());
+                self.settings.state.reconcile(
+                    data.plugins.len(),
+                    data.sources.len(),
+                    data.markets.len(),
+                );
                 Action::Status(format!("market {id} removed"))
             }
             Err(e) => Action::Status(e.to_string()),
@@ -1310,6 +1259,7 @@ impl App {
     fn toggle_plugin(&mut self) -> Action {
         let Some(id) = self
             .settings
+            .state
             .selected_plugin_id(&self.desk.settings)
             .map(str::to_string)
         else {
@@ -1319,7 +1269,7 @@ impl App {
             .desk
             .settings
             .plugins
-            .get(self.settings.plugin_selected)
+            .get(self.settings.state.plugin_selected)
             .map(|(_, on)| *on)
             .unwrap_or(true);
         let Some(config) = self.desk.config_path.clone() else {
@@ -1549,8 +1499,11 @@ impl App {
                 };
                 self.desk.reload_settings();
                 let data = &self.desk.settings;
-                self.settings
-                    .reconcile(data.plugins.len(), data.sources.len(), data.markets.len());
+                self.settings.state.reconcile(
+                    data.plugins.len(),
+                    data.sources.len(),
+                    data.markets.len(),
+                );
                 (Action::Status(message), true)
             }
             Err(e) => (Action::Status(e.to_string()), false),
@@ -2072,6 +2025,10 @@ impl Component for App {
 
     fn update(&mut self, action: Action) {
         match action {
+            Action::SettingsCommand(command) => {
+                let next = self.execute_settings_command(command);
+                self.update(next);
+            }
             Action::Quit => self.quit = true,
             Action::Quotes(prices) => self.desk.live = prices,
             Action::Metrics { instrument, rows } => {
@@ -2238,6 +2195,7 @@ pub(crate) async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> st
         }
     }
 
+    let settings = SettingsComponent::new(desk.settings.clone(), desk.settings_footer.clone());
     let mut app = App {
         desk,
         tab: Tab::Watchlist,
@@ -2247,7 +2205,7 @@ pub(crate) async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> st
         quit: false,
         palette: Palette::Dark,
         overlay: None,
-        settings: SettingsState::default(),
+        settings,
         theses: ThesesState::default(),
         research,
         research_state: ResearchState::default(),
@@ -2520,8 +2478,10 @@ mod tests {
     use ratatui::backend::TestBackend;
 
     pub(super) fn app() -> App {
+        let desk = Desk::offline();
+        let settings = SettingsComponent::new(desk.settings.clone(), desk.settings_footer.clone());
         App {
-            desk: Desk::offline(),
+            desk,
             tab: Tab::Watchlist,
             glossary: false,
             status: String::new(),
@@ -2529,7 +2489,7 @@ mod tests {
             quit: false,
             palette: Palette::Dark,
             overlay: None,
-            settings: SettingsState::default(),
+            settings,
             theses: ThesesState::default(),
             research: None,
             research_state: ResearchState::default(),
@@ -3252,42 +3212,42 @@ mod settings_tests {
         let mut a = settings_app();
         a.viewport = (80, 24); // narrow: folded by default
         a.handle_key(key(KeyCode::Char('d')));
-        assert_eq!(a.settings.focus, SettingsFocus::Diagnostics);
-        assert!(a.settings.diagnostics_expanded(80));
+        assert_eq!(a.settings.state.focus, SettingsFocus::Diagnostics);
+        assert!(a.settings.state.diagnostics_expanded(80));
         let text = screen_text(&mut a, 80, 24);
         assert!(
             text.contains("esc"),
             "the expanded narrow pane offers esc to close"
         );
         a.handle_key(key(KeyCode::Esc));
-        assert!(!a.settings.diagnostics_expanded(80));
-        assert_eq!(a.settings.focus, SettingsFocus::Provider);
+        assert!(!a.settings.state.diagnostics_expanded(80));
+        assert_eq!(a.settings.state.focus, SettingsFocus::Provider);
         // Wide stays expanded and esc leaves it open.
         a.viewport = (120, 40);
         a.handle_key(key(KeyCode::Char('d')));
-        assert!(a.settings.diagnostics_expanded(120));
+        assert!(a.settings.state.diagnostics_expanded(120));
         a.handle_key(key(KeyCode::Esc));
-        assert!(a.settings.diagnostics_expanded(120));
+        assert!(a.settings.state.diagnostics_expanded(120));
     }
 
     #[test]
     fn focus_keys_and_selections_move() {
         let mut a = settings_app();
         a.handle_key(key(KeyCode::Char('l')));
-        assert_eq!(a.settings.focus, SettingsFocus::Plugins);
+        assert_eq!(a.settings.state.focus, SettingsFocus::Plugins);
         a.handle_key(key(KeyCode::Tab));
-        assert_eq!(a.settings.focus, SettingsFocus::Sources);
+        assert_eq!(a.settings.state.focus, SettingsFocus::Sources);
         a.handle_key(key(KeyCode::Tab));
-        assert_eq!(a.settings.focus, SettingsFocus::Markets);
+        assert_eq!(a.settings.state.focus, SettingsFocus::Markets);
         a.handle_key(key(KeyCode::BackTab));
-        assert_eq!(a.settings.focus, SettingsFocus::Sources);
+        assert_eq!(a.settings.state.focus, SettingsFocus::Sources);
         // The provider table has two rows; the model row is the second.
         a.handle_key(key(KeyCode::Tab));
         a.handle_key(key(KeyCode::Tab));
         a.handle_key(key(KeyCode::Tab));
-        assert_eq!(a.settings.focus, SettingsFocus::Provider);
+        assert_eq!(a.settings.state.focus, SettingsFocus::Provider);
         a.handle_key(key(KeyCode::Down));
-        assert_eq!(a.settings.provider_selected, 1);
+        assert_eq!(a.settings.state.provider_selected, 1);
         // Enter on the model row opens the model picker action.
         assert_eq!(
             a.handle_key(key(KeyCode::Enter)),
@@ -3403,7 +3363,7 @@ mod settings_tests {
         )
         .unwrap();
         a.desk.reload_settings();
-        a.settings.market_selected = 1;
+        a.settings.state.market_selected = 1;
         a.handle_key(key(KeyCode::Char('e')));
         let Some(Overlay::SettingsForm(modal)) = &a.overlay else {
             panic!("edit form open");
