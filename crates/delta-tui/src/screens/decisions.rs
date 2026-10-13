@@ -2,7 +2,7 @@ use super::status_bar::{
     draw_status_bar_wide, pane_hints, status_bar_narrow, status_bar_tabs, NarrowTab,
 };
 use crate::screen::{color, Screen, Style};
-use crate::{Action, Breakpoint};
+use crate::Action;
 use crossterm::event::{KeyCode, KeyEvent};
 use delta_services::{Decision, DecisionReview};
 use ratatui::{layout::Rect, Frame};
@@ -58,15 +58,17 @@ impl DecisionsScreen {
     }
 
     pub fn paint(&self, screen: &mut Screen) {
-        if let Some(data) = self.data.as_ref().filter(|data| !data.decisions.is_empty()) {
-            draw_decisions_live(screen, data);
-        } else {
-            match Breakpoint::from_width(screen.w as u16) {
-                Breakpoint::Narrow => draw_decisions_narrow(screen),
-                Breakpoint::Normal => draw_decisions(screen),
-                Breakpoint::Wide => draw_decisions_wide(screen),
-            }
-        }
+        let empty = DecisionsData {
+            decisions: Vec::new(),
+            selected: 0,
+            reviews: Vec::new(),
+            current_price: None,
+            filter: String::new(),
+            spend: 0.0,
+            confirm_delete: false,
+        };
+        let data = self.data.as_ref().unwrap_or(&empty);
+        draw_decisions_frame(screen, data, data.decisions.is_empty());
     }
 }
 
@@ -161,16 +163,28 @@ fn pane_columns(screen: &Screen) -> (usize, usize, usize) {
 
 /// Paint the populated journal on the same cell-grid chrome as the empty state.
 pub fn draw_decisions_live(screen: &mut Screen, data: &DecisionsData) {
-    if screen.w < 100 {
-        draw_decisions_narrow(screen);
-    } else if screen.w >= 160 {
-        draw_decisions_wide(screen);
-    } else {
-        draw_decisions(screen);
-    }
+    draw_decisions_frame(screen, data, false);
+}
+
+fn draw_decisions_frame(screen: &mut Screen, data: &DecisionsData, component_empty: bool) {
     let (left, right, bottom) = pane_columns(screen);
-    let narrow_hint = (screen.w < 100)
-        .then(|| screen.cells[bottom * screen.w + 1..bottom * screen.w + left + 1].to_vec());
+    if screen.w >= 160 {
+        draw_status_bar_wide(screen, screen.h - 1, screen.w, "6 Decisions");
+    } else if screen.w < 100 {
+        status_bar_narrow(screen, NarrowTab::Decisions);
+    } else {
+        draw_status_bar_decisions(screen, screen.h - 1, screen.w);
+    }
+    let header_style = Style::fg(color::FG).bold().bg("#232323");
+    screen.fill(2, 1, left, 2, header_style);
+    let header = if screen.w < 100 {
+        " status      review      instr"
+    } else if screen.w >= 160 {
+        " status      review      instrument      rationale"
+    } else {
+        " status      review      instrument      rati"
+    };
+    screen.text(2, 1, header, header_style);
     let title = Style::fg(color::BLUE).bold();
     let count = format!("· {}", data.decisions.len());
     screen.pane(
@@ -183,26 +197,30 @@ pub fn draw_decisions_live(screen: &mut Screen, data: &DecisionsData) {
             ("decisions ", title),
             (&count, Style::fg(color::MUTED).bold()),
         ],
-        &pane_hints(&[
-            ("n", "new"),
-            ("e", "edit"),
-            ("d", "delete"),
-            ("/", "filter"),
-        ]),
+        &if screen.w < 100 {
+            vec![
+                (" ".to_string(), Style::fg(color::MUTED)),
+                ("n".to_string(), Style::fg(color::BLUE).bold()),
+                (" new".to_string(), Style::fg(color::MUTED)),
+                ("  ".to_string(), Style::fg(color::MUTED)),
+                ("e".to_string(), Style::fg(color::BLUE).bold()),
+                (" edit".to_string(), Style::fg(color::MUTED)),
+                ("  ".to_string(), Style::fg(color::MUTED)),
+                ("d".to_string(), Style::fg(color::BLUE).bold()),
+                (" delete".to_string(), Style::fg(color::MUTED)),
+                ("  ".to_string(), Style::fg(color::MUTED)),
+                ("…".to_string(), Style::fg(color::BLUE).bold()),
+                (" ".to_string(), Style::fg(color::MUTED)),
+            ]
+        } else {
+            pane_hints(&[
+                ("n", "new"),
+                ("e", "edit"),
+                ("d", "delete"),
+                ("/", "filter"),
+            ])
+        },
     );
-    if let Some(hint) = narrow_hint {
-        screen.cells[bottom * screen.w + 1..bottom * screen.w + left + 1].clone_from_slice(&hint);
-    }
-    for y in 0..=bottom {
-        for x in 1..=left {
-            if y == 0 || y == bottom || x == 1 || x == left {
-                let cell = &mut screen.cells[y * screen.w + x];
-                if cell.fg == Some(color::BLUE) {
-                    cell.fg = Some("#898989");
-                }
-            }
-        }
-    }
     let review_count = if data.decisions.is_empty() {
         String::new()
     } else {
@@ -224,6 +242,20 @@ pub fn draw_decisions_live(screen: &mut Screen, data: &DecisionsData) {
             pane_hints(&[("r", "review"), ("o", "research"), ("↑↓", "scroll")])
         },
     );
+    if component_empty {
+        paint_empty_decisions(screen, left, right, bottom, true);
+        return;
+    }
+    for y in 0..=bottom {
+        for x in 1..=left {
+            if y == 0 || y == bottom || x == 1 || x == left {
+                let cell = &mut screen.cells[y * screen.w + x];
+                if cell.fg == Some(color::BLUE) {
+                    cell.fg = Some("#898989");
+                }
+            }
+        }
+    }
     for x in right + 2..screen.w - 2 {
         let cell = &mut screen.cells[x];
         if cell.fg == Some(color::BLUE) {
@@ -255,26 +287,7 @@ pub fn draw_decisions_live(screen: &mut Screen, data: &DecisionsData) {
     }
 
     if data.decisions.is_empty() {
-        let mut empty = Screen::new(screen.w, screen.h);
-        if screen.w < 100 {
-            draw_decisions_narrow(&mut empty);
-        } else if screen.w >= 160 {
-            draw_decisions_wide(&mut empty);
-        } else {
-            draw_decisions(&mut empty);
-        }
-        for y in 1..bottom {
-            for x in 2..left {
-                screen.cells[y * screen.w + x] = empty.cells[y * screen.w + x].clone();
-            }
-            for x in right + 1..screen.w - 2 {
-                let mut cell = empty.cells[y * screen.w + x].clone();
-                if cell.fg == Some(color::BLUE) {
-                    cell.fg = Some("#898989");
-                }
-                screen.cells[y * screen.w + x] = cell;
-            }
-        }
+        paint_empty_decisions(screen, left, right, bottom, false);
         return;
     }
 
@@ -464,6 +477,63 @@ pub fn draw_decisions_live(screen: &mut Screen, data: &DecisionsData) {
             row,
             &format!("next review due  {}", decision.review_date),
             Style::fg("#a6a6a6"),
+        );
+    }
+}
+
+fn paint_empty_decisions(
+    screen: &mut Screen,
+    left: usize,
+    right: usize,
+    bottom: usize,
+    component_empty: bool,
+) {
+    screen.fill(2, 2, left, bottom - 1, Style::fg(color::FG));
+    if screen.w < 160 {
+        let thumb = if screen.w < 100 { 19 } else { 41 };
+        screen.fill(2, bottom - 1, thumb, bottom, Style::fg("#3a3a3a"));
+        screen.put(thumb, bottom - 1, '▊', Style::fg("#3a3a3a").bg("#0d0d0d"));
+        screen.fill(
+            thumb + 1,
+            bottom - 1,
+            left,
+            bottom,
+            Style::fg(color::FG).bg("#0d0d0d"),
+        );
+    } else {
+        screen.fill(2, bottom - 1, left, bottom, Style::fg(color::FG));
+    }
+    let muted = Style::fg(color::MUTED);
+    screen.text(right + 2, 1, "no decisions yet — press ", muted);
+    screen.put(
+        right + 27,
+        1,
+        'n',
+        Style::fg(if component_empty {
+            color::BLUE
+        } else {
+            "#898989"
+        })
+        .bold(),
+    );
+    let continuation = if screen.w < 100 {
+        " to record the"
+    } else if screen.w >= 160 {
+        " to record the context you want to revisit"
+    } else {
+        " to record the context you want to"
+    };
+    screen.text(right + 28, 1, continuation, muted);
+    if screen.w < 160 {
+        screen.text(
+            right + 2,
+            2,
+            if screen.w < 100 {
+                "context you want to revisit"
+            } else {
+                "revisit"
+            },
+            muted,
         );
     }
 }
@@ -770,6 +840,33 @@ mod tests {
 
     fn key(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    #[test]
+    fn empty_component_matches_the_static_oracle_frame() {
+        for (w, h) in [(80, 24), (120, 40), (200, 50)] {
+            let mut expected = Screen::new(w, h);
+            match crate::Breakpoint::from_width(w as u16) {
+                crate::Breakpoint::Narrow => draw_decisions_narrow(&mut expected),
+                crate::Breakpoint::Normal => draw_decisions(&mut expected),
+                crate::Breakpoint::Wide => draw_decisions_wide(&mut expected),
+            }
+            let mut actual = Screen::new(w, h);
+            DecisionsScreen::default().paint(&mut actual);
+            if let Some((index, (got, want))) = actual
+                .cells
+                .iter()
+                .zip(&expected.cells)
+                .enumerate()
+                .find(|(_, (got, want))| got != want)
+            {
+                panic!(
+                    "empty Decisions at {w}x{h} ({}, {}): got {got:?}, want {want:?}",
+                    index % w,
+                    index / w
+                );
+            }
+        }
     }
 
     #[test]
