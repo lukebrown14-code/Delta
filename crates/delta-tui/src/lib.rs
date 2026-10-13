@@ -62,6 +62,8 @@ pub enum Action {
     Noop,
     /// A Decisions-screen intent; the app performs persistence and navigation.
     Decision(crate::screens::decisions::DecisionCommand),
+    /// A Theses-screen intent; the app performs persistence or opens a form.
+    Theses(crate::screens::ThesesCommand),
     /// Shut the app down.
     Quit,
     /// Open a modal dialog by name.
