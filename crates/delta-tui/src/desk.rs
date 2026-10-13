@@ -97,7 +97,6 @@ pub struct Desk {
     pub range_index: usize,
     pub scrub: Option<usize>,
     /// Narrow Watchlist switches from the list to metrics on Enter.
-    pub watch_detail_open: bool,
     /// Live quotes keyed by instrument id (`regularMarketPrice`).
     pub live: BTreeMap<String, f64>,
     /// Inspector metric rows keyed by instrument id (metrics worker).
@@ -163,7 +162,6 @@ impl Desk {
             selected: 0,
             range_index: 2, // "1m"
             scrub: None,
-            watch_detail_open: false,
             live: BTreeMap::new(),
             metrics: BTreeMap::new(),
             asset_metrics: BTreeMap::new(),
@@ -216,7 +214,6 @@ impl Desk {
             selected: 0,
             range_index: 2, // "1m"
             scrub: None,
-            watch_detail_open: false,
             live: BTreeMap::new(),
             metrics: BTreeMap::new(),
             asset_metrics: BTreeMap::new(),

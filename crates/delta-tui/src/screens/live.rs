@@ -473,9 +473,7 @@ fn live_ask(
     w: usize,
     h: usize,
 ) -> Screen {
-    use crate::screens::ask::{
-        draw_ask, draw_ask_narrow, draw_ask_wide, paint_ask_state, AskState,
-    };
+    use crate::screens::ask::{draw_ask_live, AskState};
     use delta_services::chat::ChatMessage;
     let db = delta_core::db::Db::open(db_path).expect("golden seed database");
     let mut state = AskState {
@@ -559,14 +557,7 @@ fn live_ask(
         }
     }
     let mut screen = Screen::new(w, h);
-    if w < 100 {
-        draw_ask_narrow(&mut screen);
-    } else if w >= 160 {
-        draw_ask_wide(&mut screen);
-    } else {
-        draw_ask(&mut screen);
-    }
-    paint_ask_state(&mut screen, &state);
+    draw_ask_live(&mut screen, &state);
     let spend: f64 = db
         .conn()
         .query_row(

@@ -8,7 +8,153 @@
 use super::status_bar::{draw_status_bar_wide, pane_hints};
 use crate::chart::PriceChart;
 use crate::screen::{color, Screen, Style};
+use crate::Action;
 use chrono::Datelike;
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use ratatui::{layout::Rect, Frame};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WatchlistCommand {
+    Select(usize),
+    CycleRange(isize),
+    MoveScrub(isize),
+    Add,
+    Remove,
+}
+
+#[derive(Default)]
+pub struct WatchlistComponent {
+    snapshot: Option<WatchlistState>,
+    filter: Option<String>,
+    glossary: bool,
+    detail_open: bool,
+}
+
+impl WatchlistComponent {
+    pub fn set_snapshot(&mut self, snapshot: WatchlistState) {
+        self.snapshot = Some(snapshot);
+    }
+
+    pub fn filter(&self) -> Option<&str> {
+        self.filter.as_deref()
+    }
+
+    pub fn glossary_open(&self) -> bool {
+        self.glossary
+    }
+
+    pub fn close_glossary(&mut self) {
+        self.glossary = false;
+    }
+
+    pub fn open_detail(&mut self) {
+        self.detail_open = true;
+    }
+
+    pub fn paint_into(&self, screen: &mut Screen) {
+        let Some(snapshot) = &self.snapshot else {
+            return;
+        };
+        let mut state = snapshot.clone();
+        if let Some(query) = &self.filter {
+            let needle = query.to_lowercase();
+            state.entries.retain(|entry| {
+                entry.symbol.to_lowercase().contains(&needle)
+                    || entry.asset_class.to_lowercase().contains(&needle)
+            });
+            state.selected = state.selected.min(state.entries.len().saturating_sub(1));
+            render_watchlist_filter(screen, &state, query);
+        } else if screen.w < 100 && !self.detail_open {
+            render_watchlist_narrow_list(screen, &state, false);
+        } else if screen.w < 100 {
+            render_watchlist_narrow(screen, &state);
+        } else if screen.w >= 160 {
+            render_watchlist_wide(screen, &state, None);
+        } else {
+            render_watchlist_normal(screen, &state, None);
+        }
+        if self.glossary {
+            paint_glossary_overlay(screen, snapshot);
+        }
+    }
+}
+
+impl crate::Screen for WatchlistComponent {
+    fn name(&self) -> &'static str {
+        "targets"
+    }
+
+    fn handle_key(&mut self, key: KeyEvent) -> Option<Action> {
+        if let Some(query) = &mut self.filter {
+            match key.code {
+                KeyCode::Esc => self.filter = None,
+                KeyCode::Backspace => {
+                    query.pop();
+                }
+                KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    query.push(ch)
+                }
+                _ => {}
+            }
+            return Some(Action::Noop);
+        }
+        if self.glossary && key.code == KeyCode::Esc {
+            self.glossary = false;
+            return Some(Action::Noop);
+        }
+        match key.code {
+            KeyCode::Char('/') => {
+                self.detail_open = false;
+                self.filter = Some(String::new());
+                Some(Action::Noop)
+            }
+            KeyCode::Char('i') => {
+                self.glossary = !self.glossary;
+                Some(Action::Noop)
+            }
+            KeyCode::Enter => {
+                self.detail_open = true;
+                Some(Action::Noop)
+            }
+            KeyCode::Esc if self.detail_open => {
+                self.detail_open = false;
+                Some(Action::Noop)
+            }
+            KeyCode::Char('a') => Some(Action::Watchlist(WatchlistCommand::Add)),
+            KeyCode::Char('d') => Some(Action::Watchlist(WatchlistCommand::Remove)),
+            KeyCode::Char(']') => Some(Action::Watchlist(WatchlistCommand::MoveScrub(1))),
+            KeyCode::Char('[') => Some(Action::Watchlist(WatchlistCommand::MoveScrub(-1))),
+            KeyCode::Char('r') => Some(Action::Watchlist(WatchlistCommand::CycleRange(1))),
+            KeyCode::Char('R') => Some(Action::Watchlist(WatchlistCommand::CycleRange(-1))),
+            KeyCode::Down | KeyCode::Up => {
+                let state = self.snapshot.as_mut()?;
+                state.selected = if key.code == KeyCode::Up {
+                    state.selected.saturating_sub(1)
+                } else {
+                    (state.selected + 1).min(state.entries.len().saturating_sub(1))
+                };
+                Some(Action::Watchlist(WatchlistCommand::Select(state.selected)))
+            }
+            _ => None,
+        }
+    }
+
+    fn draw(&mut self, frame: &mut Frame, area: Rect) {
+        let mut screen = Screen::new(area.width as usize, area.height as usize);
+        self.paint_into(&mut screen);
+        crate::screen::blit(frame, &screen, area);
+    }
+}
+
+fn watchlist_panes(screen: &Screen) -> Vec<Vec<super::PaneRect>> {
+    let bottom = screen.h - 3;
+    let widths = if screen.w < 100 {
+        vec![screen.w - 2]
+    } else {
+        vec![46, screen.w - 48]
+    };
+    super::pane_layout(1, 0, screen.w - 1, bottom + 1, &[bottom + 1], &widths)
+}
 
 /// `RANGES` / `RANGE_LABELS` / `RANGE_WINDOW` (targets.py).
 pub const RANGES: [&str; 7] = ["1d", "5d", "1m", "6m", "ytd", "1y", "all"];
@@ -37,6 +183,7 @@ pub fn range_window(range: &str) -> Option<usize> {
 
 /// Everything the inspector paints, precomputed by the caller (the equivalent
 /// of the Python screen's gathered state).
+#[derive(Clone)]
 pub struct WatchlistState {
     pub range: &'static str,
     pub metric: Option<MetricsData>,
@@ -53,6 +200,7 @@ pub struct WatchEntry {
 }
 
 /// The gathered `AssetMetrics` fields the inspector renders.
+#[derive(Clone)]
 pub struct MetricsData {
     pub symbol: String,
     pub market: String,
@@ -139,16 +287,19 @@ pub fn grouped(value: f64) -> String {
 }
 
 /// Paint the full 120x40 Watchlist screen (`draw` = the composed frame).
-pub fn draw_watchlist(screen: &mut Screen, state: &WatchlistState) {
+fn render_watchlist_normal(screen: &mut Screen, state: &WatchlistState, filter: Option<&str>) {
     let w = screen.w;
     let content_bottom = screen.h - 3; // last content row (37 at h=40)
+    let panes = watchlist_panes(screen);
+    let list = panes[0][0];
+    let inspector = panes[0][1];
 
     // Panes: left watchlist (cols 1..46), right metrics (47..118).
     screen.pane(
-        1,
-        0,
-        46,
-        content_bottom,
+        list.0,
+        list.1,
+        list.2 - 1,
+        list.3 - 1,
         true,
         &[
             ("watchlist ", Style::fg(color::BLUE).bold()),
@@ -165,10 +316,10 @@ pub fn draw_watchlist(screen: &mut Screen, state: &WatchlistState) {
         ]),
     );
     screen.pane(
-        47,
-        0,
-        w - 2,
-        content_bottom,
+        inspector.0,
+        inspector.1,
+        inspector.2 - 1,
+        inspector.3 - 1,
         false,
         &[("metrics", Style::fg(color::BLUE).bold())],
         &pane_hints(&[
@@ -178,39 +329,29 @@ pub fn draw_watchlist(screen: &mut Screen, state: &WatchlistState) {
         ]),
     );
 
-    draw_list_pane(screen, content_bottom, state);
+    draw_list_pane(screen, content_bottom, state, filter.is_some());
     if let Some(metric) = &state.metric {
         draw_inspector(screen, state, metric);
     }
     draw_status_bar(screen, screen.h - 1, w, false);
+    if let Some(query) = filter {
+        paint_filter_input(screen, query, list.2 - 1);
+    }
 }
 
 /// The slash filter reserves a line above the options; the inspector stays put.
-pub fn draw_watchlist_filter(screen: &mut Screen, state: &WatchlistState, query: &str) {
+fn render_watchlist_filter(screen: &mut Screen, state: &WatchlistState, query: &str) {
     if screen.w < 100 {
-        draw_watchlist_narrow_list(screen, state);
+        render_watchlist_narrow_list(screen, state, true);
+        paint_filter_input(screen, query, screen.w - 2);
     } else if screen.w >= 160 {
-        draw_watchlist_wide(screen, state);
+        render_watchlist_wide(screen, state, Some(query));
     } else {
-        draw_watchlist(screen, state);
+        render_watchlist_normal(screen, state, Some(query));
     }
-    let end = if screen.w < 100 { screen.w - 2 } else { 46 };
-    let bottom = screen.h - 3;
-    for y in (2..bottom).rev() {
-        for x in 2..end {
-            screen.cells[y * screen.w + x] = screen.cells[(y - 1) * screen.w + x].clone();
-        }
-    }
-    for x in 3..end {
-        let cell = &mut screen.cells[4 * screen.w + x];
-        if cell.bg == Some(color::BLUE_BG) {
-            cell.bg = Some("#242424");
-            if cell.fg == Some(color::WHITE) {
-                cell.fg = Some(color::FG);
-            }
-            cell.bold = false;
-        }
-    }
+}
+
+fn paint_filter_input(screen: &mut Screen, query: &str, end: usize) {
     let input = Style::fg(color::FG).bg("#161616");
     screen.fill(2, 1, end, 2, input);
     screen.put(2, 1, '█', Style::fg(color::BLUE).bg("#161616"));
@@ -254,12 +395,24 @@ pub fn draw_watchlist_add_results(
     selected: usize,
 ) {
     if screen.w < 100 {
-        draw_watchlist_narrow_list(screen, state);
+        render_watchlist_narrow_list(screen, state, false);
     } else if screen.w >= 160 {
-        draw_watchlist_wide(screen, state);
+        render_watchlist_wide(screen, state, None);
     } else {
-        draw_watchlist(screen, state);
+        render_watchlist_normal(screen, state, None);
     }
+    paint_watchlist_add_overlay(screen, state, query, search, results, selected);
+}
+
+/// Add dialog only; the App has already painted the component's base frame.
+pub fn paint_watchlist_add_overlay(
+    screen: &mut Screen,
+    state: &WatchlistState,
+    query: &str,
+    search: AddSearchState,
+    results: &[delta_plugins::yahoo::SearchResult],
+    selected: usize,
+) {
     screen.dim();
     let x0 = (screen.w - 64) / 2;
     let y0 = (screen.h - 19) / 2;
@@ -445,25 +598,36 @@ pub fn draw_watchlist_add_results(
     }
 }
 
-fn draw_list_pane(screen: &mut Screen, content_bottom: usize, state: &WatchlistState) {
+fn draw_list_pane(
+    screen: &mut Screen,
+    content_bottom: usize,
+    state: &WatchlistState,
+    filter: bool,
+) {
+    let offset = usize::from(filter);
     // Blank OptionList rows carry the foreground style (cols 3..44).
-    screen.fill(3, 2, 45, content_bottom, Style::fg(color::FG));
+    screen.fill(3, 2 + offset, 45, content_bottom, Style::fg(color::FG));
     // Column header (a disabled option): muted, prompt + python row string.
     let header = format!(
         "  {:<12}{:>10}  {:>8}  {:>4}",
         "Name", "Last", "Chg%", "Age"
     );
-    screen.text(3, 1, &format!(" {header} "), Style::fg(color::MUTED));
+    screen.text(
+        3,
+        1 + offset,
+        &format!(" {header} "),
+        Style::fg(color::MUTED),
+    );
     if state.entries.is_empty() {
         screen.text(
             4,
-            3,
+            3 + offset,
             "No instruments yet · press a to add",
             Style::fg(color::MUTED),
         );
         return;
     }
-    let mut y = 2;
+    let mut y = 2 + offset;
     let mut class = "";
     for (index, entry) in state.entries.iter().enumerate() {
         if entry.asset_class != class {
@@ -482,8 +646,16 @@ fn draw_list_pane(screen: &mut Screen, content_bottom: usize, state: &WatchlistS
             break;
         }
         let selected = index == state.selected;
-        let white = Style::fg(color::WHITE).bg(color::BLUE_BG).bold();
-        let muted = Style::fg(color::MUTED).bg(color::BLUE_BG).bold();
+        let white = if filter {
+            Style::fg(color::FG).bg("#242424")
+        } else {
+            Style::fg(color::WHITE).bg(color::BLUE_BG).bold()
+        };
+        let muted = if filter {
+            Style::fg(color::MUTED).bg("#242424")
+        } else {
+            Style::fg(color::MUTED).bg(color::BLUE_BG).bold()
+        };
         let row = format!("  {:<12}{:>10}  {:>8}  {:>4}", entry.symbol, "—", "—", "");
         if selected {
             screen.put(3, y, ' ', white);
@@ -728,15 +900,15 @@ fn draw_status_bar(screen: &mut Screen, y: usize, w: usize, narrow: bool) {
 /// the content area, an `esc back` hint joins the pane hints, the provider
 /// name and help hint drop out of the status bar, and the grid/chart geometry
 /// reflows to the captured 80x24 layout.
-pub fn draw_watchlist_narrow(screen: &mut Screen, state: &WatchlistState) {
+fn render_watchlist_narrow(screen: &mut Screen, state: &WatchlistState) {
     let w = screen.w;
-    let content_bottom = screen.h - 3; // 21 at h=24
+    let pane = watchlist_panes(screen)[0][0];
 
     screen.pane(
-        1,
-        0,
-        w - 2,
-        content_bottom,
+        pane.0,
+        pane.1,
+        pane.2 - 1,
+        pane.3 - 1,
         false,
         &[("metrics", Style::fg(color::BLUE).bold())],
         &pane_hints(&[
@@ -886,14 +1058,16 @@ pub fn draw_watchlist_narrow(screen: &mut Screen, state: &WatchlistState) {
 /// Narrow Watchlist before the user opens an instrument. Textual keeps the
 /// list pane visible until `enter`; the inspector painter above starts at
 /// that later state.
-pub fn draw_watchlist_narrow_list(screen: &mut Screen, state: &WatchlistState) {
+fn render_watchlist_narrow_list(screen: &mut Screen, state: &WatchlistState, filter: bool) {
     let w = screen.w;
     let bottom = screen.h - 3;
+    let offset = usize::from(filter);
+    let pane = watchlist_panes(screen)[0][0];
     screen.pane(
-        1,
-        0,
-        w - 2,
-        bottom,
+        pane.0,
+        pane.1,
+        pane.2 - 1,
+        pane.3 - 1,
         true,
         &[
             ("watchlist ", Style::fg(color::BLUE).bold()),
@@ -909,23 +1083,23 @@ pub fn draw_watchlist_narrow_list(screen: &mut Screen, state: &WatchlistState) {
             ("space", "fold"),
         ]),
     );
-    screen.fill(3, 2, w - 3, bottom, Style::fg(color::FG));
-    screen.fill(3, 1, w - 3, 2, Style::fg(color::MUTED));
+    screen.fill(3, 2 + offset, w - 3, bottom, Style::fg(color::FG));
+    screen.fill(3, 1 + offset, w - 3, 2 + offset, Style::fg(color::MUTED));
     screen.text(
         3,
-        1,
+        1 + offset,
         "   Name              Last      Chg%   Age",
         Style::fg(color::MUTED),
     );
     if state.entries.is_empty() {
         screen.text(
             4,
-            3,
+            3 + offset,
             "No instruments yet · press a to add",
             Style::fg(color::MUTED),
         );
     }
-    let mut y = 2;
+    let mut y = 2 + offset;
     let mut last_class = "";
     for (index, entry) in state.entries.iter().enumerate() {
         if entry.asset_class != last_class {
@@ -955,28 +1129,35 @@ pub fn draw_watchlist_narrow_list(screen: &mut Screen, state: &WatchlistState) {
         }
         let selected = index == state.selected;
         if selected {
-            screen.fill(
-                3,
-                y,
-                w - 3,
-                y + 1,
-                Style::fg(color::WHITE).bg(color::BLUE_BG).bold(),
-            );
-            screen.fill(
-                18,
-                y,
-                44,
-                y + 1,
-                Style::fg(color::MUTED).bg(color::BLUE_BG).bold(),
-            );
+            let (row_style, value_style) = if filter {
+                (
+                    Style::fg(color::FG).bg("#242424"),
+                    Style::fg(color::MUTED).bg("#242424"),
+                )
+            } else {
+                (
+                    Style::fg(color::WHITE).bg(color::BLUE_BG).bold(),
+                    Style::fg(color::MUTED).bg(color::BLUE_BG).bold(),
+                )
+            };
+            screen.fill(3, y, w - 3, y + 1, row_style);
+            screen.fill(18, y, 44, y + 1, value_style);
         }
         let symbol_style = if selected {
-            Style::fg(color::WHITE).bg(color::BLUE_BG).bold()
+            if filter {
+                Style::fg(color::FG).bg("#242424")
+            } else {
+                Style::fg(color::WHITE).bg(color::BLUE_BG).bold()
+            }
         } else {
             Style::fg(color::FG)
         };
         let values_style = if selected {
-            Style::fg(color::MUTED).bg(color::BLUE_BG).bold()
+            if filter {
+                Style::fg(color::MUTED).bg("#242424")
+            } else {
+                Style::fg(color::MUTED).bg(color::BLUE_BG).bold()
+            }
         } else {
             Style::fg(color::MUTED)
         };
@@ -1080,14 +1261,17 @@ fn wrap_words(text: &str, width: usize) -> Vec<String> {
 /// the dimmed base screen. The body is a 22-line scroll window starting at the
 /// top of the content; the footer hint sits under it. Tier B.
 pub fn draw_glossary_overlay(screen: &mut Screen, state: &WatchlistState) {
-    // The base pane follows the breakpoint; the overlay floats above it.
     if screen.w < 120 {
-        draw_watchlist_narrow(screen, state);
+        render_watchlist_narrow(screen, state);
     } else if screen.w > 120 {
-        draw_watchlist_wide(screen, state);
+        render_watchlist_wide(screen, state, None);
     } else {
-        draw_watchlist(screen, state);
+        render_watchlist_normal(screen, state, None);
     }
+    paint_glossary_overlay(screen, state);
+}
+
+fn paint_glossary_overlay(screen: &mut Screen, _state: &WatchlistState) {
     screen.dim();
 
     // Modal geometry (matches the exporter at 80x24, 120x40 and 200x50):
@@ -1204,15 +1388,18 @@ pub fn draw_glossary_overlay(screen: &mut Screen, state: &WatchlistState) {
 /// The Watchlist screen at the 200x50 matrix size: same content, inspector
 /// pane stretched, chart 146 wide, grid columns at the captured Rich ratio
 /// positions, and the wide status bar with full tab labels.
-pub fn draw_watchlist_wide(screen: &mut Screen, state: &WatchlistState) {
+fn render_watchlist_wide(screen: &mut Screen, state: &WatchlistState, filter: Option<&str>) {
     let w = screen.w;
     let content_bottom = screen.h - 3; // 47 at h=50
+    let panes = watchlist_panes(screen);
+    let list = panes[0][0];
+    let inspector = panes[0][1];
 
     screen.pane(
-        1,
-        0,
-        46,
-        content_bottom,
+        list.0,
+        list.1,
+        list.2 - 1,
+        list.3 - 1,
         true,
         &[
             ("watchlist ", Style::fg(color::BLUE).bold()),
@@ -1229,10 +1416,10 @@ pub fn draw_watchlist_wide(screen: &mut Screen, state: &WatchlistState) {
         ]),
     );
     screen.pane(
-        47,
-        0,
-        w - 2,
-        content_bottom,
+        inspector.0,
+        inspector.1,
+        inspector.2 - 1,
+        inspector.3 - 1,
         false,
         &[
             ("metrics", Style::fg(color::BLUE).bold()),
@@ -1246,7 +1433,7 @@ pub fn draw_watchlist_wide(screen: &mut Screen, state: &WatchlistState) {
     );
 
     // Left pane: identical rows to the 120 layout.
-    draw_list_pane(screen, content_bottom, state);
+    draw_list_pane(screen, content_bottom, state, filter.is_some());
 
     // Inspector.
     let cx = 48usize;
@@ -1254,6 +1441,9 @@ pub fn draw_watchlist_wide(screen: &mut Screen, state: &WatchlistState) {
     let Some(metric) = &state.metric else {
         screen.text(cx + 1, 2, "No instrument selected", Style::fg(color::MUTED));
         draw_status_bar_wide(screen, screen.h - 1, w, "2 Watchlist");
+        if let Some(query) = filter {
+            paint_filter_input(screen, query, list.2 - 1);
+        }
         return;
     };
 
@@ -1378,6 +1568,30 @@ pub fn draw_watchlist_wide(screen: &mut Screen, state: &WatchlistState) {
     );
 
     draw_status_bar_wide(screen, screen.h - 1, w, "2 Watchlist");
+    if let Some(query) = filter {
+        paint_filter_input(screen, query, list.2 - 1);
+    }
+}
+
+/// Oracle compatibility entry points. The running component uses the renderers directly.
+pub fn draw_watchlist(screen: &mut Screen, state: &WatchlistState) {
+    render_watchlist_normal(screen, state, None);
+}
+
+pub fn draw_watchlist_wide(screen: &mut Screen, state: &WatchlistState) {
+    render_watchlist_wide(screen, state, None);
+}
+
+pub fn draw_watchlist_narrow(screen: &mut Screen, state: &WatchlistState) {
+    render_watchlist_narrow(screen, state);
+}
+
+pub fn draw_watchlist_narrow_list(screen: &mut Screen, state: &WatchlistState) {
+    render_watchlist_narrow_list(screen, state, false);
+}
+
+pub fn draw_watchlist_filter(screen: &mut Screen, state: &WatchlistState, query: &str) {
+    render_watchlist_filter(screen, state, query);
 }
 
 #[cfg(test)]
@@ -1391,6 +1605,66 @@ mod wrap_tests {
         );
         for l in &lines {
             println!("{:?} ({})", l, l.chars().count());
+        }
+    }
+}
+
+#[cfg(test)]
+mod component_tests {
+    use super::*;
+    use crate::Screen as _;
+
+    #[test]
+    fn filter_glossary_and_selection_live_in_screen() {
+        let mut watch = WatchlistComponent::default();
+        watch.set_snapshot(WatchlistState {
+            range: "1m",
+            metric: None,
+            scrub: None,
+            entries: vec![
+                WatchEntry {
+                    symbol: "AAPL".into(),
+                    asset_class: "equity".into(),
+                },
+                WatchEntry {
+                    symbol: "MSFT".into(),
+                    asset_class: "equity".into(),
+                },
+            ],
+            selected: 0,
+        });
+        let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+        assert_eq!(
+            watch.handle_key(key(KeyCode::Down)),
+            Some(Action::Watchlist(WatchlistCommand::Select(1)))
+        );
+        assert_eq!(
+            watch.handle_key(key(KeyCode::Char('/'))),
+            Some(Action::Noop)
+        );
+        assert_eq!(
+            watch.handle_key(key(KeyCode::Char('a'))),
+            Some(Action::Noop)
+        );
+        assert_eq!(watch.filter(), Some("a"));
+        assert_eq!(watch.handle_key(key(KeyCode::Esc)), Some(Action::Noop));
+        assert_eq!(watch.filter(), None);
+        assert_eq!(
+            watch.handle_key(key(KeyCode::Char('i'))),
+            Some(Action::Noop)
+        );
+        assert!(watch.glossary_open());
+        assert_eq!(watch.handle_key(key(KeyCode::Esc)), Some(Action::Noop));
+        assert!(!watch.glossary_open());
+    }
+
+    #[test]
+    fn watchlist_panes_keep_fixed_table_and_flexible_inspector() {
+        for (width, left, right) in [(80, 78, None), (120, 46, Some(47)), (200, 46, Some(47))] {
+            let screen = Screen::new(width, 40);
+            let panes = watchlist_panes(&screen);
+            assert_eq!(panes[0][0].2 - 1, left);
+            assert_eq!(panes[0].get(1).map(|pane| pane.0), right);
         }
     }
 }

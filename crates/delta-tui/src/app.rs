@@ -20,19 +20,19 @@ use delta_tui::desk::Desk;
 use delta_tui::dialog::{GoPicker, HelpDialog};
 use delta_tui::form::Form;
 use delta_tui::screen::{color, Screen, Style};
-use delta_tui::screens::decisions::{draw_decisions_live, DecisionsData};
+use delta_tui::screens::decisions::{DecisionCommand, DecisionsData, DecisionsScreen};
+#[cfg(test)]
+use delta_tui::screens::SettingsFocus;
+#[cfg(test)]
+use delta_tui::screens::ThesesPane;
 use delta_tui::screens::{
-    draw_ask, draw_ask_narrow, draw_ask_wide, draw_decisions, draw_decisions_narrow,
-    draw_decisions_wide, draw_glossary_overlay, draw_home, draw_home_live, draw_home_narrow,
-    draw_home_setup, draw_home_wide, draw_research, draw_research_live, draw_research_narrow,
-    draw_research_wide, draw_settings, draw_settings_narrow, draw_settings_wide, draw_theses_live,
-    draw_thesis_form_runtime, draw_watchlist, draw_watchlist_add_results, draw_watchlist_filter,
-    draw_watchlist_narrow, draw_watchlist_narrow_list, draw_watchlist_wide, paint_ask_state,
-    AddSearchState, AskState, ResearchData, ResearchState, ResearchView, SettingsFocus,
-    SettingsState, SettingsView, ThesesPane, ThesesState,
+    draw_thesis_form_runtime, paint_watchlist_add_overlay, AddSearchState, AskState,
+    EvidenceDecision, HomeCommand, HomeComponent, ResearchComponent, ResearchData, ResearchView,
+    SettingsCommand, SettingsComponent, ThesesCommand, ThesesComponent, WatchlistCommand,
+    WatchlistComponent,
 };
 use delta_tui::theme::Palette;
-use delta_tui::{is_quit_key, workers, Action, Breakpoint, Component};
+use delta_tui::{is_quit_key, workers, Action, Component};
 
 /// The shell modals the app can float over a pane.
 enum Overlay {
@@ -151,8 +151,8 @@ impl FrameStats {
 pub(crate) struct App {
     desk: Desk,
     tab: Tab,
-    glossary: bool,
-    watch_filter: Option<String>,
+    home: HomeComponent,
+    watchlist: WatchlistComponent,
     add_search: AddSearchState,
     add_results: Vec<SearchResult>,
     add_generation: u64,
@@ -168,14 +168,12 @@ pub(crate) struct App {
     /// The floating shell modal, if any.
     overlay: Option<Overlay>,
     /// The Settings screen's interaction state.
-    settings: SettingsState,
-    theses: ThesesState,
-    research: Option<ResearchData>,
-    research_state: ResearchState,
+    settings: SettingsComponent,
+    theses: ThesesComponent,
+    research: ResearchComponent,
     ask: AskState,
     ask_worker: Option<tokio::task::JoinHandle<()>>,
-    decisions: Option<DecisionsData>,
-    confirm_decision_delete: bool,
+    decisions: DecisionsScreen,
     /// The terminal size the last frame painted (breakpoint decisions).
     viewport: (u16, u16),
 }
@@ -207,159 +205,22 @@ impl App {
     fn open_research_for_instrument(&mut self, instrument_id: &str) {
         self.tab = Tab::Research;
         if let Some(data) = load_research_for(&self.desk, instrument_id) {
-            self.research = Some(data);
-            self.research_state = ResearchState::default();
+            self.research.set_data(Some(data));
+            self.research.state = Default::default();
         }
     }
 
     fn handle_research_key(&mut self, key: KeyEvent) -> Option<Action> {
-        let state = &mut self.research_state;
-        if state.search_active {
-            match key.code {
-                KeyCode::Esc | KeyCode::Enter => state.search_active = false,
-                KeyCode::Backspace => {
-                    state.search.pop();
-                }
-                KeyCode::Char(c) => {
-                    state.search.push(c);
-                    state.selected = 0;
-                }
-                _ => return None,
-            }
-            return Some(Action::Noop);
-        }
-        match key.code {
-            KeyCode::Char('n') => Some(Action::GenerateReport),
-            KeyCode::Char('u') => self
-                .research
-                .as_ref()
-                .map(|data| Action::GatherCompany(data.company.clone())),
-            KeyCode::Char('e') => {
-                state.view = ResearchView::Evidence;
-                Some(Action::Noop)
-            }
-            KeyCode::Char('r') => {
-                state.view = ResearchView::Report;
-                Some(Action::Noop)
-            }
-            KeyCode::Char('t') => {
-                state.view = ResearchView::Company;
-                Some(Action::Noop)
-            }
-            KeyCode::Char('k') => {
-                state.cycle_kind();
-                state.view = ResearchView::Evidence;
-                Some(Action::Noop)
-            }
-            KeyCode::Char('l') => {
-                state.load_more();
-                Some(Action::Noop)
-            }
-            KeyCode::Char('o') => {
-                let data = self.research.as_ref()?;
-                let id = state
-                    .selected_id
-                    .clone()
-                    .or_else(|| state.selected_evidence_id(data))?;
-                let url = data
-                    .evidence
-                    .iter()
-                    .find(|item| item.id == id)?
-                    .url
-                    .as_ref()?;
-                if url.starts_with("https://") || url.starts_with("http://") {
-                    Some(Action::OpenSource(url.clone()))
-                } else {
-                    None
-                }
-            }
-            KeyCode::Char(' ') => {
-                if let Some(data) = &self.research {
-                    state.toggle_selected_price_run(data);
-                }
-                Some(Action::Noop)
-            }
-            KeyCode::Char('/') => {
-                state.search_active = true;
-                state.view = ResearchView::Evidence;
-                Some(Action::Noop)
-            }
-            KeyCode::Esc => {
-                if state.detail_open {
-                    state.detail_open = false;
-                } else {
-                    state.view = ResearchView::Company;
-                }
-                state.zoom = false;
-                Some(Action::Noop)
-            }
-            KeyCode::Enter if state.view == ResearchView::Report => {
-                if let Some(data) = &self.research {
-                    state.open_next_citation(data);
-                }
-                Some(Action::Noop)
-            }
-            KeyCode::Enter if state.view == ResearchView::Evidence => {
-                if let Some(data) = &self.research {
-                    state.selected_id = state.selected_evidence_id(data);
-                    state.detail_open = state.selected_id.is_some();
-                }
-                Some(Action::Noop)
-            }
-            KeyCode::Up if state.view == ResearchView::Report => {
-                state.report_scroll = state.report_scroll.saturating_sub(1);
-                Some(Action::Noop)
-            }
-            KeyCode::Down if state.view == ResearchView::Report => {
-                state.report_scroll += 1;
-                Some(Action::Noop)
-            }
-            KeyCode::Up => {
-                state.selected_id = None;
-                state.selected = state.selected.saturating_sub(1);
-                Some(Action::Noop)
-            }
-            KeyCode::Down => {
-                state.selected_id = None;
-                state.selected += 1;
-                Some(Action::Noop)
-            }
-            KeyCode::Char('z') => {
-                state.zoom = !state.zoom;
-                Some(Action::Noop)
-            }
-            KeyCode::Char('v') if state.selected_id.is_some() => {
-                if let (Some(data), Some(id)) = (&self.research, state.selected_id.clone()) {
-                    state.reveal_claim(data, &id, self.viewport.0 as usize);
-                }
-                Some(Action::Noop)
-            }
-            _ => None,
-        }
+        self.research.set_viewport_width(self.viewport.0 as usize);
+        delta_tui::Screen::handle_key(&mut self.research, key)
     }
 
     fn paint(&mut self, screen: &mut Screen) {
-        let w = screen.w;
-        // The shell breakpoints (`shell.py::NARROW_WIDTH` plus the wide
-        // layout the goldens capture).
-        let wide = Breakpoint::from_width(w as u16) == Breakpoint::Wide;
-        let narrow = Breakpoint::from_width(w as u16) == Breakpoint::Narrow;
-        macro_rules! route {
-            ($wide:expr, $normal:expr, $narrow:expr) => {
-                if wide {
-                    $wide
-                } else if narrow {
-                    $narrow
-                } else {
-                    $normal
-                }
-            };
-        }
         match self.tab {
             Tab::Home => {
-                if self.desk.instruments.is_empty() && self.desk.config_path.is_some() {
+                let setup = if self.desk.instruments.is_empty() && self.desk.config_path.is_some() {
                     let settings = &self.desk.settings;
-                    let setup = delta_tui::screens::HomeSetupData {
+                    Some(delta_tui::screens::HomeSetupData {
                         provider: settings.provider.clone(),
                         provider_connected: settings.provider_connected,
                         config_exists: true,
@@ -372,97 +233,42 @@ impl App {
                             .diagnostics
                             .as_ref()
                             .is_ok_and(|diag| !diag.health.latest_bar.is_empty()),
-                    };
-                    draw_home_setup(screen, &self.desk.home_state(), &setup);
-                } else if let Some(data) = &self.desk.home_live {
-                    draw_home_live(screen, &self.desk.home_state(), data);
+                    })
                 } else {
-                    route!(
-                        draw_home_wide(screen, &self.desk.home_state()),
-                        draw_home(screen, &self.desk.home_state()),
-                        draw_home_narrow(screen, &self.desk.home_state())
-                    );
-                }
+                    None
+                };
+                self.home.set_snapshot(
+                    self.desk.home_state(),
+                    self.desk.home_live.clone(),
+                    setup,
+                    self.desk.selected,
+                    self.desk.instruments.len(),
+                );
+                self.home.paint_into(screen);
             }
             Tab::Watchlist => {
-                let mut state = self.desk.watch_state();
-                if let Some(query) = &self.watch_filter {
-                    let needle = query.to_lowercase();
-                    state.entries.retain(|entry| {
-                        entry.symbol.to_lowercase().contains(&needle)
-                            || entry.asset_class.to_lowercase().contains(&needle)
-                    });
-                    state.selected = state.selected.min(state.entries.len().saturating_sub(1));
-                    draw_watchlist_filter(screen, &state, query);
-                } else if narrow && !self.desk.watch_detail_open {
-                    draw_watchlist_narrow_list(screen, &state);
-                } else {
-                    route!(
-                        draw_watchlist_wide(screen, &state),
-                        draw_watchlist(screen, &state),
-                        draw_watchlist_narrow(screen, &state)
-                    );
-                }
+                self.watchlist.set_snapshot(self.desk.watch_state());
+                self.watchlist.paint_into(screen);
             }
             Tab::Research => {
-                if let Some(data) = &self.research {
-                    draw_research_live(screen, data, &self.research_state);
-                } else {
-                    route!(
-                        draw_research_wide(screen),
-                        draw_research(screen),
-                        draw_research_narrow(screen)
-                    );
-                }
+                self.research.paint_into(screen);
             }
-            Tab::Theses => draw_theses_live(screen, &self.theses),
-            Tab::Ask => {
-                route!(
-                    draw_ask_wide(screen),
-                    draw_ask(screen),
-                    draw_ask_narrow(screen)
-                );
-            }
-            Tab::Decisions => {
-                if let Some(data) = self
-                    .decisions
-                    .as_ref()
-                    .filter(|data| !data.decisions.is_empty())
-                {
-                    draw_decisions_live(screen, data);
-                } else {
-                    route!(
-                        draw_decisions_wide(screen),
-                        draw_decisions(screen),
-                        draw_decisions_narrow(screen)
-                    );
-                }
-            }
+            Tab::Theses => self.theses.paint_into(screen),
+            Tab::Ask => delta_tui::screens::draw_ask_live(screen, &self.ask),
+            Tab::Decisions => self.decisions.paint(screen),
             Tab::Settings => {
-                let view = SettingsView {
-                    data: &self.desk.settings,
-                    state: &self.settings,
-                    footer: &self.desk.settings_footer,
-                };
-                route!(
-                    draw_settings_wide(screen, &view),
-                    draw_settings(screen, &view),
-                    draw_settings_narrow(screen, &view)
-                )
+                self.settings
+                    .sync_data(&self.desk.settings, &self.desk.settings_footer);
+                self.settings.set_palette(self.palette);
+                self.settings.paint_into(screen);
             }
-        }
-        if self.tab == Tab::Ask {
-            paint_ask_state(screen, &self.ask);
-        }
-        if self.glossary && self.tab == Tab::Watchlist {
-            draw_glossary_overlay(screen, &self.desk.watch_state());
         }
         match &mut self.overlay {
             Some(Overlay::Go) => GoPicker::draw_screen(screen),
             Some(Overlay::Help(help)) => help.draw_screen(screen),
             Some(Overlay::Palette(palette)) => palette.draw_screen(screen),
             Some(Overlay::AddTarget(query)) => {
-                draw_watchlist_add_results(
+                paint_watchlist_add_overlay(
                     screen,
                     &self.desk.watch_state(),
                     query,
@@ -607,15 +413,11 @@ impl App {
 
     fn refresh_decisions(&mut self) {
         let Ok(db) = self.decision_db() else {
-            self.decisions = None;
+            self.decisions.set_data(None);
             return;
         };
-        let filter = self
-            .decisions
-            .as_ref()
-            .map(|data| data.filter.clone())
-            .unwrap_or_default();
-        let selected = self.decisions.as_ref().map_or(0, |data| data.selected);
+        let filter = self.decisions.filter().to_string();
+        let selected = self.decisions.selected_index();
         let Ok(mut decisions) = delta_services::list_decisions(&db, None, true) else {
             self.status = "could not load decisions".to_string();
             return;
@@ -637,65 +439,47 @@ impl App {
         } else {
             (Vec::new(), None)
         };
-        self.decisions = Some(DecisionsData {
+        self.decisions.set_data(Some(DecisionsData {
             decisions,
             selected,
             reviews,
             current_price,
             filter,
             spend: delta_services::analytics::total_spend(&db, None),
-            confirm_delete: self.confirm_decision_delete,
-        });
+            confirm_delete: false,
+        }));
     }
 
     fn selected_decision(&self) -> Option<&delta_services::Decision> {
-        self.decisions.as_ref()?.selected()
+        self.decisions.selected()
     }
 
-    fn handle_decisions_key(&mut self, key: KeyEvent) -> Option<Action> {
-        match key.code {
-            KeyCode::Up | KeyCode::Down => {
-                if let Some(data) = &mut self.decisions {
-                    if key.code == KeyCode::Up {
-                        data.selected = data.selected.saturating_sub(1);
-                    } else {
-                        data.selected =
-                            (data.selected + 1).min(data.decisions.len().saturating_sub(1));
-                    }
-                }
+    fn handle_decision_command(&mut self, command: DecisionCommand) {
+        match command {
+            DecisionCommand::SelectionChanged => {
                 self.refresh_decisions();
             }
-            KeyCode::Char('n') => {
+            DecisionCommand::New => {
                 self.overlay = Some(Overlay::DecisionForm(decision_form(None)));
             }
-            KeyCode::Char('e') => {
+            DecisionCommand::Edit => {
                 if let Some(decision) = self.selected_decision() {
                     self.overlay = Some(Overlay::DecisionForm(decision_form(Some(decision))));
                 }
             }
-            KeyCode::Char('r') => {
+            DecisionCommand::Review => {
                 if let Some(decision) = self.selected_decision() {
                     self.overlay = Some(Overlay::DecisionForm(review_form(&decision.id)));
                 }
             }
-            KeyCode::Char('/') => {
-                let query = self
-                    .decisions
-                    .as_ref()
-                    .map_or(String::new(), |d| d.filter.clone());
+            DecisionCommand::Filter => {
+                let query = self.decisions.filter().to_string();
                 self.overlay = Some(Overlay::DecisionFilter(query));
             }
-            KeyCode::Char('d') => {
-                if self.selected_decision().is_some() {
-                    self.confirm_decision_delete = true;
-                    if let Some(data) = &mut self.decisions {
-                        data.confirm_delete = true;
-                    }
-                    self.status = "delete decision? press y to confirm".to_string();
-                }
+            DecisionCommand::ConfirmDelete => {
+                self.status = "delete decision? press y to confirm".to_string();
             }
-            KeyCode::Char('y') if self.confirm_decision_delete => {
-                self.confirm_decision_delete = false;
+            DecisionCommand::Delete => {
                 if let Some(id) = self.selected_decision().map(|d| d.id.clone()) {
                     let result = self.decision_db().and_then(|db| {
                         delta_services::delete_decision(&db, &id).map_err(|error| error.to_string())
@@ -707,7 +491,7 @@ impl App {
                     self.refresh_decisions();
                 }
             }
-            KeyCode::Char('o') => {
+            DecisionCommand::Research => {
                 if let Some(instrument_id) = self
                     .selected_decision()
                     .map(|decision| decision.instrument_id.clone())
@@ -715,16 +499,10 @@ impl App {
                     self.open_research_for_instrument(&instrument_id);
                 }
             }
-            KeyCode::Esc => {
-                self.confirm_decision_delete = false;
-                if let Some(data) = &mut self.decisions {
-                    data.confirm_delete = false;
-                }
+            DecisionCommand::Cancel => {
                 self.status.clear();
             }
-            _ => return None,
         }
-        Some(Action::Noop)
     }
 
     fn submit_decision_form(&mut self, modal: &mut DecisionModal) -> bool {
@@ -875,151 +653,125 @@ impl App {
     }
 
     fn handle_ask_key(&mut self, key: KeyEvent) -> Option<Action> {
-        if self.ask.editing {
-            match key.code {
-                KeyCode::Esc => self.ask.editing = false,
-                KeyCode::Enter => {
-                    if let Some((generation, history, targets)) = self.ask.submit() {
-                        return Some(Action::AskQuestion {
-                            generation,
-                            history,
-                            targets,
-                        });
-                    }
-                }
-                KeyCode::Backspace => {
-                    self.ask.input.pop();
-                }
-                KeyCode::Char(c) => self.ask.input.push(c),
-                _ => {}
-            }
-            return Some(Action::Noop);
-        }
-        if self.ask.clear_pending {
-            match key.code {
-                KeyCode::Char('y') => {
-                    if let Some(worker) = self.ask_worker.take() {
-                        worker.abort();
-                    }
-                    self.ask.clear();
-                }
-                KeyCode::Esc => self.ask.clear_pending = false,
-                _ => {}
-            }
-            return Some(Action::Noop);
-        }
-        match key.code {
-            KeyCode::Esc if self.ask.busy => {
+        let action = delta_tui::Screen::handle_key(&mut self.ask, key)?;
+        match action {
+            Action::AskAbortWorker => {
                 if let Some(worker) = self.ask_worker.take() {
                     worker.abort();
                 }
-                self.ask.cancel_pending();
+                Some(Action::Noop)
             }
-            KeyCode::Char('i') | KeyCode::Enter => {
-                self.ask.editing = true;
-                self.ask.targets_focus = false;
+            Action::AskOpenCitation(citation) => {
+                self.open_ask_citation(citation);
+                Some(Action::Noop)
             }
-            KeyCode::Char('t') => self.ask.targets_focus = true,
-            KeyCode::Esc if self.ask.targets_focus => self.ask.targets_focus = false,
-            KeyCode::Char(' ') => self.ask.toggle_target(),
-            KeyCode::Char('a') => self.ask.toggle_all(),
-            KeyCode::Up if self.ask.targets_focus => {
-                self.ask.target_selected = self.ask.target_selected.saturating_sub(1)
-            }
-            KeyCode::Down if self.ask.targets_focus => {
-                self.ask.target_selected =
-                    (self.ask.target_selected + 1).min(self.ask.targets.len().saturating_sub(1))
-            }
-            KeyCode::Left => self.ask.walk_citation(-1),
-            KeyCode::Right => self.ask.walk_citation(1),
-            KeyCode::Char('o') => {
-                let citation = self
-                    .ask
-                    .citations()
-                    .get(self.ask.selected_citation)
-                    .cloned()?;
-                if citation.starts_with("https://") || citation.starts_with("http://") {
-                    return Some(Action::OpenSource(citation));
-                }
-                let target_ids = self
-                    .thesis_db()
-                    .and_then(|db| {
-                        delta_services::evidence_by_ids(&db, std::slice::from_ref(&citation)).ok()
-                    })
-                    .and_then(|items| items.into_iter().next())
-                    .map(|item| item.target_ids)
-                    .unwrap_or_default();
-                let instrument = self
-                    .ask
-                    .targets
-                    .iter()
-                    .filter(|target| self.ask.scope.contains(&target.id))
-                    .flat_map(|target| target.instruments())
-                    .find(|instrument| target_ids.contains(&instrument.id))
-                    .map(|instrument| instrument.id)
-                    .or_else(|| self.ask.instrument_ids().into_iter().next());
-                if let Some(instrument) = instrument {
-                    self.open_research_for_instrument(&instrument);
-                    self.research_state.view = ResearchView::Evidence;
-                    self.research_state.selected_id = Some(citation);
-                    self.research_state.detail_open = true;
-                }
-            }
-            KeyCode::Char('z') => self.ask.zoomed = !self.ask.zoomed,
-            KeyCode::Char('s') => {
-                let Some(answer) = self
-                    .ask
-                    .history
-                    .iter()
-                    .rev()
-                    .find(|turn| turn.role == "assistant")
-                else {
-                    return Some(Action::Status(
-                        "no answer to save yet — press i to ask something".to_string(),
-                    ));
-                };
-                let mut modal = thesis_form(None);
-                modal.form.fields[0]
-                    .input
-                    .set_value(answer.text.split("\n\n").next().unwrap_or(""));
-                let targets = self
-                    .ask
-                    .targets
-                    .iter()
-                    .filter(|target| self.ask.scope.contains(&target.id))
-                    .map(|target| target.id.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                modal.form.fields[1].input.set_value(&targets);
-                modal.mode = FormMode::AddThesisFromAsk(
-                    answer
-                        .citations
-                        .iter()
-                        .filter(|citation| {
-                            !citation.starts_with("http://") && !citation.starts_with("https://")
-                        })
-                        .cloned()
-                        .collect(),
-                );
-                self.overlay = Some(Overlay::SettingsForm(modal));
-            }
-            KeyCode::Char('x') if !self.ask.history.is_empty() => self.ask.clear_pending = true,
-            _ => return None,
+            Action::AskSaveAnswer => Some(self.save_ask_answer()),
+            other => Some(other),
         }
-        Some(Action::Noop)
     }
 
-    /// The shell keys, in `DeltaApp.BINDINGS` order (plus the esc close and
-    /// the palette keys Textual/the plan install). Per-screen keys (the
-    /// watchlist's `r`/`R` range, `enter` inspect, ...) belong to their
-    /// screens in R3.2.
+    fn open_ask_citation(&mut self, citation: String) {
+        let target_ids = self
+            .thesis_db()
+            .and_then(|db| {
+                delta_services::evidence_by_ids(&db, std::slice::from_ref(&citation)).ok()
+            })
+            .and_then(|items| items.into_iter().next())
+            .map(|item| item.target_ids)
+            .unwrap_or_default();
+        let instrument = self
+            .ask
+            .targets
+            .iter()
+            .filter(|target| self.ask.scope.contains(&target.id))
+            .flat_map(|target| target.instruments())
+            .find(|instrument| target_ids.contains(&instrument.id))
+            .map(|instrument| instrument.id)
+            .or_else(|| self.ask.instrument_ids().into_iter().next());
+        if let Some(instrument) = instrument {
+            self.open_research_for_instrument(&instrument);
+            self.research.state.view = ResearchView::Evidence;
+            self.research.state.selected_id = Some(citation);
+            self.research.state.detail_open = true;
+        }
+    }
+
+    fn save_ask_answer(&mut self) -> Action {
+        let Some(answer) = self
+            .ask
+            .history
+            .iter()
+            .rev()
+            .find(|turn| turn.role == "assistant")
+        else {
+            return Action::Status("no answer to save yet — press i to ask something".to_string());
+        };
+        let mut modal = thesis_form(None);
+        modal.form.fields[0]
+            .input
+            .set_value(answer.text.split("\n\n").next().unwrap_or(""));
+        let targets = self
+            .ask
+            .targets
+            .iter()
+            .filter(|target| self.ask.scope.contains(&target.id))
+            .map(|target| target.id.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        modal.form.fields[1].input.set_value(&targets);
+        modal.mode = FormMode::AddThesisFromAsk(
+            answer
+                .citations
+                .iter()
+                .filter(|citation| {
+                    !citation.starts_with("http://") && !citation.starts_with("https://")
+                })
+                .cloned()
+                .collect(),
+        );
+        self.overlay = Some(Overlay::SettingsForm(modal));
+        Action::Noop
+    }
+
+    fn handle_home_command(&mut self, command: HomeCommand) {
+        match command {
+            HomeCommand::Select(index) => self.desk.selected = index,
+            HomeCommand::OpenSelected => {
+                self.tab = Tab::Watchlist;
+                self.watchlist.open_detail();
+            }
+        }
+    }
+
+    fn handle_watchlist_command(&mut self, command: WatchlistCommand) {
+        match command {
+            WatchlistCommand::Select(index) => self.desk.selected = index,
+            WatchlistCommand::CycleRange(delta) => self.desk.cycle_range(delta),
+            WatchlistCommand::MoveScrub(delta) => self.desk.move_scrub(delta),
+            WatchlistCommand::Add => {
+                self.overlay = Some(Overlay::AddTarget(String::new()));
+                self.add_search = AddSearchState::Ready;
+                self.add_results.clear();
+                self.add_selected = 0;
+                self.add_picked = false;
+                self.add_picked_result = None;
+            }
+            WatchlistCommand::Remove => {
+                if let Err(error) = self.remove_instrument_at(Path::new("config.toml")) {
+                    self.status = error;
+                }
+            }
+        }
+    }
+
+    /// Global shell keys run after the active screen has handled its own keys.
     fn handle_shell_key(&mut self, key: KeyEvent) -> Option<Action> {
         if is_quit_key(key) {
             return Some(Action::Quit);
         }
         match key.code {
             KeyCode::Esc => {
-                self.glossary = false;
+                self.watchlist.close_glossary();
                 return Some(Action::Noop);
             }
             KeyCode::Char('1') => self.tab = Tab::Home,
@@ -1035,7 +787,7 @@ impl App {
             }
             KeyCode::Char('4') => {
                 self.tab = Tab::Theses;
-                self.theses.focus_active = true;
+                self.theses.state.focus_active = true;
                 self.reload_theses();
             }
             KeyCode::Char('5') => self.tab = Tab::Ask,
@@ -1069,12 +821,6 @@ impl App {
                 };
                 return Some(Action::Noop);
             }
-            KeyCode::Char('i') if self.tab == Tab::Watchlist => {
-                // The watchlist's glossary (`i` metric_help) until its
-                // screen owns its keys in R3.2.
-                self.glossary = !self.glossary;
-                return Some(Action::Noop);
-            }
             KeyCode::Char('U') => return Some(Action::Gather),
             KeyCode::F(2) => return Some(Action::ToggleTheme),
             KeyCode::Char('k')
@@ -1099,167 +845,91 @@ impl App {
 
     fn reload_theses(&mut self) {
         if let Some(db) = self.thesis_db() {
-            if let Err(err) = self.theses.load(&db) {
+            if let Err(err) = self.theses.state.load(&db) {
                 self.status = err.to_string();
             }
         }
     }
 
     fn handle_theses_key(&mut self, key: KeyEvent) -> Option<Action> {
+        self.theses.set_viewport_width(self.viewport_width());
+        let action = Component::handle_key(&mut self.theses, key)?;
+        Some(match action {
+            Action::Theses(command) => self.execute_theses_command(command),
+            other => other,
+        })
+    }
+
+    fn execute_theses_command(&mut self, command: ThesesCommand) -> Action {
         use delta_services::{remove_evidence, set_accepted};
-        self.theses.focus_active = true;
-        if self.theses.filtering {
-            match key.code {
-                KeyCode::Esc | KeyCode::Enter => self.theses.filtering = false,
-                KeyCode::Backspace => {
-                    self.theses.filter.pop();
-                }
-                KeyCode::Char(ch) => self.theses.filter.push(ch),
-                _ => {}
-            }
-            return Some(Action::Noop);
-        }
-        match key.code {
-            KeyCode::Esc if self.theses.view != ThesesPane::Claims => {
-                self.theses.view = ThesesPane::Claims;
-                Some(Action::Noop)
-            }
-            KeyCode::Char('/') => {
-                self.theses.filtering = true;
-                self.theses.view = ThesesPane::Claims;
-                Some(Action::Noop)
-            }
-            KeyCode::Char('t') | KeyCode::Enter => {
-                self.theses.view = ThesesPane::Detail;
-                Some(Action::Noop)
-            }
-            KeyCode::Char('e') => {
-                self.theses.view = ThesesPane::Evidence;
-                Some(Action::Noop)
-            }
-            KeyCode::Char('n') => {
+        match command {
+            ThesesCommand::New => {
                 self.overlay = Some(Overlay::SettingsForm(thesis_form(None)));
-                Some(Action::Noop)
+                Action::Noop
             }
-            KeyCode::Char('d') => {
-                let row = self.theses.fleet.get(self.theses.selected)?;
+            ThesesCommand::Edit => {
+                let Some(row) = self.theses.state.fleet.get(self.theses.state.selected) else {
+                    return Action::Noop;
+                };
                 self.overlay = Some(Overlay::SettingsForm(thesis_form(Some(&row.thesis))));
-                Some(Action::Noop)
+                Action::Noop
             }
-            KeyCode::Up => {
-                if self.theses.view == ThesesPane::Evidence {
-                    self.theses.evidence_selected = self.theses.evidence_selected.saturating_sub(1);
-                    return Some(Action::Noop);
-                }
-                self.theses.selected = self.theses.selected.saturating_sub(1);
+            ThesesCommand::Select => {
                 if let Some(db) = self.thesis_db() {
-                    let _ = self.theses.select(&db);
+                    let _ = self.theses.state.select(&db);
                 }
-                Some(Action::Noop)
+                Action::Noop
             }
-            KeyCode::Down => {
-                if self.theses.view == ThesesPane::Evidence {
-                    self.theses.evidence_selected = (self.theses.evidence_selected + 1)
-                        .min(self.theses.links.len().saturating_sub(1));
-                    return Some(Action::Noop);
-                }
-                self.theses.selected =
-                    (self.theses.selected + 1).min(self.theses.fleet.len().saturating_sub(1));
-                if let Some(db) = self.thesis_db() {
-                    let _ = self.theses.select(&db);
-                }
-                Some(Action::Noop)
-            }
-            KeyCode::Char('f') => self
-                .theses
-                .selected_id()
-                .map(|id| Action::ThesisFind(id.to_string()))
-                .or_else(|| Some(Action::Status("select a thesis first".to_string()))),
-            KeyCode::Char('s') => {
-                let id = self.theses.selected_id().map(str::to_string);
-                self.theses.view = ThesesPane::Detail;
-                id.map(Action::ThesisSummarize)
-                    .or_else(|| Some(Action::Status("select a thesis first".to_string())))
-            }
-            KeyCode::Char('a' | 'x' | 'u') => {
-                if self.viewport_width() < 100 && self.theses.view != ThesesPane::Evidence {
-                    return Some(Action::Status(
-                        "press e to review evidence first".to_string(),
-                    ));
-                }
-                let Some(link) = self.theses.selected_link().cloned() else {
-                    return Some(Action::Status("no evidence to review".to_string()));
-                };
+            ThesesCommand::Find(id) => Action::ThesisFind(id),
+            ThesesCommand::Summarize(id) => Action::ThesisSummarize(id),
+            ThesesCommand::Review {
+                thesis_id,
+                evidence_id,
+                decision,
+            } => {
                 let Some(db) = self.thesis_db() else {
-                    return Some(Action::Status("offline: no database".to_string()));
+                    return Action::Status("offline: no database".to_string());
                 };
-                let result = match key.code {
-                    KeyCode::Char('a') if !link.accepted => {
-                        set_accepted(&db, &link.thesis_id, &link.evidence_id, true).map(|_| ())
+                let result = match decision {
+                    EvidenceDecision::Accept => {
+                        set_accepted(&db, &thesis_id, &evidence_id, true).map(|_| ())
                     }
-                    KeyCode::Char('u') if link.accepted => {
-                        set_accepted(&db, &link.thesis_id, &link.evidence_id, false).map(|_| ())
+                    EvidenceDecision::Unaccept => {
+                        set_accepted(&db, &thesis_id, &evidence_id, false).map(|_| ())
                     }
-                    KeyCode::Char('x') if !link.accepted => {
-                        remove_evidence(&db, &link.thesis_id, &link.evidence_id)
-                    }
-                    _ => {
-                        return Some(Action::Status(
-                            "review that item's current state first".to_string(),
-                        ))
-                    }
+                    EvidenceDecision::Reject => remove_evidence(&db, &thesis_id, &evidence_id),
                 };
                 match result {
                     Ok(()) => {
                         self.reload_theses();
-                        Some(Action::Noop)
+                        Action::Noop
                     }
-                    Err(err) => Some(Action::Status(err.to_string())),
+                    Err(err) => Action::Status(err.to_string()),
                 }
             }
-            _ => None,
         }
     }
 }
 
 impl App {
-    /// The Settings screen's keys (`config.py::BINDINGS`): `d` diagnostics,
-    /// `r` refresh, `l` plugins, `s` configure source, `a`/`e`/`x`
-    /// add/edit/remove market, `esc` back; plus the table keys (↑↓/tab/
-    /// enter) and `t` to toggle a plugin.
+    /// Settings owns navigation and focus. The app performs requested I/O and opens modals.
     fn handle_settings_key(&mut self, key: KeyEvent) -> Option<Action> {
-        let data = &self.desk.settings;
-        let counts = (data.plugins.len(), data.sources.len(), data.markets.len());
-        match key.code {
-            KeyCode::Esc => {
-                self.settings.close_diagnostics(self.viewport_width());
-                Some(Action::Noop)
-            }
-            KeyCode::Up => {
-                self.settings
-                    .move_selection(-1, counts.0, counts.1, counts.2);
-                Some(Action::Noop)
-            }
-            KeyCode::Down => {
-                self.settings
-                    .move_selection(1, counts.0, counts.1, counts.2);
-                Some(Action::Noop)
-            }
-            KeyCode::Tab => {
-                self.settings.cycle_focus(false);
-                Some(Action::Noop)
-            }
-            KeyCode::BackTab => {
-                self.settings.cycle_focus(true);
-                Some(Action::Noop)
-            }
-            KeyCode::Enter => Some(self.settings_enter()),
-            KeyCode::Char('d') => {
-                self.settings.toggle_diagnostics(self.viewport_width());
-                Some(Action::Noop)
-            }
-            KeyCode::Char('r') => {
+        self.settings
+            .sync_data(&self.desk.settings, &self.desk.settings_footer);
+        self.settings.set_viewport_width(self.viewport_width());
+        let action = Component::handle_key(&mut self.settings, key)?;
+        Some(match action {
+            Action::SettingsCommand(command) => self.execute_settings_command(command),
+            other => other,
+        })
+    }
+
+    fn execute_settings_command(&mut self, command: SettingsCommand) -> Action {
+        match command {
+            SettingsCommand::Refresh => {
                 self.desk.reload_settings();
+                self.settings
+                    .sync_data(&self.desk.settings, &self.desk.settings_footer);
                 let refreshed = self
                     .desk
                     .settings
@@ -1268,56 +938,25 @@ impl App {
                     .map(|d| d.refreshed.clone())
                     .unwrap_or_default();
                 self.status = format!("diagnostics refreshed {refreshed}");
-                Some(Action::Noop)
+                Action::Noop
             }
-            KeyCode::Char('l') => {
-                self.settings.focus = SettingsFocus::Plugins;
-                Some(Action::Noop)
-            }
-            KeyCode::Char('s') => Some(self.open_source_form()),
-            KeyCode::Char('a') => {
+            SettingsCommand::OpenSource => self.open_source_form(),
+            SettingsCommand::AddMarket => {
                 self.overlay = Some(Overlay::SettingsForm(market_form(None)));
-                Some(Action::Noop)
+                Action::Noop
             }
-            KeyCode::Char('e') => Some(self.edit_market()),
-            KeyCode::Char('x') => Some(self.remove_market()),
-            KeyCode::Char('t') => Some(self.toggle_plugin()),
-            KeyCode::Char('n') => {
+            SettingsCommand::EditMarket => self.edit_market(),
+            SettingsCommand::RemoveMarket => self.remove_market(),
+            SettingsCommand::TogglePlugin => self.toggle_plugin(),
+            SettingsCommand::AddTarget => {
                 self.overlay = Some(Overlay::SettingsForm(target_form(None)));
-                Some(Action::Noop)
+                Action::Noop
             }
-            KeyCode::Char('X') => {
+            SettingsCommand::RemoveTarget => {
                 self.overlay = Some(Overlay::SettingsForm(remove_target_form()));
-                Some(Action::Noop)
+                Action::Noop
             }
-            KeyCode::Char('w') => Some(self.open_target_picker()),
-            _ => None,
-        }
-    }
-
-    /// `enter` on the focused table's row (`on_data_table_row_selected`).
-    fn settings_enter(&mut self) -> Action {
-        match self.settings.focus {
-            SettingsFocus::Provider => {
-                if self.settings.provider_selected == 0 {
-                    Action::ShowProviderPicker
-                } else {
-                    Action::ShowModelPicker
-                }
-            }
-            SettingsFocus::Plugins => {
-                let data = &self.desk.settings;
-                match data.plugins.get(self.settings.plugin_selected) {
-                    Some((id, enabled)) => Action::Status(format!(
-                        "{id}: {} · t toggle",
-                        if *enabled { "enabled" } else { "disabled" }
-                    )),
-                    None => Action::Noop,
-                }
-            }
-            SettingsFocus::Sources => self.open_source_form(),
-            SettingsFocus::Markets => self.edit_market(),
-            SettingsFocus::Diagnostics => Action::Noop,
+            SettingsCommand::OpenTargetPicker => self.open_target_picker(),
         }
     }
 
@@ -1327,7 +966,7 @@ impl App {
             .desk
             .settings
             .sources
-            .get(self.settings.source_selected)
+            .get(self.settings.state.source_selected)
             .map(|s| s.id.clone())
         else {
             return Action::Status("no data source selected".to_string());
@@ -1336,7 +975,7 @@ impl App {
             .desk
             .settings
             .sources
-            .get(self.settings.source_selected)
+            .get(self.settings.state.source_selected)
             .map(|source| source.contact.clone());
         self.overlay = Some(Overlay::SettingsForm(source_form(&id, current)));
         Action::Noop
@@ -1348,7 +987,7 @@ impl App {
             .desk
             .settings
             .markets
-            .get(self.settings.market_selected)
+            .get(self.settings.state.market_selected)
             .cloned()
         else {
             return Action::Status("no market selected".to_string());
@@ -1361,6 +1000,7 @@ impl App {
     fn remove_market(&mut self) -> Action {
         let Some(id) = self
             .settings
+            .state
             .selected_market_id(&self.desk.settings)
             .map(str::to_string)
         else {
@@ -1373,8 +1013,11 @@ impl App {
             Ok(()) => {
                 self.desk.reload_settings();
                 let data = &self.desk.settings;
-                self.settings
-                    .reconcile(data.plugins.len(), data.sources.len(), data.markets.len());
+                self.settings.state.reconcile(
+                    data.plugins.len(),
+                    data.sources.len(),
+                    data.markets.len(),
+                );
                 Action::Status(format!("market {id} removed"))
             }
             Err(e) => Action::Status(e.to_string()),
@@ -1385,6 +1028,7 @@ impl App {
     fn toggle_plugin(&mut self) -> Action {
         let Some(id) = self
             .settings
+            .state
             .selected_plugin_id(&self.desk.settings)
             .map(str::to_string)
         else {
@@ -1394,7 +1038,7 @@ impl App {
             .desk
             .settings
             .plugins
-            .get(self.settings.plugin_selected)
+            .get(self.settings.state.plugin_selected)
             .map(|(_, on)| *on)
             .unwrap_or(true);
         let Some(config) = self.desk.config_path.clone() else {
@@ -1593,13 +1237,14 @@ impl App {
                             }
                         }
                         self.reload_theses();
-                        self.theses.selected = self
+                        self.theses.state.selected = self
                             .theses
+                            .state
                             .fleet
                             .iter()
                             .position(|row| row.thesis.id == thesis.id)
                             .unwrap_or(0);
-                        let _ = self.theses.select(&db);
+                        let _ = self.theses.state.select(&db);
                         Ok(())
                     }
                     Err(err) => Err(err),
@@ -1624,8 +1269,11 @@ impl App {
                 };
                 self.desk.reload_settings();
                 let data = &self.desk.settings;
-                self.settings
-                    .reconcile(data.plugins.len(), data.sources.len(), data.markets.len());
+                self.settings.state.reconcile(
+                    data.plugins.len(),
+                    data.sources.len(),
+                    data.markets.len(),
+                );
                 (Action::Status(message), true)
             }
             Err(e) => (Action::Status(e.to_string()), false),
@@ -1980,10 +1628,7 @@ impl Component for App {
                 KeyCode::Enter => {
                     let filter = query.trim().to_string();
                     self.overlay = None;
-                    if let Some(data) = &mut self.decisions {
-                        data.filter = filter;
-                        data.selected = 0;
-                    }
+                    self.decisions.set_filter(filter);
                     self.refresh_decisions();
                 }
                 KeyCode::Backspace => {
@@ -2138,77 +1783,27 @@ impl Component for App {
             return None;
         }
         if self.tab == Tab::Watchlist {
-            if let Some(query) = &mut self.watch_filter {
-                match key.code {
-                    KeyCode::Esc => self.watch_filter = None,
-                    KeyCode::Backspace => {
-                        query.pop();
-                    }
-                    KeyCode::Char(ch)
-                        if !key
-                            .modifiers
-                            .contains(crossterm::event::KeyModifiers::CONTROL) =>
-                    {
-                        query.push(ch)
-                    }
-                    _ => {}
+            self.watchlist.set_snapshot(self.desk.watch_state());
+            if let Some(action) = delta_tui::Screen::handle_key(&mut self.watchlist, key) {
+                if let Action::Watchlist(command) = action {
+                    self.handle_watchlist_command(command);
                 }
                 return Some(Action::Noop);
             }
-            match key.code {
-                KeyCode::Char('/') => {
-                    self.desk.watch_detail_open = false;
-                    self.watch_filter = Some(String::new());
-                    return Some(Action::Noop);
+        }
+        if self.tab == Tab::Home {
+            self.home.set_snapshot(
+                self.desk.home_state(),
+                self.desk.home_live.clone(),
+                None,
+                self.desk.selected,
+                self.desk.instruments.len(),
+            );
+            if let Some(action) = delta_tui::Screen::handle_key(&mut self.home, key) {
+                if let Action::Home(command) = action {
+                    self.handle_home_command(command);
                 }
-                KeyCode::Enter => {
-                    self.desk.watch_detail_open = true;
-                    return Some(Action::Noop);
-                }
-                KeyCode::Esc if self.desk.watch_detail_open => {
-                    self.desk.watch_detail_open = false;
-                    return Some(Action::Noop);
-                }
-                KeyCode::Char('a') => {
-                    self.overlay = Some(Overlay::AddTarget(String::new()));
-                    self.add_search = AddSearchState::Ready;
-                    self.add_results.clear();
-                    self.add_selected = 0;
-                    self.add_picked = false;
-                    self.add_picked_result = None;
-                    return Some(Action::Noop);
-                }
-                KeyCode::Char('d') => {
-                    if let Err(error) = self.remove_instrument_at(Path::new("config.toml")) {
-                        self.status = error;
-                    }
-                    return Some(Action::Noop);
-                }
-                KeyCode::Char(']') => {
-                    self.desk.move_scrub(1);
-                    return Some(Action::Noop);
-                }
-                KeyCode::Char('[') => {
-                    self.desk.move_scrub(-1);
-                    return Some(Action::Noop);
-                }
-                KeyCode::Char('r') => {
-                    self.desk.cycle_range(1);
-                    return Some(Action::Noop);
-                }
-                KeyCode::Char('R') => {
-                    self.desk.cycle_range(-1);
-                    return Some(Action::Noop);
-                }
-                KeyCode::Down => {
-                    self.desk.cycle_instrument(1);
-                    return Some(Action::Noop);
-                }
-                KeyCode::Up => {
-                    self.desk.cycle_instrument(-1);
-                    return Some(Action::Noop);
-                }
-                _ => {}
+                return Some(Action::Noop);
             }
         }
         if self.tab == Tab::Research {
@@ -2230,8 +1825,11 @@ impl Component for App {
             }
         }
         if self.tab == Tab::Decisions {
-            if let Some(action) = self.handle_decisions_key(key) {
-                return Some(action);
+            if let Some(action) = delta_tui::Screen::handle_key(&mut self.decisions, key) {
+                if let Action::Decision(command) = action {
+                    self.handle_decision_command(command);
+                }
+                return Some(Action::Noop);
             }
         }
         if let Some(action) = self.handle_shell_key(key) {
@@ -2247,7 +1845,14 @@ impl Component for App {
 
     fn update(&mut self, action: Action) {
         match action {
+            Action::Home(command) => self.handle_home_command(command),
+            Action::Watchlist(command) => self.handle_watchlist_command(command),
+            Action::SettingsCommand(command) => {
+                let next = self.execute_settings_command(command);
+                self.update(next);
+            }
             Action::Quit => self.quit = true,
+            Action::Decision(command) => self.handle_decision_command(command),
             Action::Quotes(prices) => self.desk.live = prices,
             Action::Metrics { instrument, rows } => {
                 self.desk.metrics.insert(instrument, rows);
@@ -2310,8 +1915,9 @@ impl Component for App {
                 );
             }
             Action::ThesisSummary(summary) => {
-                if self.theses.selected_id() == Some(summary.thesis_id.as_str()) {
-                    self.theses.summary = Some(*summary);
+                let selected = self.theses.state.selected_id() == Some(summary.thesis_id.as_str());
+                delta_tui::Screen::update(&mut self.theses, Action::ThesisSummary(summary));
+                if selected {
                     self.status = "thesis summarised".to_string();
                 }
             }
@@ -2321,18 +1927,23 @@ impl Component for App {
                 citation_labels,
                 sidebar_labels,
             } => {
-                if generation == self.ask.generation {
+                let current = generation == self.ask.generation;
+                if current {
                     self.ask_worker = None;
                 }
-                self.ask.finish(generation, result);
-                if generation == self.ask.generation {
+                delta_tui::Screen::update(
+                    &mut self.ask,
+                    Action::AskAnswered {
+                        generation,
+                        result,
+                        citation_labels,
+                        sidebar_labels,
+                    },
+                );
+                if current {
                     if let Some(error) = &self.ask.error {
                         self.status = error.clone();
                     }
-                }
-                if generation == self.ask.generation && !self.ask.history.is_empty() {
-                    self.ask.citation_labels = citation_labels;
-                    self.ask.sidebar_labels = sidebar_labels;
                 }
             }
             Action::HomeRefresh(feed) => self.desk.feed = feed,
@@ -2351,7 +1962,7 @@ impl Component for App {
                         self.reload_theses();
                     }
                     self.overlay = None;
-                    self.glossary = false;
+                    self.watchlist.close_glossary();
                 }
             }
             Action::ShowHelp => self.overlay = Some(Overlay::Help(HelpDialog::default())),
@@ -2381,11 +1992,15 @@ impl Component for App {
             }
             Action::Noop
             | Action::AskQuestion { .. }
+            | Action::AskAbortWorker
+            | Action::AskOpenCitation(_)
+            | Action::AskSaveAnswer
             | Action::OpenDialog(_)
             | Action::CloseDialog
             | Action::Goto(_)
             | Action::ThesisFind(_)
             | Action::ThesisSummarize(_)
+            | Action::Theses(_)
             | Action::Gather
             | Action::GatherCompany(_)
             | Action::GenerateReport => {}
@@ -2435,11 +2050,12 @@ pub(crate) async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> st
         }
     }
 
+    let settings = SettingsComponent::new(desk.settings.clone(), desk.settings_footer.clone());
     let mut app = App {
         desk,
         tab: Tab::Watchlist,
-        glossary: false,
-        watch_filter: None,
+        home: HomeComponent::default(),
+        watchlist: WatchlistComponent::default(),
         add_search: AddSearchState::Ready,
         add_results: Vec::new(),
         add_generation: 0,
@@ -2452,14 +2068,12 @@ pub(crate) async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> st
         quit: false,
         palette: Palette::Dark,
         overlay: None,
-        settings: SettingsState::default(),
-        theses: ThesesState::default(),
-        research,
-        research_state: ResearchState::default(),
+        settings,
+        theses: ThesesComponent::default(),
+        research: ResearchComponent::new(research),
         ask,
         ask_worker: None,
-        decisions: None,
-        confirm_decision_delete: false,
+        decisions: DecisionsScreen::default(),
         viewport: (120, 40),
     };
     app.reload_theses();
@@ -2529,10 +2143,10 @@ pub(crate) async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> st
                                     }));
                                 }
                                 Action::GenerateReport => {
-                                    if !app.research_state.busy {
-                                        app.research_state.busy = true;
-                                        app.research_state.error = None;
-                                        app.research_state.activity = app.research.as_ref().map(|data| {
+                                    if !app.research.state.busy {
+                                        app.research.state.busy = true;
+                                        app.research.state.error = None;
+                                        app.research.state.activity = app.research.data.as_ref().map(|data| {
                                             format!(
                                                 "generating report for {} via {} — esc to cancel…",
                                                 data.company, app.desk.settings.model
@@ -2540,7 +2154,7 @@ pub(crate) async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> st
                                         });
                                         app.status = "generating report".into();
                                         let config = app.desk.config_path.clone();
-                                        let company = app.research.as_ref().map(|r| r.company.clone());
+                                        let company = app.research.data.as_ref().map(|r| r.company.clone());
                                         let tx = research_tx.clone();
                                         let runtime = tokio::runtime::Handle::current();
                                         std::thread::spawn(move || {
@@ -2584,9 +2198,9 @@ pub(crate) async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> st
             }
             Some(result) = research_rx.recv() => {
                 dirty = true;
-                app.research_state.busy = false;
-                app.research_state.activity = None;
-                match result { Ok(data) => { app.research = Some(data); app.status = "report generated".into(); }, Err(error) => { app.research_state.error = Some(error.clone()); app.status = error; } }
+                app.research.state.busy = false;
+                app.research.state.activity = None;
+                match result { Ok(data) => { app.research.set_data(Some(data)); app.status = "report generated".into(); }, Err(error) => { app.research.state.error = Some(error.clone()); app.status = error; } }
             }
             _ = clock.tick() => {
                 // The home clock reads the wall clock; repaint once a second.
@@ -2735,11 +2349,13 @@ mod tests {
     use ratatui::backend::TestBackend;
 
     pub(super) fn app() -> App {
+        let desk = Desk::offline();
+        let settings = SettingsComponent::new(desk.settings.clone(), desk.settings_footer.clone());
         App {
-            desk: Desk::offline(),
+            desk,
             tab: Tab::Watchlist,
-            glossary: false,
-            watch_filter: None,
+            home: HomeComponent::default(),
+            watchlist: WatchlistComponent::default(),
             add_search: AddSearchState::Ready,
             add_results: Vec::new(),
             add_generation: 0,
@@ -2752,14 +2368,12 @@ mod tests {
             quit: false,
             palette: Palette::Dark,
             overlay: None,
-            settings: SettingsState::default(),
-            theses: ThesesState::default(),
-            research: None,
-            research_state: ResearchState::default(),
+            settings,
+            theses: ThesesComponent::default(),
+            research: ResearchComponent::default(),
             ask: AskState::default(),
             ask_worker: None,
-            decisions: None,
-            confirm_decision_delete: false,
+            decisions: DecisionsScreen::default(),
             viewport: (120, 40),
         }
     }
@@ -2824,7 +2438,7 @@ mod tests {
         });
         app.handle_key(key(KeyCode::Char('o')));
         assert_eq!(app.tab, Tab::Research);
-        assert_eq!(app.research_state.selected_id.as_deref(), Some("news:n1"));
+        assert_eq!(app.research.state.selected_id.as_deref(), Some("news:n1"));
         app.handle_key(key(KeyCode::Char('5')));
         app.handle_key(key(KeyCode::Char('s')));
         let Some(Overlay::SettingsForm(modal)) = &app.overlay else {
@@ -2872,7 +2486,7 @@ mod tests {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let mut app = app();
         app.tab = Tab::Research;
-        app.research = Some(
+        app.research.set_data(Some(
             ResearchData::load(
                 &root.join("fixtures/golden_seed.db"),
                 &root.join("fixtures/golden_reports"),
@@ -2882,18 +2496,20 @@ mod tests {
                 "USD",
             )
             .expect("research seed"),
-        );
+        ));
         app.handle_key(key(KeyCode::Char('r')));
-        assert_eq!(app.research_state.view, ResearchView::Report);
+        assert_eq!(app.research.state.view, ResearchView::Report);
         app.handle_key(key(KeyCode::Enter));
-        assert_eq!(app.research_state.view, ResearchView::Evidence);
+        assert_eq!(app.research.state.view, ResearchView::Evidence);
         let selected = app
-            .research_state
+            .research
+            .state
             .selected_id
             .as_ref()
             .expect("citation selection");
         assert!(app
             .research
+            .data
             .as_ref()
             .unwrap()
             .evidence
@@ -2903,19 +2519,19 @@ mod tests {
             app.handle_key(key(KeyCode::Char('o'))),
             Some(Action::OpenSource(url)) if url == "https://example.com/news/aapl-chip"
         ));
-        assert!(app.research_state.detail_open);
+        assert!(app.research.state.detail_open);
         app.handle_key(key(KeyCode::Char('v')));
-        assert_eq!(app.research_state.view, ResearchView::Report);
-        assert!(app.research_state.report_scroll > 0);
+        assert_eq!(app.research.state.view, ResearchView::Report);
+        assert!(app.research.state.report_scroll > 0);
         let mut frame = Screen::new(120, 40);
         app.paint(&mut frame);
         let visible: String = frame.cells.iter().map(|cell| cell.ch).collect();
         assert!(visible.contains("The announced chip"));
         app.handle_key(key(KeyCode::Esc));
-        assert!(!app.research_state.detail_open);
+        assert!(!app.research.state.detail_open);
         app.handle_key(key(KeyCode::Char('/')));
         assert_eq!(app.handle_key(key(KeyCode::Char('n'))), Some(Action::Noop));
-        assert_eq!(app.research_state.search, "n");
+        assert_eq!(app.research.state.search, "n");
         app.handle_key(key(KeyCode::Esc));
         assert_eq!(
             app.handle_key(key(KeyCode::Char('n'))),
@@ -3024,13 +2640,13 @@ mod tests {
     fn glossary_toggles_on_watchlist_with_i_and_esc_closes() {
         let mut a = app();
         a.handle_key(key(KeyCode::Char('i')));
-        assert!(a.glossary);
+        assert!(a.watchlist.glossary_open());
         a.handle_key(key(KeyCode::Esc));
-        assert!(!a.glossary);
+        assert!(!a.watchlist.glossary_open());
         // `i` on another pane does not open it.
         a.handle_key(key(KeyCode::Char('3')));
         a.handle_key(key(KeyCode::Char('i')));
-        assert!(!a.glossary);
+        assert!(!a.watchlist.glossary_open());
     }
 
     #[test]
@@ -3560,42 +3176,42 @@ mod settings_tests {
         let mut a = settings_app();
         a.viewport = (80, 24); // narrow: folded by default
         a.handle_key(key(KeyCode::Char('d')));
-        assert_eq!(a.settings.focus, SettingsFocus::Diagnostics);
-        assert!(a.settings.diagnostics_expanded(80));
+        assert_eq!(a.settings.state.focus, SettingsFocus::Diagnostics);
+        assert!(a.settings.state.diagnostics_expanded(80));
         let text = screen_text(&mut a, 80, 24);
         assert!(
             text.contains("esc"),
             "the expanded narrow pane offers esc to close"
         );
         a.handle_key(key(KeyCode::Esc));
-        assert!(!a.settings.diagnostics_expanded(80));
-        assert_eq!(a.settings.focus, SettingsFocus::Provider);
+        assert!(!a.settings.state.diagnostics_expanded(80));
+        assert_eq!(a.settings.state.focus, SettingsFocus::Provider);
         // Wide stays expanded and esc leaves it open.
         a.viewport = (120, 40);
         a.handle_key(key(KeyCode::Char('d')));
-        assert!(a.settings.diagnostics_expanded(120));
+        assert!(a.settings.state.diagnostics_expanded(120));
         a.handle_key(key(KeyCode::Esc));
-        assert!(a.settings.diagnostics_expanded(120));
+        assert!(a.settings.state.diagnostics_expanded(120));
     }
 
     #[test]
     fn focus_keys_and_selections_move() {
         let mut a = settings_app();
         a.handle_key(key(KeyCode::Char('l')));
-        assert_eq!(a.settings.focus, SettingsFocus::Plugins);
+        assert_eq!(a.settings.state.focus, SettingsFocus::Plugins);
         a.handle_key(key(KeyCode::Tab));
-        assert_eq!(a.settings.focus, SettingsFocus::Sources);
+        assert_eq!(a.settings.state.focus, SettingsFocus::Sources);
         a.handle_key(key(KeyCode::Tab));
-        assert_eq!(a.settings.focus, SettingsFocus::Markets);
+        assert_eq!(a.settings.state.focus, SettingsFocus::Markets);
         a.handle_key(key(KeyCode::BackTab));
-        assert_eq!(a.settings.focus, SettingsFocus::Sources);
+        assert_eq!(a.settings.state.focus, SettingsFocus::Sources);
         // The provider table has two rows; the model row is the second.
         a.handle_key(key(KeyCode::Tab));
         a.handle_key(key(KeyCode::Tab));
         a.handle_key(key(KeyCode::Tab));
-        assert_eq!(a.settings.focus, SettingsFocus::Provider);
+        assert_eq!(a.settings.state.focus, SettingsFocus::Provider);
         a.handle_key(key(KeyCode::Down));
-        assert_eq!(a.settings.provider_selected, 1);
+        assert_eq!(a.settings.state.provider_selected, 1);
         // Enter on the model row opens the model picker action.
         assert_eq!(
             a.handle_key(key(KeyCode::Enter)),
@@ -3711,7 +3327,7 @@ mod settings_tests {
         )
         .unwrap();
         a.desk.reload_settings();
-        a.settings.market_selected = 1;
+        a.settings.state.market_selected = 1;
         a.handle_key(key(KeyCode::Char('e')));
         let Some(Overlay::SettingsForm(modal)) = &a.overlay else {
             panic!("edit form open");
@@ -3946,7 +3562,7 @@ mod settings_tests {
         assert!(draft.contains("Apple grows"), "{draft}");
         a.handle_key(key(KeyCode::Enter));
         assert!(a.overlay.is_none());
-        assert_eq!(a.theses.fleet.len(), 1);
+        assert_eq!(a.theses.state.fleet.len(), 1);
         assert!(screen_text(&mut a, 120, 40).contains("Apple grows"));
         a.handle_key(key(KeyCode::Char('d')));
         let editing = screen_text(&mut a, 120, 40);
@@ -3954,21 +3570,21 @@ mod settings_tests {
         assert!(editing.contains("Apple grows"));
         a.handle_key(key(KeyCode::Esc));
         a.handle_key(key(KeyCode::Char('t')));
-        assert_eq!(a.theses.view, ThesesPane::Detail);
+        assert_eq!(a.theses.state.view, ThesesPane::Detail);
         a.handle_key(key(KeyCode::Char('e')));
-        assert_eq!(a.theses.view, ThesesPane::Evidence);
+        assert_eq!(a.theses.state.view, ThesesPane::Evidence);
         a.handle_key(key(KeyCode::Esc));
         a.handle_key(key(KeyCode::Char('/')));
-        assert!(a.theses.filtering);
+        assert!(a.theses.state.filtering);
         a.handle_key(key(KeyCode::Char('A')));
-        assert_eq!(a.theses.filter, "A");
+        assert_eq!(a.theses.state.filter, "A");
         a.handle_key(key(KeyCode::Enter));
-        assert!(!a.theses.filtering);
+        assert!(!a.theses.state.filtering);
         assert!(matches!(
             a.handle_key(key(KeyCode::Char('s'))),
             Some(Action::ThesisSummarize(_))
         ));
-        assert_eq!(a.theses.view, ThesesPane::Detail);
+        assert_eq!(a.theses.state.view, ThesesPane::Detail);
     }
 
     #[test]
@@ -4004,19 +3620,19 @@ mod settings_tests {
         delta_services::add_evidence(&db, &thesis.id, "news:n1", "support", "growth", None)
             .unwrap();
         a.handle_key(key(KeyCode::Char('4')));
-        assert!(a.theses.fleet[0].result.is_none());
+        assert!(a.theses.state.fleet[0].result.is_none());
         a.handle_key(key(KeyCode::Char('e')));
         a.handle_key(key(KeyCode::Char('a')));
-        assert_eq!(a.theses.fleet[0].result.as_ref().unwrap().support, 1);
-        assert!(a.theses.selected_link().unwrap().accepted);
+        assert_eq!(a.theses.state.fleet[0].result.as_ref().unwrap().support, 1);
+        assert!(a.theses.state.selected_link().unwrap().accepted);
         assert!(matches!(
             a.handle_key(key(KeyCode::Char('x'))),
             Some(Action::Status(_))
         ));
         a.handle_key(key(KeyCode::Char('u')));
-        assert!(a.theses.fleet[0].result.is_none());
+        assert!(a.theses.state.fleet[0].result.is_none());
         a.handle_key(key(KeyCode::Char('x')));
-        assert!(a.theses.links.is_empty());
+        assert!(a.theses.state.links.is_empty());
     }
 
     #[test]
@@ -4092,13 +3708,13 @@ mod settings_tests {
             a.handle_key(key(KeyCode::Char(ch)));
         }
         a.handle_key(key(KeyCode::Enter));
-        assert!(a.decisions.as_ref().unwrap().decisions.is_empty());
+        assert!(a.decisions.data().unwrap().decisions.is_empty());
         a.handle_key(key(KeyCode::Char('/')));
         for _ in 0..5 {
             a.handle_key(key(KeyCode::Backspace));
         }
         a.handle_key(key(KeyCode::Enter));
-        assert_eq!(a.decisions.as_ref().unwrap().decisions.len(), 1);
+        assert_eq!(a.decisions.data().unwrap().decisions.len(), 1);
 
         a.handle_key(key(KeyCode::Char('d')));
         assert!(screen_text(&mut a, 120, 40).contains("confirm delete"));

@@ -2,6 +2,8 @@ use super::status_bar::{
     draw_status_bar_nav, draw_status_bar_wide, pane_hints, status_bar_narrow, NarrowTab,
 };
 use crate::screen::{color, Screen, Style};
+use crate::{Action, Component};
+use crossterm::event::{KeyCode, KeyEvent};
 use delta_core::db::Db;
 use delta_services::{evidence, read_report, render_markdown, EvidenceItem, Report};
 use std::path::Path;
@@ -87,6 +89,197 @@ pub struct ResearchState {
     pub busy: bool,
     pub activity: Option<String>,
     pub error: Option<String>,
+}
+
+/// Owns Research data and interaction state. The app supplies refreshed data
+/// and executes returned service/browser actions; key and view state stay here.
+#[derive(Default)]
+pub struct ResearchComponent {
+    pub data: Option<ResearchData>,
+    pub state: ResearchState,
+    viewport_width: usize,
+}
+
+impl ResearchComponent {
+    pub fn new(data: Option<ResearchData>) -> Self {
+        Self {
+            data,
+            ..Self::default()
+        }
+    }
+
+    pub fn set_data(&mut self, data: Option<ResearchData>) {
+        self.data = data;
+    }
+
+    pub fn set_viewport_width(&mut self, width: usize) {
+        self.viewport_width = width;
+    }
+
+    pub fn paint_into(&self, screen: &mut Screen) {
+        match &self.data {
+            Some(data) => draw_research_live(screen, data, &self.state),
+            None => {
+                let layout = ResearchLayout::new(screen, false);
+                paint_research_live_frame(screen, layout);
+            }
+        }
+    }
+}
+
+impl crate::Screen for ResearchComponent {
+    fn name(&self) -> &'static str {
+        "reports"
+    }
+
+    fn handle_key(&mut self, key: KeyEvent) -> Option<Action> {
+        let state = &mut self.state;
+        if state.search_active {
+            match key.code {
+                KeyCode::Esc | KeyCode::Enter => state.search_active = false,
+                KeyCode::Backspace => {
+                    state.search.pop();
+                }
+                KeyCode::Char(c) => {
+                    state.search.push(c);
+                    state.selected = 0;
+                }
+                _ => return None,
+            }
+            return Some(Action::Noop);
+        }
+        match key.code {
+            KeyCode::Char('n') => Some(Action::GenerateReport),
+            KeyCode::Char('u') => self
+                .data
+                .as_ref()
+                .map(|data| Action::GatherCompany(data.company.clone())),
+            KeyCode::Char('e') => {
+                state.view = ResearchView::Evidence;
+                Some(Action::Noop)
+            }
+            KeyCode::Char('r') => {
+                state.view = ResearchView::Report;
+                Some(Action::Noop)
+            }
+            KeyCode::Char('t') => {
+                state.view = ResearchView::Company;
+                Some(Action::Noop)
+            }
+            KeyCode::Char('k') => {
+                state.cycle_kind();
+                state.view = ResearchView::Evidence;
+                Some(Action::Noop)
+            }
+            KeyCode::Char('l') => {
+                state.load_more();
+                Some(Action::Noop)
+            }
+            KeyCode::Char('o') => {
+                let data = self.data.as_ref()?;
+                let id = state
+                    .selected_id
+                    .clone()
+                    .or_else(|| state.selected_evidence_id(data))?;
+                let url = data
+                    .evidence
+                    .iter()
+                    .find(|item| item.id == id)?
+                    .url
+                    .as_ref()?;
+                if url.starts_with("https://") || url.starts_with("http://") {
+                    Some(Action::OpenSource(url.clone()))
+                } else {
+                    None
+                }
+            }
+            KeyCode::Char(' ') => {
+                if let Some(data) = &self.data {
+                    state.toggle_selected_price_run(data);
+                }
+                Some(Action::Noop)
+            }
+            KeyCode::Char('/') => {
+                state.search_active = true;
+                state.view = ResearchView::Evidence;
+                Some(Action::Noop)
+            }
+            KeyCode::Esc => {
+                if state.detail_open {
+                    state.detail_open = false;
+                } else {
+                    state.view = ResearchView::Company;
+                }
+                state.zoom = false;
+                Some(Action::Noop)
+            }
+            KeyCode::Enter if state.view == ResearchView::Report => {
+                if let Some(data) = &self.data {
+                    state.open_next_citation(data);
+                }
+                Some(Action::Noop)
+            }
+            KeyCode::Enter if state.view == ResearchView::Evidence => {
+                if let Some(data) = &self.data {
+                    state.selected_id = state.selected_evidence_id(data);
+                    state.detail_open = state.selected_id.is_some();
+                }
+                Some(Action::Noop)
+            }
+            KeyCode::Up if state.view == ResearchView::Report => {
+                state.report_scroll = state.report_scroll.saturating_sub(1);
+                Some(Action::Noop)
+            }
+            KeyCode::Down if state.view == ResearchView::Report => {
+                state.report_scroll += 1;
+                Some(Action::Noop)
+            }
+            KeyCode::Up => {
+                state.selected_id = None;
+                state.selected = state.selected.saturating_sub(1);
+                Some(Action::Noop)
+            }
+            KeyCode::Down => {
+                state.selected_id = None;
+                state.selected += 1;
+                Some(Action::Noop)
+            }
+            KeyCode::Char('z') => {
+                state.zoom = !state.zoom;
+                Some(Action::Noop)
+            }
+            KeyCode::Char('v') if state.selected_id.is_some() => {
+                if let (Some(data), Some(id)) = (&self.data, state.selected_id.clone()) {
+                    state.reveal_claim(data, &id, self.viewport_width);
+                }
+                Some(Action::Noop)
+            }
+            _ => None,
+        }
+    }
+
+    fn update(&mut self, _action: Action) {}
+
+    fn draw(&mut self, frame: &mut ratatui::Frame, area: ratatui::layout::Rect) {
+        self.viewport_width = area.width as usize;
+        let mut screen = Screen::new(area.width as usize, area.height as usize);
+        self.paint_into(&mut screen);
+        crate::screen::blit(frame, &screen, area);
+    }
+}
+
+impl Component for ResearchComponent {
+    fn handle_key(&mut self, key: KeyEvent) -> Option<Action> {
+        crate::Screen::handle_key(self, key)
+    }
+
+    fn update(&mut self, action: Action) {
+        crate::Screen::update(self, action)
+    }
+
+    fn draw(&mut self, frame: &mut ratatui::Frame, area: ratatui::layout::Rect) {
+        crate::Screen::draw(self, frame, area)
+    }
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -284,19 +477,318 @@ impl ResearchState {
     }
 }
 
+#[derive(Clone, Copy)]
+struct ResearchLayout {
+    full: super::PaneRect,
+    company: Option<super::PaneRect>,
+    report: Option<super::PaneRect>,
+    evidence: super::PaneRect,
+}
+
+impl ResearchLayout {
+    fn new(screen: &Screen, zoom_evidence: bool) -> Self {
+        let bottom = screen.h - 3;
+        let end = screen.w - 1;
+        let full = super::pane_layout(1, 0, end, bottom + 1, &[bottom + 1], &[end - 1])[0][0];
+        if zoom_evidence {
+            return Self {
+                full,
+                company: None,
+                report: None,
+                evidence: super::pane_layout(1, 0, 41, bottom + 1, &[bottom + 1], &[40])[0][0],
+            };
+        }
+        if screen.w < 100 {
+            return Self {
+                full,
+                company: None,
+                report: None,
+                evidence: super::pane_layout(1, 0, end, bottom + 1, &[bottom + 1], &[end - 1])[0]
+                    [0],
+            };
+        }
+        let panes = super::pane_layout(
+            1,
+            0,
+            end,
+            bottom + 1,
+            &[bottom + 1],
+            &[36, end - 1 - 76, 40],
+        );
+        Self {
+            full,
+            company: Some(panes[0][0]),
+            report: Some(panes[0][1]),
+            evidence: panes[0][2],
+        }
+    }
+}
+
+fn paint_research_status(screen: &mut Screen) {
+    if screen.w < 100 {
+        status_bar_narrow(screen, NarrowTab::Research);
+    } else if screen.w >= 160 {
+        draw_status_bar_wide(screen, screen.h - 1, screen.w, "3 Research");
+    } else {
+        draw_status_bar_research(screen, screen.h - 1, screen.w);
+    }
+}
+
+/// Build the live pane frame from layout rectangles. Static golden painters
+/// remain as empty-screen compatibility entry points; populated screens never
+/// render one and then copy or overlay its cells.
+fn paint_research_live_frame(screen: &mut Screen, layout: ResearchLayout) {
+    let bottom = screen.h - 3;
+    let surface = Style::DEFAULT.bg("#0d0d0d");
+    let header = Style::fg(color::FG).bold().bg(color::PANEL);
+    if layout.company.is_none() {
+        let evidence = layout.evidence;
+        let x = evidence.0 + 1;
+        let end = evidence.2 - 1;
+        screen.pane(
+            evidence.0,
+            evidence.1,
+            end,
+            bottom,
+            false,
+            &[
+                ("e ", Style::fg(color::BLUE).bold()),
+                ("evidence ", Style::fg(color::BLUE).bold()),
+                ("· 0", Style::fg(color::MUTED).bold()),
+            ],
+            &pane_hints(&[
+                ("/", "search"),
+                ("k", "kind"),
+                ("enter", "preview"),
+                ("esc", "back"),
+            ]),
+        );
+        screen.fill(x, 1, end - 11, 2, surface);
+        screen.put(x, 1, '█', Style::fg("#333333").bg("#0d0d0d"));
+        screen.text(
+            x + 2,
+            1,
+            "/ search evidence",
+            Style::fg(color::DISABLED).bg("#0d0d0d"),
+        );
+        screen.fill(x + 19, 1, end - 12, 2, Style::fg(color::FG).bg("#0d0d0d"));
+        screen.text(end - 10, 1, "kind: all", Style::fg(color::MUTED));
+        screen.fill(x, 2, end, 3, header);
+        screen.text(x, 2, " Evidence", header);
+        screen.text(end - 24, 2, "Type", header);
+        screen.text(end - 11, 2, "Date", header);
+        screen.fill(x, 3, end, bottom - 1, Style::fg(color::FG));
+        screen.text(
+            x + 1,
+            bottom - 1,
+            "no companies yet — press 1 to add a target",
+            Style::fg(color::MUTED),
+        );
+        paint_research_status(screen);
+        return;
+    }
+    let wide = screen.w >= 160;
+    let company = layout.company.expect("wide Research company pane");
+    let report = layout.report.expect("wide Research report pane");
+    let evidence = layout.evidence;
+    let cx = company.0 + 1;
+    let cr = company.2 - 1;
+    let rx = report.0 + 1;
+    let rr = report.2 - 3;
+    let ex = evidence.0 + 1;
+    let er = evidence.2 - 1;
+    let company_header = Style::fg(color::FG).bold().bg("#232323");
+    screen.pane(
+        company.0,
+        0,
+        cr,
+        bottom,
+        true,
+        &[
+            ("t ", Style::fg(color::BLUE).bold()),
+            ("company ", Style::fg(color::BLUE).bold()),
+            ("· 0", Style::fg(color::MUTED).bold()),
+        ],
+        &pane_hints(&[("↑↓", "select")]),
+    );
+    screen.pane(
+        report.0,
+        0,
+        report.2 - 1,
+        bottom,
+        false,
+        &[
+            ("r ", Style::fg(color::BLUE).bold()),
+            ("report ", Style::fg(color::BLUE).bold()),
+            ("· no report", Style::fg(color::MUTED).bold()),
+        ],
+        &pane_hints(&[
+            ("↑↓", "scroll"),
+            ("enter", "citation"),
+            ("n", if wide { "regenerate" } else { "regene…" }),
+        ]),
+    );
+    let evidence_hints = if wide {
+        vec![
+            (" ".to_string(), Style::fg(color::MUTED)),
+            ("/".to_string(), Style::fg(color::BLUE).bold()),
+            (" search".to_string(), Style::fg(color::MUTED)),
+            ("  ".to_string(), Style::fg(color::MUTED)),
+            ("k".to_string(), Style::fg(color::BLUE).bold()),
+            (" kind".to_string(), Style::fg(color::MUTED)),
+            ("  ".to_string(), Style::fg(color::MUTED)),
+            ("space".to_string(), Style::fg(color::BLUE).bold()),
+            (" fold".to_string(), Style::fg(color::MUTED)),
+            ("  ".to_string(), Style::fg(color::MUTED)),
+            ("l".to_string(), Style::fg(color::BLUE).bold()),
+            (" m…".to_string(), Style::fg(color::MUTED)),
+            (" ".to_string(), Style::fg(color::MUTED)),
+        ]
+    } else {
+        pane_hints(&[
+            ("/", "search"),
+            ("k", "kind"),
+            ("space", "fold"),
+            ("l", "m…"),
+        ])
+    };
+    screen.pane(
+        evidence.0,
+        0,
+        er,
+        bottom,
+        false,
+        &[
+            ("e ", Style::fg(color::BLUE).bold()),
+            ("evidence ", Style::fg(color::BLUE).bold()),
+            ("· 0", Style::fg(color::MUTED).bold()),
+        ],
+        &evidence_hints,
+    );
+    screen.fill(cx, 1, cr, 2, company_header);
+    screen.text(cx, 1, " Company  Report", company_header);
+    screen.fill(
+        cx,
+        2,
+        cr,
+        bottom - if wide { 5 } else { 4 },
+        Style::fg(color::FG),
+    );
+    for x in cx..cr {
+        screen.put(x, bottom - 5, '─', Style::fg(color::BORDER_BLURRED));
+    }
+    screen.text(
+        cx + 1,
+        bottom - 4,
+        "no companies yet — press 1 to",
+        Style::fg(color::MUTED),
+    );
+    screen.text(cx + 1, bottom - 3, "add a target", Style::fg(color::MUTED));
+    let well = Style::fg(color::FG).bold().bg("#0d0d0d");
+    for (offset, key, label, length) in [(2, 'u', "gather company", 18), (1, 'U', "gather all", 14)]
+    {
+        let y = bottom - offset;
+        screen.fill(cx, y, cx + length + 2, y + 1, surface);
+        screen.fill(cx + 1, y, cx + length + 1, y + 1, well);
+        screen.put(cx + 2, y, key, Style::fg(color::BLUE).bold().bg("#0d0d0d"));
+        screen.text(
+            cx + if wide { 4 } else { 3 },
+            y,
+            if wide {
+                label.to_string()
+            } else {
+                format!(" {label}")
+            }
+            .as_str(),
+            well,
+        );
+    }
+    if !wide {
+        for y in [bottom - 2, bottom - 1] {
+            screen.put(cx, y, ' ', surface);
+            screen.put(cx + 1, y, ' ', well);
+        }
+    }
+    screen.fill(rx, 6, rr, bottom, surface);
+    screen.fill(rx + 2, 2, rx + 23, 3, Style::DEFAULT.bg(color::BLUE_BG));
+    screen.put(rx + 3, 2, ' ', white_on_blue());
+    screen.put(
+        rx + 4,
+        2,
+        'n',
+        Style::fg(color::BLUE).bold().bg(color::BLUE_BG),
+    );
+    screen.text(rx + 5, 2, " generate report", white_on_blue());
+    screen.put(rx + 21, 2, ' ', white_on_blue());
+    let report_band = Style::fg(color::BLUE).bold().bg("#0d0d0d");
+    screen.fill(rx + 2, 8, rr - 4, 9, report_band);
+    screen.text((report.0 + report.2) / 2 - 5, 8, "Report", report_band);
+    if wide {
+        screen.text(
+            rx + 2,
+            10,
+            "No report yet — press n to generate one.",
+            Style::fg(color::FG).bg("#0d0d0d"),
+        );
+    } else {
+        screen.text(
+            rx + 2,
+            10,
+            "No report yet — press n to",
+            Style::fg(color::FG).bg("#0d0d0d"),
+        );
+        screen.text(
+            rx + 2,
+            11,
+            "generate one.",
+            Style::fg(color::FG).bg("#0d0d0d"),
+        );
+    }
+    screen.fill(ex, 1, ex + 27, 2, surface);
+    screen.put(ex, 1, '█', Style::fg("#333333").bg("#0d0d0d"));
+    screen.text(
+        ex + 2,
+        1,
+        "/ search evidence",
+        Style::fg(color::DISABLED).bg("#0d0d0d"),
+    );
+    screen.fill(ex + 19, 1, ex + 26, 2, Style::fg(color::FG).bg("#0d0d0d"));
+    screen.text(ex + 28, 1, "kind: all", Style::fg(color::MUTED));
+    screen.fill(ex, 2, er, 3, header);
+    screen.text(
+        ex + usize::from(!wide),
+        2,
+        if wide { " Evidence" } else { "Evidence" },
+        header,
+    );
+    screen.text(ex + 14, 2, "Type", header);
+    screen.text(ex + 27, 2, "Date", header);
+    screen.fill(ex, 3, er, screen.h - 14, Style::fg(color::FG));
+    screen.text(
+        ex + 1,
+        screen.h - 14,
+        "no companies yet — press 1 to add a",
+        Style::fg(color::MUTED),
+    );
+    for x in ex..er {
+        screen.put(x, screen.h - 13, '─', Style::fg(color::BORDER_BLURRED));
+    }
+    screen.text(
+        ex + 1,
+        screen.h - 12,
+        "select evidence to preview it",
+        Style::fg(color::FG),
+    );
+    paint_research_status(screen);
+}
+
 /// Live painter: all visible facts come from `ResearchData` and interaction state.
 pub fn draw_research_live(screen: &mut Screen, data: &ResearchData, state: &ResearchState) {
-    let right = screen.w - 2;
-    let bottom = screen.h - 3;
+    let layout = ResearchLayout::new(screen, false);
+    let right = layout.full.2 - 1;
+    let bottom = layout.full.3 - 1;
     if state.zoom && state.view == ResearchView::Report {
-        if screen.w < 100 {
-            draw_research_narrow(screen);
-        } else if screen.w >= 160 {
-            draw_research_wide(screen);
-        } else {
-            draw_research(screen);
-        }
-        screen.fill(0, 0, screen.w, bottom + 1, Style::DEFAULT.bg(color::BLACK));
+        paint_research_status(screen);
         let hints = if screen.w < 100 {
             pane_hints(&[
                 ("↑↓", "scroll"),
@@ -324,7 +816,7 @@ pub fn draw_research_live(screen: &mut Screen, data: &ResearchData, state: &Rese
             ],
             &hints,
         );
-        paint_report(screen, data, state, 2, right);
+        paint_report(screen, data, state, layout.full, true);
         for row in 6..bottom {
             for col in right - 2..right {
                 screen.put(col, row, ' ', Style::DEFAULT.bg(color::BLACK));
@@ -334,7 +826,7 @@ pub fn draw_research_live(screen: &mut Screen, data: &ResearchData, state: &Rese
         return;
     }
     if screen.w < 100 && state.detail_open {
-        draw_research_narrow(screen);
+        paint_research_live_frame(screen, layout);
         screen.text(
             15,
             0,
@@ -416,6 +908,34 @@ pub fn draw_research_live(screen: &mut Screen, data: &ResearchData, state: &Rese
             }
         }
         return;
+    } else if screen.w >= 100 && state.zoom && state.view == ResearchView::Evidence {
+        let zoom_layout = ResearchLayout::new(screen, true);
+        paint_research_status(screen);
+        paint_zoom_evidence_frame(screen, zoom_layout.evidence);
+        paint_live(screen, data, state, zoom_layout);
+        let count = state.filtered(data).len().to_string();
+        screen.pane(
+            1,
+            0,
+            40,
+            bottom,
+            true,
+            &[
+                ("e ", Style::fg(color::BLUE).bold()),
+                ("evidence ", Style::fg(color::BLUE).bold()),
+                ("· ", Style::fg(color::MUTED).bold()),
+                (&count, Style::fg(color::MUTED).bold()),
+            ],
+            &pane_hints(&[("z", "restore"), ("/", "search"), ("k", "kind")]),
+        );
+        for x in 2..40 {
+            screen.cells[2 * screen.w + x].bg = Some("#232323");
+            let selected = &mut screen.cells[3 * screen.w + x];
+            selected.fg = Some(color::WHITE);
+            selected.bg = Some(color::BLUE_BG);
+            selected.bold = true;
+        }
+        return;
     } else if screen.w < 100 && state.view == ResearchView::Report {
         screen.pane(
             1,
@@ -434,7 +954,7 @@ pub fn draw_research_live(screen: &mut Screen, data: &ResearchData, state: &Rese
             &pane_hints(&[("↑↓", "scroll"), ("enter", "citation"), ("esc", "back")]),
         );
         status_bar_narrow(screen, NarrowTab::Research);
-        paint_report(screen, data, state, 2, right);
+        paint_report(screen, data, state, layout.full, true);
         return;
     } else if screen.w < 100 && state.view == ResearchView::Company {
         screen.pane(
@@ -465,34 +985,43 @@ pub fn draw_research_live(screen: &mut Screen, data: &ResearchData, state: &Rese
         );
         status_bar_narrow(screen, NarrowTab::Research);
         return;
-    } else if screen.w < 100 {
-        draw_research_narrow(screen);
-    } else if screen.w >= 160 {
-        draw_research_wide(screen);
     } else {
-        draw_research(screen);
+        paint_research_live_frame(screen, layout);
     }
     if state.search_active {
-        let x0 = if screen.w < 100 { 1 } else { screen.w - 41 };
-        let x1 = if screen.w < 100 { right } else { screen.w - 2 };
-        focus_frame(screen, x0, x1, bottom);
-        if screen.w >= 100 {
-            focus_frame(screen, 1, 36, bottom);
+        focus_frame(screen, layout.evidence.0, layout.evidence.2 - 1, bottom);
+        if let Some(company) = layout.company {
+            focus_frame(screen, company.0, company.2 - 1, bottom);
         }
     } else if screen.w >= 100 && state.view == ResearchView::Report {
-        focus_frame(screen, 1, 36, bottom);
-        focus_frame(screen, 37, screen.w - 42, bottom);
+        let company = layout.company.expect("Research company pane");
+        let report = layout.report.expect("Research report pane");
+        focus_frame(screen, company.0, company.2 - 1, bottom);
+        focus_frame(screen, report.0, report.2 - 1, bottom);
     }
-    paint_live(screen, data, state);
+    paint_live(screen, data, state, layout);
     if screen.w >= 100 && (state.search_active || state.selected_id.is_some()) {
-        screen.fill(2, 1, 36, 2, Style::fg(color::FG).bg("#1a1a1a").bold());
-        screen.text(3, 1, "Company", Style::fg(color::FG).bg("#1a1a1a").bold());
-        screen.text(23, 1, "Report", Style::fg(color::FG).bg("#1a1a1a").bold());
-        screen.fill(2, 2, 36, 3, Style::fg(color::FG));
-        let symbol = data.company.split(':').next_back().unwrap_or(&data.company);
-        screen.text(3, 2, symbol, Style::fg(color::FG));
+        let company = layout.company.expect("Research company pane");
+        let x = company.0 + 1;
+        let end = company.2 - 1;
+        screen.fill(x, 1, end, 2, Style::fg(color::FG).bg("#1a1a1a").bold());
         screen.text(
-            23,
+            x + 1,
+            1,
+            "Company",
+            Style::fg(color::FG).bg("#1a1a1a").bold(),
+        );
+        screen.text(
+            x + 21,
+            1,
+            "Report",
+            Style::fg(color::FG).bg("#1a1a1a").bold(),
+        );
+        screen.fill(x, 2, end, 3, Style::fg(color::FG));
+        let symbol = data.company.split(':').next_back().unwrap_or(&data.company);
+        screen.text(x + 1, 2, symbol, Style::fg(color::FG));
+        screen.text(
+            x + 21,
             2,
             if data.report.is_some() {
                 "live"
@@ -501,13 +1030,17 @@ pub fn draw_research_live(screen: &mut Screen, data: &ResearchData, state: &Rese
             },
             Style::fg(color::FG),
         );
-        for x in 2..36 {
-            screen.cells[2 * screen.w + x].bg = Some("#242424");
+        for col in x..end {
+            screen.cells[2 * screen.w + col].bg = Some("#242424");
         }
     }
     if state.search_active {
-        let start = if screen.w < 100 { 2 } else { screen.w - 40 };
-        let end = if screen.w < 100 { 67 } else { start + 27 };
+        let start = layout.evidence.0 + 1;
+        let end = if screen.w < 100 {
+            layout.evidence.2 - 12
+        } else {
+            start + 27
+        };
         for x in start..end {
             screen.cells[screen.w + x].bg = Some("#161616");
         }
@@ -517,11 +1050,15 @@ pub fn draw_research_live(screen: &mut Screen, data: &ResearchData, state: &Rese
         screen.cells[screen.w + start + 3].fg = Some("#5c5c5c");
     }
     if state.busy && screen.w >= 100 {
-        paint_research_busy(screen, state);
+        paint_research_busy(
+            screen,
+            state,
+            layout.company.expect("Research company pane"),
+        );
     }
     if screen.w < 100 && state.zoom && state.view == ResearchView::Evidence {
         let count = state.filtered(data).len().to_string();
-        for x in 2..right {
+        for x in layout.evidence.0 + 1..layout.evidence.2 - 1 {
             screen.cells[2 * screen.w + x].bg = Some("#232323");
             let selected = &mut screen.cells[3 * screen.w + x];
             selected.fg = Some(color::WHITE);
@@ -547,83 +1084,120 @@ pub fn draw_research_live(screen: &mut Screen, data: &ResearchData, state: &Rese
                 ("esc", "back"),
             ]),
         );
-    } else if screen.w >= 100 && state.zoom {
-        paint_zoom_side_pane(screen, data, state);
-    }
-}
-
-fn paint_research_busy(screen: &mut Screen, state: &ResearchState) {
-    let bottom = screen.h - 3;
-    for (row, end) in [(bottom - 2, 21), (bottom - 1, 17)] {
-        screen.cells[row * screen.w + 3].fg = Some("#3c3c3c");
-        screen.cells[row * screen.w + 4].fg = Some("#3b5994");
-        for x in 5..end {
-            screen.cells[row * screen.w + x].fg = Some("#3c3c3c");
-        }
-    }
-    for x in 3..36 {
-        screen.put(x, bottom, '━', Style::fg(color::BLUE));
-    }
-    screen.put(3, bottom, ' ', Style::fg("#8a8a8a"));
-    if let Some(activity) = &state.activity {
-        screen.text(4, bottom, &ellipsize(activity, 30), Style::fg(color::AMBER));
-    }
-    screen.put(34, bottom, ' ', Style::fg("#8a8a8a"));
-}
-
-fn paint_zoom_side_pane(screen: &mut Screen, data: &ResearchData, state: &ResearchState) {
-    let (source_x, width, title, hints) = match state.view {
-        ResearchView::Evidence => (
-            screen.w - 41,
-            40,
-            vec![
-                ("e ", Style::fg(color::BLUE).bold()),
-                ("evidence ", Style::fg(color::BLUE).bold()),
-                ("· ", Style::fg(color::MUTED).bold()),
-                ("", Style::fg(color::MUTED).bold()),
-            ],
-            pane_hints(&[("z", "restore"), ("/", "search"), ("k", "kind")]),
-        ),
-        ResearchView::Company => (
-            1,
-            36,
-            vec![
+    } else if screen.w >= 100 && state.zoom && state.view == ResearchView::Company {
+        let company = layout.company.expect("Research company pane");
+        screen.fill(0, 0, company.0, bottom + 1, Style::DEFAULT.bg(color::BLACK));
+        screen.fill(
+            company.2,
+            0,
+            screen.w,
+            bottom + 1,
+            Style::DEFAULT.bg(color::BLACK),
+        );
+        screen.pane(
+            company.0,
+            company.1,
+            company.2 - 1,
+            bottom,
+            true,
+            &[
                 ("t ", Style::fg(color::BLUE).bold()),
                 ("company ", Style::fg(color::BLUE).bold()),
                 ("· 1", Style::fg(color::MUTED).bold()),
             ],
-            pane_hints(&[("z", "restore"), ("↑↓", "select")]),
-        ),
-        ResearchView::Report => return,
-    };
+            &pane_hints(&[("z", "restore"), ("↑↓", "select")]),
+        );
+    }
+}
+
+fn paint_research_busy(screen: &mut Screen, state: &ResearchState, company: super::PaneRect) {
+    let bottom = company.3 - 1;
+    let x = company.0;
+    for (row, end) in [(bottom - 2, x + 20), (bottom - 1, x + 16)] {
+        screen.cells[row * screen.w + x + 2].fg = Some("#3c3c3c");
+        screen.cells[row * screen.w + x + 3].fg = Some("#3b5994");
+        for x in x + 4..end {
+            screen.cells[row * screen.w + x].fg = Some("#3c3c3c");
+        }
+    }
+    for x in x + 2..company.2 - 1 {
+        screen.put(x, bottom, '━', Style::fg(color::BLUE));
+    }
+    screen.put(x + 2, bottom, ' ', Style::fg("#8a8a8a"));
+    if let Some(activity) = &state.activity {
+        screen.text(
+            x + 3,
+            bottom,
+            &ellipsize(activity, 30),
+            Style::fg(color::AMBER),
+        );
+    }
+    screen.put(company.2 - 3, bottom, ' ', Style::fg("#8a8a8a"));
+}
+
+fn paint_zoom_evidence_frame(screen: &mut Screen, pane: super::PaneRect) {
     let bottom = screen.h - 3;
-    let mut cells = Vec::with_capacity((bottom + 1) * width);
-    for y in 0..=bottom {
-        for x in 0..width {
-            cells.push(screen.cells[y * screen.w + source_x + x].clone());
-        }
+    let x = pane.0 + 1;
+    let end = pane.2 - 1;
+    let header = Style::fg(color::FG).bold().bg(color::PANEL);
+    let surface = Style::DEFAULT.bg("#0d0d0d");
+    screen.pane(
+        pane.0,
+        pane.1,
+        end,
+        bottom,
+        false,
+        &[
+            ("e ", Style::fg(color::BLUE).bold()),
+            ("evidence ", Style::fg(color::BLUE).bold()),
+            ("· 0", Style::fg(color::MUTED).bold()),
+        ],
+        &pane_hints(&[
+            ("/", "search"),
+            ("k", "kind"),
+            ("space", "fold"),
+            ("l", "m…"),
+        ]),
+    );
+    screen.fill(x, 1, x + 27, 2, surface);
+    screen.put(x, 1, '█', Style::fg("#333333").bg("#0d0d0d"));
+    screen.text(
+        x + 2,
+        1,
+        "/ search evidence",
+        Style::fg(color::DISABLED).bg("#0d0d0d"),
+    );
+    screen.fill(x + 19, 1, x + 26, 2, Style::fg(color::FG).bg("#0d0d0d"));
+    screen.text(x + 28, 1, "kind: all", Style::fg(color::MUTED));
+    screen.fill(x, 2, end, 3, header);
+    screen.text(
+        x + usize::from(screen.w < 160),
+        2,
+        if screen.w >= 160 {
+            " Evidence"
+        } else {
+            "Evidence"
+        },
+        header,
+    );
+    screen.text(x + 14, 2, "Type", header);
+    screen.text(x + 27, 2, "Date", header);
+    screen.fill(x, 3, end, screen.h - 14, Style::fg(color::FG));
+    screen.text(
+        x + 1,
+        screen.h - 14,
+        "no companies yet — press 1 to add a",
+        Style::fg(color::MUTED),
+    );
+    for col in x..end {
+        screen.put(col, screen.h - 13, '─', Style::fg(color::BORDER_BLURRED));
     }
-    screen.fill(0, 0, screen.w, bottom + 1, Style::DEFAULT.bg(color::BLACK));
-    for (index, cell) in cells.into_iter().enumerate() {
-        let y = index / width;
-        let x = 1 + index % width;
-        screen.cells[y * screen.w + x] = cell;
-    }
-    let count = state.filtered(data).len().to_string();
-    let mut title = title;
-    if state.view == ResearchView::Evidence {
-        title[3].0 = &count;
-    }
-    screen.pane(1, 0, width, bottom, true, &title, &hints);
-    if state.view == ResearchView::Evidence {
-        for x in 2..width {
-            screen.cells[2 * screen.w + x].bg = Some("#232323");
-            let selected = &mut screen.cells[3 * screen.w + x];
-            selected.fg = Some(color::WHITE);
-            selected.bg = Some(color::BLUE_BG);
-            selected.bold = true;
-        }
-    }
+    screen.text(
+        x + 1,
+        screen.h - 12,
+        "select evidence to preview it",
+        Style::fg(color::FG),
+    );
 }
 
 fn paint_zoom_footer(screen: &mut Screen, data: &ResearchData) {
@@ -681,58 +1255,78 @@ fn focus_frame(screen: &mut Screen, x0: usize, x1: usize, bottom: usize) {
     }
 }
 
-fn paint_live(screen: &mut Screen, data: &ResearchData, state: &ResearchState) {
+fn paint_live(
+    screen: &mut Screen,
+    data: &ResearchData,
+    state: &ResearchState,
+    layout: ResearchLayout,
+) {
     let narrow = screen.w < 100;
-    let wide = screen.w >= 160;
     let muted = data.report.is_some()
         && state.kind_index == 0
         && !state.zoom
         && !state.busy
         && state.error.is_none();
-    let evidence_x = if narrow {
-        2
-    } else if wide {
-        screen.w - 40
-    } else {
-        80
-    };
-    let evidence_end = if narrow {
-        screen.w - 2
-    } else {
-        evidence_x + 38
-    };
-    let report_x = 38;
-    let report_end = evidence_x.saturating_sub(4);
+    let evidence_x = layout.evidence.0 + 1;
+    let evidence_end = layout.evidence.2 - 1;
     let table_bottom = if narrow {
-        screen.h - 4
+        layout.evidence.3 - 2
     } else {
-        screen.h.saturating_sub(14)
+        layout.evidence.3 - 12
     };
     let rows = state.filtered(data);
     let count = rows.len();
     if narrow {
         let title_fg = if muted { "#898989" } else { color::BLUE };
-        screen.text(3, 0, " e evidence ", Style::fg(title_fg).bold());
+        screen.text(
+            layout.evidence.0 + 2,
+            layout.evidence.1,
+            " e evidence ",
+            Style::fg(title_fg).bold(),
+        );
     }
     // Pane badges and the company table.
-    if !narrow {
-        screen.text(16, 0, "1", Style::fg(color::MUTED).bold());
+    if let (Some(company), Some(report)) = (layout.company, layout.report) {
+        let cx = company.0 + 1;
+        let cr = company.2 - 1;
+        screen.text(
+            company.0 + 15,
+            company.1,
+            "1",
+            Style::fg(color::MUTED).bold(),
+        );
         let badge = data.report_date.as_deref().unwrap_or("no report");
-        screen.put(50, 0, ' ', Style::fg(color::MUTED).bold());
-        screen.text(51, 0, badge, Style::fg(color::MUTED).bold());
+        screen.put(report.0 + 13, report.1, ' ', Style::fg(color::MUTED).bold());
+        screen.text(
+            report.0 + 14,
+            report.1,
+            badge,
+            Style::fg(color::MUTED).bold(),
+        );
         screen.put(
-            51 + badge.chars().count(),
-            0,
+            report.0 + 14 + badge.chars().count(),
+            report.1,
             ' ',
             Style::fg(if muted { "#898989" } else { color::BLUE }).bold(),
         );
         let selected_bg = if muted { "#494949" } else { color::BLUE_BG };
-        screen.fill(2, 2, 36, 3, Style::fg(color::WHITE).bg(selected_bg).bold());
+        screen.fill(
+            cx,
+            company.1 + 2,
+            cr,
+            company.1 + 3,
+            Style::fg(color::WHITE).bg(selected_bg).bold(),
+        );
         let symbol = data.company.split(':').next_back().unwrap_or(&data.company);
-        screen.text(3, 2, symbol, Style::fg(color::WHITE).bg(selected_bg).bold());
         screen.text(
-            12,
-            2,
+            cx + 1,
+            company.1 + 2,
+            symbol,
+            Style::fg(color::WHITE).bg(selected_bg).bold(),
+        );
+        screen.text(
+            cx + 10,
+            company.1 + 2,
             if data.report_date.is_some() {
                 "live"
             } else {
@@ -740,19 +1334,19 @@ fn paint_live(screen: &mut Screen, data: &ResearchData, state: &ResearchState) {
             },
             Style::fg(color::WHITE).bg(selected_bg).bold(),
         );
-        let summary_y = screen.h - 8;
+        let summary_y = company.3 - 6;
         screen.fill(
-            2,
+            cx,
             summary_y - 1,
-            36,
+            cr,
             summary_y + 3,
             Style::DEFAULT.bg(color::BLACK),
         );
-        for x in 2..36 {
+        for x in cx..cr {
             screen.put(x, summary_y - 1, '─', Style::fg(color::BORDER_BLURRED));
         }
         screen.text(
-            3,
+            cx + 1,
             summary_y,
             &format!("{} · {} · {}", data.company, data.target, data.target_kind),
             Style::fg(color::MUTED),
@@ -762,18 +1356,18 @@ fn paint_live(screen: &mut Screen, data: &ResearchData, state: &ResearchState) {
         } else {
             "report: none".to_string()
         };
-        screen.text(3, summary_y + 1, &report_line, Style::fg(color::MUTED));
+        screen.text(cx + 1, summary_y + 1, &report_line, Style::fg(color::MUTED));
         if let Some(bar) = data.evidence.iter().find(|item| item.kind == "bar") {
             if let Some(close) = bar.raw.get("close").and_then(|v| v.as_f64()) {
                 screen.text(
-                    3,
+                    cx + 1,
                     summary_y + 2,
                     &format!("last close: {close:.2} {} (1d)", data.currency),
                     Style::fg(color::MUTED),
                 );
             }
         }
-        paint_report(screen, data, state, report_x, report_end);
+        paint_report(screen, data, state, report, false);
     }
     let badge_x = evidence_x + 15;
     screen.text(
@@ -975,9 +1569,8 @@ fn paint_live(screen: &mut Screen, data: &ResearchData, state: &ResearchState) {
             data,
             state,
             &displayed,
-            evidence_x,
+            layout.evidence,
             table_bottom + 2,
-            evidence_end,
         );
     }
     let spend = format!("${:.2}", data.spend);
@@ -1039,9 +1632,12 @@ fn paint_report(
     screen: &mut Screen,
     data: &ResearchData,
     state: &ResearchState,
-    x: usize,
-    end: usize,
+    pane: super::PaneRect,
+    full_width: bool,
 ) {
+    let x = pane.0 + 1;
+    let end = pane.2 - if full_width { 1 } else { 3 };
+    let bottom = pane.3 - 1;
     if data.report.is_none() && data.markdown.is_none() {
         return;
     }
@@ -1116,14 +1712,14 @@ fn paint_report(
     let Some(markdown) = markdown else {
         return;
     };
-    screen.fill(x, 6, end, screen.h - 3, Style::DEFAULT.bg("#0d0d0d"));
+    screen.fill(x, 6, end, bottom, Style::DEFAULT.bg("#0d0d0d"));
     let start_y = 6;
     let width = end.saturating_sub(x + 6);
     let mut y = start_y;
     for block in crate::markdown::render(&markdown, width) {
         y += block.margin_top;
         for line in block.lines {
-            if y.saturating_sub(state.report_scroll) >= screen.h - 3 {
+            if y.saturating_sub(state.report_scroll) >= bottom {
                 break;
             }
             if y >= start_y + state.report_scroll {
@@ -1149,7 +1745,7 @@ fn paint_report(
                 screen.put(col, row, ' ', Style::fg("#3a3a3a").bg("#0d0d0d"));
             }
             screen.put(col, thumb_y, thumb, Style::fg("#3a3a3a").bg("#0d0d0d"));
-            for row in thumb_y + 1..screen.h - 3 {
+            for row in thumb_y + 1..bottom {
                 screen.put(col, row, ' ', Style::fg(color::FG).bg("#0d0d0d"));
             }
         }
@@ -1161,11 +1757,13 @@ fn paint_preview(
     data: &ResearchData,
     state: &ResearchState,
     displayed: &[(String, String, String, String)],
-    x: usize,
+    pane: super::PaneRect,
     y: usize,
-    end: usize,
 ) {
-    screen.fill(x, y, end, screen.h - 3, Style::DEFAULT.bg(color::BLACK));
+    let x = pane.0 + 1;
+    let end = pane.2 - 1;
+    let bottom = pane.3 - 1;
+    screen.fill(x, y, end, bottom, Style::DEFAULT.bg(color::BLACK));
     let selected = state
         .selected_id
         .as_ref()
@@ -1750,4 +2348,36 @@ pub fn draw_research_narrow(screen: &mut Screen) {
     );
 
     status_bar_narrow(screen, NarrowTab::Research);
+}
+
+#[cfg(test)]
+mod component_frame_tests {
+    use super::*;
+
+    #[test]
+    fn empty_component_matches_the_static_oracle_frame() {
+        for (w, h) in [(80, 24), (120, 40), (200, 50)] {
+            let mut expected = Screen::new(w, h);
+            match w {
+                80 => draw_research_narrow(&mut expected),
+                200 => draw_research_wide(&mut expected),
+                _ => draw_research(&mut expected),
+            }
+            let mut actual = Screen::new(w, h);
+            ResearchComponent::default().paint_into(&mut actual);
+            if let Some((index, (got, want))) = actual
+                .cells
+                .iter()
+                .zip(&expected.cells)
+                .enumerate()
+                .find(|(_, (got, want))| got != want)
+            {
+                panic!(
+                    "empty Research at {w}x{h} ({}, {}): got {got:?}, want {want:?}",
+                    index % w,
+                    index / w
+                );
+            }
+        }
+    }
 }

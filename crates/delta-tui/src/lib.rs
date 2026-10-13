@@ -60,6 +60,14 @@ impl Breakpoint {
 pub enum Action {
     /// No state change.
     Noop,
+    /// Home selection or navigation, applied by the app to the desk.
+    Home(crate::screens::HomeCommand),
+    /// Watchlist navigation or a service-backed target operation.
+    Watchlist(crate::screens::WatchlistCommand),
+    /// A Decisions-screen intent; the app performs persistence and navigation.
+    Decision(crate::screens::decisions::DecisionCommand),
+    /// A Theses-screen intent; the app performs persistence or opens a form.
+    Theses(crate::screens::ThesesCommand),
     /// Shut the app down.
     Quit,
     /// Open a modal dialog by name.
@@ -78,6 +86,8 @@ pub enum Action {
     ShowModelPicker,
     /// Open the provider picker (`p`; the picker screen lands with R3.2).
     ShowProviderPicker,
+    /// A Settings screen request that needs an app-level service or modal.
+    SettingsCommand(crate::screens::SettingsCommand),
     /// A form submitted successfully (carries the form title).
     FormSubmitted(String),
     /// Long-running thesis model calls are dispatched by the event loop.
@@ -126,6 +136,12 @@ pub enum Action {
         history: Vec<delta_services::chat::ChatMessage>,
         targets: Vec<String>,
     },
+    /// Ask requests app-owned worker cancellation after clearing or escape.
+    AskAbortWorker,
+    /// Ask requests a service-backed evidence lookup for the chosen citation.
+    AskOpenCitation(String),
+    /// Ask requests the app-owned thesis form for its latest answer.
+    AskSaveAnswer,
     AskAnswered {
         generation: u64,
         result: Result<delta_services::chat::ChatMessage, String>,
