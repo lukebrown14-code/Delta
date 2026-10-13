@@ -1,7 +1,8 @@
 use super::status_bar::{
     draw_status_bar_wide, pane_hints, status_bar_narrow, status_bar_tabs, NarrowTab,
 };
-use crate::screen::{color, Screen, Style};
+use crate::screen::{color, FrameCanvas, PaintCanvas, Screen, Style};
+use crate::theme::Palette;
 use crate::Action;
 use crossterm::event::{KeyCode, KeyEvent};
 use delta_services::{Decision, DecisionReview};
@@ -56,7 +57,7 @@ impl DecisionsScreen {
         }
     }
 
-    pub fn paint(&self, screen: &mut Screen) {
+    pub fn paint(&self, screen: &mut impl PaintCanvas) {
         let empty = DecisionsData {
             decisions: Vec::new(),
             selected: 0,
@@ -78,6 +79,11 @@ impl crate::Screen for DecisionsScreen {
 
     fn paint_into(&self, screen: &mut Screen) {
         self.paint(screen);
+    }
+
+    fn draw(&mut self, frame: &mut ratatui::Frame, area: ratatui::layout::Rect) {
+        let mut canvas = FrameCanvas::new(frame, area, Palette::Dark);
+        self.paint(&mut canvas);
     }
 
     fn handle_key(&mut self, key: KeyEvent) -> Option<Action> {
@@ -144,34 +150,41 @@ impl DecisionsData {
 /// Textual's journal/timeline split, expressed as two pane rectangles.
 /// The one-cell adjustment at normal and wide sizes is the border shared by
 /// the panes; the narrow table keeps that cell for its horizontal scrollbar.
-fn pane_columns(screen: &Screen) -> (super::PaneRect, super::PaneRect) {
-    let bottom = screen.h.saturating_sub(3);
-    let journal_width = screen.w.saturating_mul(2) / 5 - usize::from(screen.w >= 100);
+fn pane_columns(screen: &impl PaintCanvas) -> (super::PaneRect, super::PaneRect) {
+    let bottom = screen.height().saturating_sub(3);
+    let journal_width = screen.width().saturating_mul(2) / 5 - usize::from(screen.width() >= 100);
     let panes = super::pane_layout(
         1,
         0,
-        screen.w.saturating_sub(1),
+        screen.width().saturating_sub(1),
         bottom + 1,
         &[bottom + 1],
-        &[journal_width, screen.w.saturating_sub(2 + journal_width)],
+        &[
+            journal_width,
+            screen.width().saturating_sub(2 + journal_width),
+        ],
     );
     (panes[0][0], panes[0][1])
 }
 
 /// Paint the populated journal on the same cell-grid chrome as the empty state.
-pub fn draw_decisions_live(screen: &mut Screen, data: &DecisionsData) {
+pub fn draw_decisions_live(screen: &mut impl PaintCanvas, data: &DecisionsData) {
     draw_decisions_frame(screen, data, false);
 }
 
-fn draw_decisions_frame(screen: &mut Screen, data: &DecisionsData, component_empty: bool) {
+fn draw_decisions_frame(
+    screen: &mut impl PaintCanvas,
+    data: &DecisionsData,
+    component_empty: bool,
+) {
     let (journal, timeline) = pane_columns(screen);
     let (left, right, bottom) = (journal.2 - 1, timeline.0, journal.3 - 1);
-    if screen.w >= 160 {
-        draw_status_bar_wide(screen, screen.h - 1, screen.w, "6 Decisions");
-    } else if screen.w < 100 {
+    if screen.width() >= 160 {
+        draw_status_bar_wide(screen, screen.height() - 1, screen.width(), "6 Decisions");
+    } else if screen.width() < 100 {
         status_bar_narrow(screen, NarrowTab::Decisions);
     } else {
-        draw_status_bar_decisions(screen, screen.h - 1, screen.w);
+        draw_status_bar_decisions(screen, screen.height() - 1, screen.width());
     }
     let header_style = Style::fg(color::FG).bold().bg("#232323");
     screen.fill(
@@ -181,9 +194,9 @@ fn draw_decisions_frame(screen: &mut Screen, data: &DecisionsData, component_emp
         journal.1 + 2,
         header_style,
     );
-    let header = if screen.w < 100 {
+    let header = if screen.width() < 100 {
         " status      review      instr"
-    } else if screen.w >= 160 {
+    } else if screen.width() >= 160 {
         " status      review      instrument      rationale"
     } else {
         " status      review      instrument      rati"
@@ -201,7 +214,7 @@ fn draw_decisions_frame(screen: &mut Screen, data: &DecisionsData, component_emp
             ("decisions ", title),
             (&count, Style::fg(color::MUTED).bold()),
         ],
-        &if screen.w < 100 {
+        &if screen.width() < 100 {
             vec![
                 (" ".to_string(), Style::fg(color::MUTED)),
                 ("n".to_string(), Style::fg(color::BLUE).bold()),
@@ -253,41 +266,46 @@ fn draw_decisions_frame(screen: &mut Screen, data: &DecisionsData, component_emp
     for y in journal.1..=bottom {
         for x in journal.0..=left {
             if y == journal.1 || y == bottom || x == journal.0 || x == left {
-                let cell = &mut screen.cells[y * screen.w + x];
-                if cell.fg == Some(color::BLUE) {
-                    cell.fg = Some("#898989");
-                }
+                screen.edit(y * screen.width() + x, |cell| {
+                    if cell.fg == Some(color::BLUE) {
+                        cell.fg = Some("#898989");
+                    }
+                });
             }
         }
     }
     for x in timeline.0 + 2..timeline.2 - 1 {
-        let cell = &mut screen.cells[x];
-        if cell.fg == Some(color::BLUE) {
-            cell.fg = Some("#898989");
-        }
+        screen.edit(x, |cell| {
+            if cell.fg == Some(color::BLUE) {
+                cell.fg = Some("#898989");
+            }
+        });
     }
-    screen.cells[right + 11].fg = Some("#898989");
+    screen.edit(right + 11, |cell| cell.fg = Some("#898989"));
     for x in timeline.0 + 1..timeline.2 - 1 {
-        let cell = &mut screen.cells[bottom * screen.w + x];
-        if cell.fg == Some(color::BLUE) {
-            cell.fg = Some("#898989");
-        }
+        screen.edit(bottom * screen.width() + x, |cell| {
+            if cell.fg == Some(color::BLUE) {
+                cell.fg = Some("#898989");
+            }
+        });
     }
-    let tab_start = if screen.w >= 160 { 51 } else { 16 };
+    let tab_start = if screen.width() >= 160 { 51 } else { 16 };
     for x in tab_start..tab_start + 13 {
-        screen.cells[(screen.h - 1) * screen.w + x].bg = Some("#494949");
+        screen.edit((screen.height() - 1) * screen.width() + x, |cell| {
+            cell.bg = Some("#494949")
+        });
     }
-    let status = (screen.h - 1) * screen.w;
-    if let Some(dot) = (0..screen.w).find(|&x| screen.cells[status + x].ch == '●') {
-        screen.cells[status + dot].fg = Some("#a6a6a6");
+    let status = (screen.height() - 1) * screen.width();
+    if let Some(dot) = (0..screen.width()).find(|&x| screen.read(status + x).ch == '●') {
+        screen.edit(status + dot, |cell| cell.fg = Some("#a6a6a6"));
     }
     let footer = format!("${:.2}", data.spend);
-    if let Some(footer_x) = (0..screen.w.saturating_sub(5)).find(|&x| {
-        screen.cells[status + x].ch == '$'
-            && screen.cells[status + x + 1].ch == '0'
-            && screen.cells[status + x + 2].ch == '.'
+    if let Some(footer_x) = (0..screen.width().saturating_sub(5)).find(|&x| {
+        screen.read(status + x).ch == '$'
+            && screen.read(status + x + 1).ch == '0'
+            && screen.read(status + x + 2).ch == '.'
     }) {
-        screen.text(footer_x, screen.h - 1, &footer, Style::fg(color::FG));
+        screen.text(footer_x, screen.height() - 1, &footer, Style::fg(color::FG));
     }
 
     if data.decisions.is_empty() {
@@ -297,7 +315,7 @@ fn draw_decisions_frame(screen: &mut Screen, data: &DecisionsData, component_emp
 
     let list_style = Style::fg(color::FG);
     screen.fill(journal.0 + 1, journal.1 + 2, left, bottom - 1, list_style);
-    if screen.w < 100 {
+    if screen.width() < 100 {
         screen.fill(
             journal.0 + 1,
             bottom - 1,
@@ -318,7 +336,7 @@ fn draw_decisions_frame(screen: &mut Screen, data: &DecisionsData, component_emp
             bottom,
             list_style.bg("#0d0d0d"),
         );
-    } else if screen.w < 160 {
+    } else if screen.width() < 160 {
         screen.fill(
             journal.0 + 1,
             bottom - 1,
@@ -386,7 +404,7 @@ fn draw_decisions_frame(screen: &mut Screen, data: &DecisionsData, component_emp
         bottom,
         Style::DEFAULT,
     );
-    if screen.w < 100 {
+    if screen.width() < 100 {
         for y in timeline.1 + 1..bottom {
             screen.fill(
                 timeline.2 - 3,
@@ -397,7 +415,7 @@ fn draw_decisions_frame(screen: &mut Screen, data: &DecisionsData, component_emp
             );
         }
     }
-    if screen.w < 100 {
+    if screen.width() < 100 {
         for x in timeline.2 - 3..timeline.2 - 1 {
             if data.reviews.is_empty() {
                 screen.put(
@@ -418,21 +436,23 @@ fn draw_decisions_frame(screen: &mut Screen, data: &DecisionsData, component_emp
     let x = timeline.0 + 2;
     let width = timeline.2.saturating_sub(x + 4);
     let mut row = timeline.1 + 1;
-    let line = |screen: &mut Screen, text: &str, style: Style, row: &mut usize| {
-        if *row < bottom {
-            screen.text(x, *row, text, style);
-            *row += 1;
-        }
-    };
-    line(screen, "decision", Style::fg(color::MUTED).bold(), &mut row);
-    line(
+    macro_rules! line {
+        ($screen:expr, $text:expr, $style:expr, $row:expr $(,)?) => {
+            if *$row < bottom {
+                $screen.text(x, *$row, $text, $style);
+                *$row += 1;
+            }
+        };
+    }
+    line!(screen, "decision", Style::fg(color::MUTED).bold(), &mut row);
+    line!(
         screen,
         &format!("instrument    {}", decision.instrument_id),
         list_style,
         &mut row,
     );
-    if screen.w >= 160 {
-        line(
+    if screen.width() >= 160 {
+        line!(
             screen,
             &format!(
                 "thesis        {}",
@@ -442,21 +462,21 @@ fn draw_decisions_frame(screen: &mut Screen, data: &DecisionsData, component_emp
             &mut row,
         );
     } else {
-        line(screen, "thesis", list_style, &mut row);
+        line!(screen, "thesis", list_style, &mut row);
         if let Some(thesis) = &decision.thesis_id {
             for wrapped in crate::wrap::wrap_text(thesis, width) {
-                line(screen, wrapped.trim_end(), list_style, &mut row);
+                line!(screen, wrapped.trim_end(), list_style, &mut row);
             }
         }
     }
-    line(
+    line!(
         screen,
         &format!("horizon       {}", decision.time_horizon),
         list_style,
         &mut row,
     );
     if let Some(price) = data.current_price {
-        line(
+        line!(
             screen,
             &format!("now           {price:.2}"),
             list_style,
@@ -475,13 +495,13 @@ fn draw_decisions_frame(screen: &mut Screen, data: &DecisionsData, component_emp
             decision.invalidation_criteria.as_str(),
         ),
     ] {
-        line(screen, heading, Style::fg(color::MUTED).bold(), &mut row);
+        line!(screen, heading, Style::fg(color::MUTED).bold(), &mut row);
         for wrapped in crate::wrap::wrap_text(body, width) {
-            line(screen, wrapped.trim_end(), list_style, &mut row);
+            line!(screen, wrapped.trim_end(), list_style, &mut row);
         }
         row += 1;
     }
-    line(screen, "timeline", Style::fg(color::MUTED).bold(), &mut row);
+    line!(screen, "timeline", Style::fg(color::MUTED).bold(), &mut row);
     if row < bottom {
         screen.text(
             right + 1,
@@ -506,7 +526,7 @@ fn draw_decisions_frame(screen: &mut Screen, data: &DecisionsData, component_emp
             row += 1;
         }
         for wrapped in crate::wrap::wrap_text(&review.note, width) {
-            line(screen, &wrapped, list_style, &mut row);
+            line!(screen, &wrapped, list_style, &mut row);
         }
     }
     if row < bottom {
@@ -520,7 +540,7 @@ fn draw_decisions_frame(screen: &mut Screen, data: &DecisionsData, component_emp
 }
 
 fn paint_empty_decisions(
-    screen: &mut Screen,
+    screen: &mut impl PaintCanvas,
     journal: super::PaneRect,
     timeline: super::PaneRect,
     component_empty: bool,
@@ -533,8 +553,8 @@ fn paint_empty_decisions(
         bottom - 1,
         Style::fg(color::FG),
     );
-    if screen.w < 160 {
-        let thumb = journal.0 + if screen.w < 100 { 18 } else { 40 };
+    if screen.width() < 160 {
+        let thumb = journal.0 + if screen.width() < 100 { 18 } else { 40 };
         screen.fill(
             journal.0 + 1,
             bottom - 1,
@@ -577,19 +597,19 @@ fn paint_empty_decisions(
         })
         .bold(),
     );
-    let continuation = if screen.w < 100 {
+    let continuation = if screen.width() < 100 {
         " to record the"
-    } else if screen.w >= 160 {
+    } else if screen.width() >= 160 {
         " to record the context you want to revisit"
     } else {
         " to record the context you want to"
     };
     screen.text(right + 28, timeline.1 + 1, continuation, muted);
-    if screen.w < 160 {
+    if screen.width() < 160 {
         screen.text(
             right + 2,
             timeline.1 + 2,
-            if screen.w < 100 {
+            if screen.width() < 100 {
                 "context you want to revisit"
             } else {
                 "revisit"
@@ -601,33 +621,35 @@ fn paint_empty_decisions(
 
 /// The review modal over a populated journal. The note and status are supplied
 /// by the app's form state; its initial frame is an oracle state.
-pub fn draw_decision_review_form(screen: &mut Screen, note: &str, status: &str) {
-    for cell in &mut screen.cells {
-        cell.fg = Some(match cell.fg {
-            None => color::FG,
-            Some("#898989") => "#363636",
-            Some("#8a8a8a") => "#373737",
-            Some("#333333") => "#141414",
-            Some("#d4d4d4") => "#545454",
-            Some("#3a3a3a") => "#171717",
-            Some("#ffffff") => "#666666",
-            Some("#a6a6a6") => "#424242",
-            Some(other) => other,
+pub fn draw_decision_review_form(screen: &mut impl PaintCanvas, note: &str, status: &str) {
+    for index in 0..screen.width() * screen.height() {
+        screen.edit(index, |cell| {
+            cell.fg = Some(match cell.fg {
+                None => color::FG,
+                Some("#898989") => "#363636",
+                Some("#8a8a8a") => "#373737",
+                Some("#333333") => "#141414",
+                Some("#d4d4d4") => "#545454",
+                Some("#3a3a3a") => "#171717",
+                Some("#ffffff") => "#666666",
+                Some("#a6a6a6") => "#424242",
+                Some(other) => other,
+            });
+            cell.bg = match cell.bg {
+                Some("#232323") => Some("#0e0e0e"),
+                Some("#494949") => Some("#1d1d1d"),
+                Some("#0d0d0d") => Some("#050505"),
+                Some("#1a1a1a") => Some("#0a0a0a"),
+                other => other,
+            };
         });
-        cell.bg = match cell.bg {
-            Some("#232323") => Some("#0e0e0e"),
-            Some("#494949") => Some("#1d1d1d"),
-            Some("#0d0d0d") => Some("#050505"),
-            Some("#1a1a1a") => Some("#0a0a0a"),
-            other => other,
-        };
     }
-    let x = (screen.w - 64) / 2;
-    let top = if screen.h < 30 { 1 } else { 2 };
-    let bottom = if screen.h >= 50 {
-        screen.h - 4
+    let x = (screen.width() - 64) / 2;
+    let top = if screen.height() < 30 { 1 } else { 2 };
+    let bottom = if screen.height() >= 50 {
+        screen.height() - 4
     } else {
-        screen.h - 3
+        screen.height() - 3
     };
     let bg = Style::DEFAULT.bg("#0d0d0d");
     let edge = Style::fg("#333333").bg("#0d0d0d");
@@ -691,7 +713,7 @@ pub fn draw_decision_review_form(screen: &mut Screen, note: &str, status: &str) 
 
 /// The Decisions screen: ledger + timeline (empty states; port of
 /// `delta/tui/screens/decisions.py`, seeded golden layout).
-pub fn draw_decisions(screen: &mut Screen) {
+pub fn draw_decisions(screen: &mut impl PaintCanvas) {
     let (journal, timeline) = pane_columns(screen);
     let (left, right, content_bottom) = (journal.2 - 1, timeline.0, journal.3 - 1);
     screen.pane(
@@ -714,7 +736,7 @@ pub fn draw_decisions(screen: &mut Screen) {
     screen.pane(
         right,
         0,
-        screen.w - 2,
+        screen.width() - 2,
         content_bottom,
         false,
         &[("timeline", Style::fg(color::BLUE).bold())],
@@ -764,11 +786,11 @@ pub fn draw_decisions(screen: &mut Screen) {
     );
     screen.text(right + 2, 2, "revisit", timeline_hint);
 
-    draw_status_bar_decisions(screen, screen.h - 1, screen.w);
+    draw_status_bar_decisions(screen, screen.height() - 1, screen.width());
 }
 
 /// Status bar with the Decisions tab active (`6 Decisions`).
-fn draw_status_bar_decisions(screen: &mut Screen, y: usize, w: usize) {
+fn draw_status_bar_decisions(screen: &mut impl PaintCanvas, y: usize, w: usize) {
     status_bar_tabs(
         screen,
         y,
@@ -781,7 +803,7 @@ fn draw_status_bar_decisions(screen: &mut Screen, y: usize, w: usize) {
 }
 
 /// Decisions at 200x50: journal table + timeline.
-pub fn draw_decisions_wide(screen: &mut Screen) {
+pub fn draw_decisions_wide(screen: &mut impl PaintCanvas) {
     let (journal, timeline) = pane_columns(screen);
     let (left, right, content_bottom) = (journal.2 - 1, timeline.0, journal.3 - 1);
     screen.pane(
@@ -804,7 +826,7 @@ pub fn draw_decisions_wide(screen: &mut Screen) {
     screen.pane(
         right,
         0,
-        screen.w - 2,
+        screen.width() - 2,
         content_bottom,
         false,
         &[("timeline", Style::fg(color::BLUE).bold())],
@@ -828,11 +850,11 @@ pub fn draw_decisions_wide(screen: &mut Screen) {
         " to record the context you want to revisit",
         muted,
     );
-    draw_status_bar_wide(screen, screen.h - 1, screen.w, "6 Decisions");
+    draw_status_bar_wide(screen, screen.height() - 1, screen.width(), "6 Decisions");
 }
 
 /// Decisions at 80x24: journal (focused) + timeline panes side by side.
-pub fn draw_decisions_narrow(screen: &mut Screen) {
+pub fn draw_decisions_narrow(screen: &mut impl PaintCanvas) {
     let (journal, timeline) = pane_columns(screen);
     let (left, right, bottom) = (journal.2 - 1, timeline.0, journal.3 - 1);
     // Left: the decision journal table.
@@ -881,7 +903,7 @@ pub fn draw_decisions_narrow(screen: &mut Screen) {
     screen.pane(
         right,
         0,
-        screen.w - 2,
+        screen.width() - 2,
         bottom,
         false,
         &[("timeline", Style::fg(color::BLUE).bold())],
@@ -901,6 +923,67 @@ mod tests {
     use super::*;
     use crate::Screen as _;
     use crossterm::event::KeyModifiers;
+    use ratatui::{backend::TestBackend, layout::Rect, Terminal};
+
+    #[test]
+    fn direct_frame_and_review_overlay_match_oracle() {
+        let date = chrono::NaiveDate::from_ymd_opt(2026, 9, 21).unwrap();
+        for (width, height) in [(80, 24), (120, 40), (200, 50)] {
+            let mut decisions = DecisionsScreen::default();
+            decisions.set_data(Some(DecisionsData {
+                decisions: vec![Decision {
+                    id: "d1".into(),
+                    instrument_id: "US:AAPL".into(),
+                    rationale: "test".into(),
+                    valuation_context: String::new(),
+                    time_horizon: "1y".into(),
+                    review_date: date,
+                    invalidation_criteria: String::new(),
+                    thesis_id: None,
+                    thesis_claim_snapshot: None,
+                    created_at: date.and_hms_opt(0, 0, 0).unwrap(),
+                    status: "open".into(),
+                }],
+                selected: 0,
+                reviews: Vec::new(),
+                current_price: None,
+                filter: String::new(),
+                spend: 0.0,
+                confirm_delete: false,
+            }));
+            let area = Rect::new(1, 1, width, height);
+            let mut oracle = Screen::new(width as usize, height as usize);
+            decisions.paint(&mut oracle);
+            draw_decision_review_form(&mut oracle, "note", "open");
+            let mut expected = Terminal::new(TestBackend::new(width + 2, height + 2)).unwrap();
+            expected
+                .draw(|frame| crate::screen::blit(frame, &oracle, area))
+                .unwrap();
+            let mut actual = Terminal::new(TestBackend::new(width + 2, height + 2)).unwrap();
+            actual
+                .draw(|frame| {
+                    let mut canvas = FrameCanvas::new(frame, area, Palette::Dark);
+                    decisions.paint(&mut canvas);
+                    draw_decision_review_form(&mut canvas, "note", "open");
+                })
+                .unwrap();
+            let got = actual.backend().buffer();
+            let want = expected.backend().buffer();
+            if let Some((index, (got, want))) = got
+                .content()
+                .iter()
+                .zip(want.content())
+                .enumerate()
+                .find(|(_, (got, want))| got != want)
+            {
+                panic!(
+                    "{width}x{height} ({}, {}): got {got:?}, want {want:?}",
+                    index % (width as usize + 2),
+                    index / (width as usize + 2)
+                );
+            }
+        }
+    }
 
     fn key(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::NONE)

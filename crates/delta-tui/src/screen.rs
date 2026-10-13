@@ -376,9 +376,7 @@ impl PaintCanvas for FrameCanvas<'_> {
             .cell_mut((self.area.x + x as u16, self.area.y + y as u16))
         {
             cell.set_char(ch);
-            if let Some(fg) = fg {
-                cell.set_fg(fg);
-            }
+            cell.fg = fg.unwrap_or(ratatui::style::Color::Reset);
             if let Some(bg) = bg {
                 cell.set_bg(bg);
             }
