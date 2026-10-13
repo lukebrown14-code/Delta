@@ -21,13 +21,13 @@ use delta_tui::form::Form;
 use delta_tui::screen::{color, Screen, Style};
 use delta_tui::screens::decisions::{draw_decisions_live, DecisionsData};
 use delta_tui::screens::{
-    draw_ask, draw_ask_narrow, draw_ask_wide, draw_decisions, draw_decisions_narrow,
-    draw_decisions_wide, draw_glossary_overlay, draw_home, draw_home_live, draw_home_narrow,
-    draw_home_wide, draw_research, draw_research_live, draw_research_narrow, draw_research_wide,
-    draw_settings, draw_settings_narrow, draw_settings_wide, draw_theses_live,
-    draw_thesis_form_runtime, draw_watchlist, draw_watchlist_narrow, draw_watchlist_narrow_list,
-    draw_watchlist_wide, paint_ask_state, AskState, ResearchData, ResearchState, ResearchView,
-    SettingsFocus, SettingsState, SettingsView, ThesesPane, ThesesState,
+    draw_decisions, draw_decisions_narrow, draw_decisions_wide, draw_glossary_overlay, draw_home,
+    draw_home_live, draw_home_narrow, draw_home_wide, draw_research, draw_research_live,
+    draw_research_narrow, draw_research_wide, draw_settings, draw_settings_narrow,
+    draw_settings_wide, draw_theses_live, draw_thesis_form_runtime, draw_watchlist,
+    draw_watchlist_narrow, draw_watchlist_narrow_list, draw_watchlist_wide, AskState, ResearchData,
+    ResearchState, ResearchView, SettingsFocus, SettingsState, SettingsView, ThesesPane,
+    ThesesState,
 };
 use delta_tui::theme::Palette;
 use delta_tui::{is_quit_key, workers, Action, Breakpoint, Component};
@@ -359,13 +359,7 @@ impl App {
                 }
             }
             Tab::Theses => draw_theses_live(screen, &self.theses),
-            Tab::Ask => {
-                route!(
-                    draw_ask_wide(screen),
-                    draw_ask(screen),
-                    draw_ask_narrow(screen)
-                );
-            }
+            Tab::Ask => delta_tui::screens::draw_ask_live(screen, &self.ask),
             Tab::Decisions => {
                 if let Some(data) = self
                     .decisions
@@ -393,9 +387,6 @@ impl App {
                     draw_settings_narrow(screen, &view)
                 )
             }
-        }
-        if self.tab == Tab::Ask {
-            paint_ask_state(screen, &self.ask);
         }
         if self.glossary && self.tab == Tab::Watchlist {
             draw_glossary_overlay(screen, &self.desk.watch_state());
@@ -800,138 +791,84 @@ impl App {
     }
 
     fn handle_ask_key(&mut self, key: KeyEvent) -> Option<Action> {
-        if self.ask.editing {
-            match key.code {
-                KeyCode::Esc => self.ask.editing = false,
-                KeyCode::Enter => {
-                    if let Some((generation, history, targets)) = self.ask.submit() {
-                        return Some(Action::AskQuestion {
-                            generation,
-                            history,
-                            targets,
-                        });
-                    }
-                }
-                KeyCode::Backspace => {
-                    self.ask.input.pop();
-                }
-                KeyCode::Char(c) => self.ask.input.push(c),
-                _ => {}
-            }
-            return Some(Action::Noop);
-        }
-        if self.ask.clear_pending {
-            match key.code {
-                KeyCode::Char('y') => {
-                    if let Some(worker) = self.ask_worker.take() {
-                        worker.abort();
-                    }
-                    self.ask.clear();
-                }
-                KeyCode::Esc => self.ask.clear_pending = false,
-                _ => {}
-            }
-            return Some(Action::Noop);
-        }
-        match key.code {
-            KeyCode::Esc if self.ask.busy => {
+        let action = delta_tui::Screen::handle_key(&mut self.ask, key)?;
+        match action {
+            Action::AskAbortWorker => {
                 if let Some(worker) = self.ask_worker.take() {
                     worker.abort();
                 }
-                self.ask.cancel_pending();
+                Some(Action::Noop)
             }
-            KeyCode::Char('i') | KeyCode::Enter => {
-                self.ask.editing = true;
-                self.ask.targets_focus = false;
+            Action::AskOpenCitation(citation) => {
+                self.open_ask_citation(citation);
+                Some(Action::Noop)
             }
-            KeyCode::Char('t') => self.ask.targets_focus = true,
-            KeyCode::Esc if self.ask.targets_focus => self.ask.targets_focus = false,
-            KeyCode::Char(' ') => self.ask.toggle_target(),
-            KeyCode::Char('a') => self.ask.toggle_all(),
-            KeyCode::Up if self.ask.targets_focus => {
-                self.ask.target_selected = self.ask.target_selected.saturating_sub(1)
-            }
-            KeyCode::Down if self.ask.targets_focus => {
-                self.ask.target_selected =
-                    (self.ask.target_selected + 1).min(self.ask.targets.len().saturating_sub(1))
-            }
-            KeyCode::Left => self.ask.walk_citation(-1),
-            KeyCode::Right => self.ask.walk_citation(1),
-            KeyCode::Char('o') => {
-                let citation = self
-                    .ask
-                    .citations()
-                    .get(self.ask.selected_citation)
-                    .cloned()?;
-                if citation.starts_with("https://") || citation.starts_with("http://") {
-                    return Some(Action::OpenSource(citation));
-                }
-                let target_ids = self
-                    .thesis_db()
-                    .and_then(|db| {
-                        delta_services::evidence_by_ids(&db, std::slice::from_ref(&citation)).ok()
-                    })
-                    .and_then(|items| items.into_iter().next())
-                    .map(|item| item.target_ids)
-                    .unwrap_or_default();
-                let instrument = self
-                    .ask
-                    .targets
-                    .iter()
-                    .filter(|target| self.ask.scope.contains(&target.id))
-                    .flat_map(|target| target.instruments())
-                    .find(|instrument| target_ids.contains(&instrument.id))
-                    .map(|instrument| instrument.id)
-                    .or_else(|| self.ask.instrument_ids().into_iter().next());
-                if let Some(instrument) = instrument {
-                    self.open_research_for_instrument(&instrument);
-                    self.research_state.view = ResearchView::Evidence;
-                    self.research_state.selected_id = Some(citation);
-                    self.research_state.detail_open = true;
-                }
-            }
-            KeyCode::Char('z') => self.ask.zoomed = !self.ask.zoomed,
-            KeyCode::Char('s') => {
-                let Some(answer) = self
-                    .ask
-                    .history
-                    .iter()
-                    .rev()
-                    .find(|turn| turn.role == "assistant")
-                else {
-                    return Some(Action::Status(
-                        "no answer to save yet — press i to ask something".to_string(),
-                    ));
-                };
-                let mut modal = thesis_form(None);
-                modal.form.fields[0]
-                    .input
-                    .set_value(answer.text.split("\n\n").next().unwrap_or(""));
-                let targets = self
-                    .ask
-                    .targets
-                    .iter()
-                    .filter(|target| self.ask.scope.contains(&target.id))
-                    .map(|target| target.id.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                modal.form.fields[1].input.set_value(&targets);
-                modal.mode = FormMode::AddThesisFromAsk(
-                    answer
-                        .citations
-                        .iter()
-                        .filter(|citation| {
-                            !citation.starts_with("http://") && !citation.starts_with("https://")
-                        })
-                        .cloned()
-                        .collect(),
-                );
-                self.overlay = Some(Overlay::SettingsForm(modal));
-            }
-            KeyCode::Char('x') if !self.ask.history.is_empty() => self.ask.clear_pending = true,
-            _ => return None,
+            Action::AskSaveAnswer => Some(self.save_ask_answer()),
+            other => Some(other),
         }
-        Some(Action::Noop)
+    }
+
+    fn open_ask_citation(&mut self, citation: String) {
+        let target_ids = self
+            .thesis_db()
+            .and_then(|db| {
+                delta_services::evidence_by_ids(&db, std::slice::from_ref(&citation)).ok()
+            })
+            .and_then(|items| items.into_iter().next())
+            .map(|item| item.target_ids)
+            .unwrap_or_default();
+        let instrument = self
+            .ask
+            .targets
+            .iter()
+            .filter(|target| self.ask.scope.contains(&target.id))
+            .flat_map(|target| target.instruments())
+            .find(|instrument| target_ids.contains(&instrument.id))
+            .map(|instrument| instrument.id)
+            .or_else(|| self.ask.instrument_ids().into_iter().next());
+        if let Some(instrument) = instrument {
+            self.open_research_for_instrument(&instrument);
+            self.research_state.view = ResearchView::Evidence;
+            self.research_state.selected_id = Some(citation);
+            self.research_state.detail_open = true;
+        }
+    }
+
+    fn save_ask_answer(&mut self) -> Action {
+        let Some(answer) = self
+            .ask
+            .history
+            .iter()
+            .rev()
+            .find(|turn| turn.role == "assistant")
+        else {
+            return Action::Status("no answer to save yet — press i to ask something".to_string());
+        };
+        let mut modal = thesis_form(None);
+        modal.form.fields[0]
+            .input
+            .set_value(answer.text.split("\n\n").next().unwrap_or(""));
+        let targets = self
+            .ask
+            .targets
+            .iter()
+            .filter(|target| self.ask.scope.contains(&target.id))
+            .map(|target| target.id.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        modal.form.fields[1].input.set_value(&targets);
+        modal.mode = FormMode::AddThesisFromAsk(
+            answer
+                .citations
+                .iter()
+                .filter(|citation| {
+                    !citation.starts_with("http://") && !citation.starts_with("https://")
+                })
+                .cloned()
+                .collect(),
+        );
+        self.overlay = Some(Overlay::SettingsForm(modal));
+        Action::Noop
     }
 
     /// The shell keys, in `DeltaApp.BINDINGS` order (plus the esc close and
@@ -2124,18 +2061,23 @@ impl Component for App {
                 citation_labels,
                 sidebar_labels,
             } => {
-                if generation == self.ask.generation {
+                let current = generation == self.ask.generation;
+                if current {
                     self.ask_worker = None;
                 }
-                self.ask.finish(generation, result);
-                if generation == self.ask.generation {
+                delta_tui::Screen::update(
+                    &mut self.ask,
+                    Action::AskAnswered {
+                        generation,
+                        result,
+                        citation_labels,
+                        sidebar_labels,
+                    },
+                );
+                if current {
                     if let Some(error) = &self.ask.error {
                         self.status = error.clone();
                     }
-                }
-                if generation == self.ask.generation && !self.ask.history.is_empty() {
-                    self.ask.citation_labels = citation_labels;
-                    self.ask.sidebar_labels = sidebar_labels;
                 }
             }
             Action::HomeRefresh(feed) => self.desk.feed = feed,
@@ -2184,6 +2126,9 @@ impl Component for App {
             }
             Action::Noop
             | Action::AskQuestion { .. }
+            | Action::AskAbortWorker
+            | Action::AskOpenCitation(_)
+            | Action::AskSaveAnswer
             | Action::OpenDialog(_)
             | Action::CloseDialog
             | Action::Goto(_)
