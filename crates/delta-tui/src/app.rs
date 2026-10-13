@@ -20,15 +20,14 @@ use delta_tui::desk::Desk;
 use delta_tui::dialog::{GoPicker, HelpDialog};
 use delta_tui::form::Form;
 use delta_tui::screen::{color, Screen, Style};
-use delta_tui::screens::decisions::{draw_decisions_live, DecisionsData};
+use delta_tui::screens::decisions::{DecisionCommand, DecisionsData, DecisionsScreen};
 #[cfg(test)]
 use delta_tui::screens::SettingsFocus;
 use delta_tui::screens::{
-    draw_ask, draw_ask_narrow, draw_ask_wide, draw_decisions, draw_decisions_narrow,
-    draw_decisions_wide, draw_glossary_overlay, draw_home, draw_home_live, draw_home_narrow,
-    draw_home_setup, draw_home_wide, draw_research, draw_research_live, draw_research_narrow,
-    draw_research_wide, draw_theses_live, draw_thesis_form_runtime, draw_watchlist,
-    draw_watchlist_add_results, draw_watchlist_filter, draw_watchlist_narrow,
+    draw_ask, draw_ask_narrow, draw_ask_wide, draw_glossary_overlay, draw_home, draw_home_live,
+    draw_home_narrow, draw_home_setup, draw_home_wide, draw_research, draw_research_live,
+    draw_research_narrow, draw_research_wide, draw_theses_live, draw_thesis_form_runtime,
+    draw_watchlist, draw_watchlist_add_results, draw_watchlist_filter, draw_watchlist_narrow,
     draw_watchlist_narrow_list, draw_watchlist_wide, paint_ask_state, AddSearchState, AskState,
     ResearchData, ResearchState, ResearchView, SettingsCommand, SettingsComponent, ThesesPane,
     ThesesState,
@@ -176,8 +175,7 @@ pub(crate) struct App {
     research_state: ResearchState,
     ask: AskState,
     ask_worker: Option<tokio::task::JoinHandle<()>>,
-    decisions: Option<DecisionsData>,
-    confirm_decision_delete: bool,
+    decisions: DecisionsScreen,
     /// The terminal size the last frame painted (breakpoint decisions).
     viewport: (u16, u16),
 }
@@ -425,21 +423,7 @@ impl App {
                     draw_ask_narrow(screen)
                 );
             }
-            Tab::Decisions => {
-                if let Some(data) = self
-                    .decisions
-                    .as_ref()
-                    .filter(|data| !data.decisions.is_empty())
-                {
-                    draw_decisions_live(screen, data);
-                } else {
-                    route!(
-                        draw_decisions_wide(screen),
-                        draw_decisions(screen),
-                        draw_decisions_narrow(screen)
-                    );
-                }
-            }
+            Tab::Decisions => self.decisions.paint(screen),
             Tab::Settings => {
                 self.settings
                     .sync_data(&self.desk.settings, &self.desk.settings_footer);
@@ -603,15 +587,11 @@ impl App {
 
     fn refresh_decisions(&mut self) {
         let Ok(db) = self.decision_db() else {
-            self.decisions = None;
+            self.decisions.set_data(None);
             return;
         };
-        let filter = self
-            .decisions
-            .as_ref()
-            .map(|data| data.filter.clone())
-            .unwrap_or_default();
-        let selected = self.decisions.as_ref().map_or(0, |data| data.selected);
+        let filter = self.decisions.filter().to_string();
+        let selected = self.decisions.selected_index();
         let Ok(mut decisions) = delta_services::list_decisions(&db, None, true) else {
             self.status = "could not load decisions".to_string();
             return;
@@ -633,65 +613,47 @@ impl App {
         } else {
             (Vec::new(), None)
         };
-        self.decisions = Some(DecisionsData {
+        self.decisions.set_data(Some(DecisionsData {
             decisions,
             selected,
             reviews,
             current_price,
             filter,
             spend: delta_services::analytics::total_spend(&db, None),
-            confirm_delete: self.confirm_decision_delete,
-        });
+            confirm_delete: false,
+        }));
     }
 
     fn selected_decision(&self) -> Option<&delta_services::Decision> {
-        self.decisions.as_ref()?.selected()
+        self.decisions.selected()
     }
 
-    fn handle_decisions_key(&mut self, key: KeyEvent) -> Option<Action> {
-        match key.code {
-            KeyCode::Up | KeyCode::Down => {
-                if let Some(data) = &mut self.decisions {
-                    if key.code == KeyCode::Up {
-                        data.selected = data.selected.saturating_sub(1);
-                    } else {
-                        data.selected =
-                            (data.selected + 1).min(data.decisions.len().saturating_sub(1));
-                    }
-                }
+    fn handle_decision_command(&mut self, command: DecisionCommand) {
+        match command {
+            DecisionCommand::SelectionChanged => {
                 self.refresh_decisions();
             }
-            KeyCode::Char('n') => {
+            DecisionCommand::New => {
                 self.overlay = Some(Overlay::DecisionForm(decision_form(None)));
             }
-            KeyCode::Char('e') => {
+            DecisionCommand::Edit => {
                 if let Some(decision) = self.selected_decision() {
                     self.overlay = Some(Overlay::DecisionForm(decision_form(Some(decision))));
                 }
             }
-            KeyCode::Char('r') => {
+            DecisionCommand::Review => {
                 if let Some(decision) = self.selected_decision() {
                     self.overlay = Some(Overlay::DecisionForm(review_form(&decision.id)));
                 }
             }
-            KeyCode::Char('/') => {
-                let query = self
-                    .decisions
-                    .as_ref()
-                    .map_or(String::new(), |d| d.filter.clone());
+            DecisionCommand::Filter => {
+                let query = self.decisions.filter().to_string();
                 self.overlay = Some(Overlay::DecisionFilter(query));
             }
-            KeyCode::Char('d') => {
-                if self.selected_decision().is_some() {
-                    self.confirm_decision_delete = true;
-                    if let Some(data) = &mut self.decisions {
-                        data.confirm_delete = true;
-                    }
-                    self.status = "delete decision? press y to confirm".to_string();
-                }
+            DecisionCommand::ConfirmDelete => {
+                self.status = "delete decision? press y to confirm".to_string();
             }
-            KeyCode::Char('y') if self.confirm_decision_delete => {
-                self.confirm_decision_delete = false;
+            DecisionCommand::Delete => {
                 if let Some(id) = self.selected_decision().map(|d| d.id.clone()) {
                     let result = self.decision_db().and_then(|db| {
                         delta_services::delete_decision(&db, &id).map_err(|error| error.to_string())
@@ -703,7 +665,7 @@ impl App {
                     self.refresh_decisions();
                 }
             }
-            KeyCode::Char('o') => {
+            DecisionCommand::Research => {
                 if let Some(instrument_id) = self
                     .selected_decision()
                     .map(|decision| decision.instrument_id.clone())
@@ -711,16 +673,10 @@ impl App {
                     self.open_research_for_instrument(&instrument_id);
                 }
             }
-            KeyCode::Esc => {
-                self.confirm_decision_delete = false;
-                if let Some(data) = &mut self.decisions {
-                    data.confirm_delete = false;
-                }
+            DecisionCommand::Cancel => {
                 self.status.clear();
             }
-            _ => return None,
         }
-        Some(Action::Noop)
     }
 
     fn submit_decision_form(&mut self, modal: &mut DecisionModal) -> bool {
@@ -1934,10 +1890,7 @@ impl Component for App {
                 KeyCode::Enter => {
                     let filter = query.trim().to_string();
                     self.overlay = None;
-                    if let Some(data) = &mut self.decisions {
-                        data.filter = filter;
-                        data.selected = 0;
-                    }
+                    self.decisions.set_filter(filter);
                     self.refresh_decisions();
                 }
                 KeyCode::Backspace => {
@@ -2184,8 +2137,11 @@ impl Component for App {
             }
         }
         if self.tab == Tab::Decisions {
-            if let Some(action) = self.handle_decisions_key(key) {
-                return Some(action);
+            if let Some(action) = delta_tui::Screen::handle_key(&mut self.decisions, key) {
+                if let Action::Decision(command) = action {
+                    self.handle_decision_command(command);
+                }
+                return Some(Action::Noop);
             }
         }
         if let Some(action) = self.handle_shell_key(key) {
@@ -2206,6 +2162,7 @@ impl Component for App {
                 self.update(next);
             }
             Action::Quit => self.quit = true,
+            Action::Decision(command) => self.handle_decision_command(command),
             Action::Quotes(prices) => self.desk.live = prices,
             Action::Metrics { instrument, rows } => {
                 self.desk.metrics.insert(instrument, rows);
@@ -2417,8 +2374,7 @@ pub(crate) async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> st
         research_state: ResearchState::default(),
         ask,
         ask_worker: None,
-        decisions: None,
-        confirm_decision_delete: false,
+        decisions: DecisionsScreen::default(),
         viewport: (120, 40),
     };
     app.reload_theses();
@@ -2719,8 +2675,7 @@ mod tests {
             research_state: ResearchState::default(),
             ask: AskState::default(),
             ask_worker: None,
-            decisions: None,
-            confirm_decision_delete: false,
+            decisions: DecisionsScreen::default(),
             viewport: (120, 40),
         }
     }
@@ -4053,13 +4008,13 @@ mod settings_tests {
             a.handle_key(key(KeyCode::Char(ch)));
         }
         a.handle_key(key(KeyCode::Enter));
-        assert!(a.decisions.as_ref().unwrap().decisions.is_empty());
+        assert!(a.decisions.data().unwrap().decisions.is_empty());
         a.handle_key(key(KeyCode::Char('/')));
         for _ in 0..5 {
             a.handle_key(key(KeyCode::Backspace));
         }
         a.handle_key(key(KeyCode::Enter));
-        assert_eq!(a.decisions.as_ref().unwrap().decisions.len(), 1);
+        assert_eq!(a.decisions.data().unwrap().decisions.len(), 1);
 
         a.handle_key(key(KeyCode::Char('d')));
         assert!(screen_text(&mut a, 120, 40).contains("confirm delete"));

@@ -2,7 +2,128 @@ use super::status_bar::{
     draw_status_bar_wide, pane_hints, status_bar_narrow, status_bar_tabs, NarrowTab,
 };
 use crate::screen::{color, Screen, Style};
+use crate::{Action, Breakpoint};
+use crossterm::event::{KeyCode, KeyEvent};
 use delta_services::{Decision, DecisionReview};
+use ratatui::{layout::Rect, Frame};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DecisionCommand {
+    SelectionChanged,
+    New,
+    Edit,
+    Review,
+    Filter,
+    ConfirmDelete,
+    Delete,
+    Research,
+    Cancel,
+}
+
+#[derive(Default)]
+pub struct DecisionsScreen {
+    data: Option<DecisionsData>,
+    confirm_delete: bool,
+}
+
+impl DecisionsScreen {
+    pub fn data(&self) -> Option<&DecisionsData> {
+        self.data.as_ref()
+    }
+
+    pub fn selected(&self) -> Option<&Decision> {
+        self.data.as_ref()?.selected()
+    }
+
+    pub fn filter(&self) -> &str {
+        self.data.as_ref().map_or("", |data| data.filter.as_str())
+    }
+
+    pub fn selected_index(&self) -> usize {
+        self.data.as_ref().map_or(0, |data| data.selected)
+    }
+
+    pub fn set_data(&mut self, mut data: Option<DecisionsData>) {
+        if let Some(data) = &mut data {
+            data.confirm_delete = self.confirm_delete;
+        }
+        self.data = data;
+    }
+
+    pub fn set_filter(&mut self, filter: String) {
+        if let Some(data) = &mut self.data {
+            data.filter = filter;
+            data.selected = 0;
+        }
+    }
+
+    pub fn paint(&self, screen: &mut Screen) {
+        if let Some(data) = self.data.as_ref().filter(|data| !data.decisions.is_empty()) {
+            draw_decisions_live(screen, data);
+        } else {
+            match Breakpoint::from_width(screen.w as u16) {
+                Breakpoint::Narrow => draw_decisions_narrow(screen),
+                Breakpoint::Normal => draw_decisions(screen),
+                Breakpoint::Wide => draw_decisions_wide(screen),
+            }
+        }
+    }
+}
+
+impl crate::Screen for DecisionsScreen {
+    fn name(&self) -> &'static str {
+        "decisions"
+    }
+
+    fn handle_key(&mut self, key: KeyEvent) -> Option<Action> {
+        let command = match key.code {
+            KeyCode::Up | KeyCode::Down => {
+                if let Some(data) = &mut self.data {
+                    data.selected = if key.code == KeyCode::Up {
+                        data.selected.saturating_sub(1)
+                    } else {
+                        (data.selected + 1).min(data.decisions.len().saturating_sub(1))
+                    };
+                }
+                DecisionCommand::SelectionChanged
+            }
+            KeyCode::Char('n') => DecisionCommand::New,
+            KeyCode::Char('e') if self.selected().is_some() => DecisionCommand::Edit,
+            KeyCode::Char('r') if self.selected().is_some() => DecisionCommand::Review,
+            KeyCode::Char('/') => DecisionCommand::Filter,
+            KeyCode::Char('d') if self.selected().is_some() => {
+                self.confirm_delete = true;
+                if let Some(data) = &mut self.data {
+                    data.confirm_delete = true;
+                }
+                DecisionCommand::ConfirmDelete
+            }
+            KeyCode::Char('y') if self.confirm_delete => {
+                self.confirm_delete = false;
+                if let Some(data) = &mut self.data {
+                    data.confirm_delete = false;
+                }
+                DecisionCommand::Delete
+            }
+            KeyCode::Char('o') if self.selected().is_some() => DecisionCommand::Research,
+            KeyCode::Esc => {
+                self.confirm_delete = false;
+                if let Some(data) = &mut self.data {
+                    data.confirm_delete = false;
+                }
+                DecisionCommand::Cancel
+            }
+            _ => return None,
+        };
+        Some(Action::Decision(command))
+    }
+
+    fn draw(&mut self, frame: &mut Frame, area: Rect) {
+        let mut screen = Screen::new(area.width as usize, area.height as usize);
+        self.paint(&mut screen);
+        crate::screen::blit(frame, &screen, area);
+    }
+}
 
 /// Data supplied by the application service layer for the decision journal.
 pub struct DecisionsData {
@@ -21,19 +142,33 @@ impl DecisionsData {
     }
 }
 
+/// Textual's journal/timeline split, expressed as two pane rectangles.
+/// The one-cell adjustment at normal and wide sizes is the border shared by
+/// the panes; the narrow table keeps that cell for its horizontal scrollbar.
+fn pane_columns(screen: &Screen) -> (usize, usize, usize) {
+    let bottom = screen.h.saturating_sub(3);
+    let journal_width = screen.w.saturating_mul(2) / 5 - usize::from(screen.w >= 100);
+    let panes = super::pane_layout(
+        1,
+        0,
+        screen.w.saturating_sub(1),
+        bottom + 1,
+        &[bottom + 1],
+        &[journal_width, screen.w.saturating_sub(2 + journal_width)],
+    );
+    (panes[0][0].2 - 1, panes[0][1].0, bottom)
+}
+
 /// Paint the populated journal on the same cell-grid chrome as the empty state.
 pub fn draw_decisions_live(screen: &mut Screen, data: &DecisionsData) {
-    let (left, right) = if screen.w < 100 {
+    if screen.w < 100 {
         draw_decisions_narrow(screen);
-        (32, 33)
     } else if screen.w >= 160 {
         draw_decisions_wide(screen);
-        (79, 80)
     } else {
         draw_decisions(screen);
-        (47, 48)
-    };
-    let bottom = screen.h - 3;
+    }
+    let (left, right, bottom) = pane_columns(screen);
     let narrow_hint = (screen.w < 100)
         .then(|| screen.cells[bottom * screen.w + 1..bottom * screen.w + left + 1].to_vec());
     let title = Style::fg(color::BLUE).bold();
@@ -426,11 +561,11 @@ pub fn draw_decision_review_form(screen: &mut Screen, note: &str, status: &str) 
 /// The Decisions screen: ledger + timeline (empty states; port of
 /// `delta/tui/screens/decisions.py`, seeded golden layout).
 pub fn draw_decisions(screen: &mut Screen) {
-    let content_bottom = screen.h - 3; // 37 at h=40
+    let (left, right, content_bottom) = pane_columns(screen);
     screen.pane(
         1,
         0,
-        47,
+        left,
         content_bottom,
         true,
         &[
@@ -445,9 +580,9 @@ pub fn draw_decisions(screen: &mut Screen) {
         ]),
     );
     screen.pane(
-        48,
+        right,
         0,
-        118,
+        screen.w - 2,
         content_bottom,
         false,
         &[("timeline", Style::fg(color::BLUE).bold())],
@@ -455,14 +590,14 @@ pub fn draw_decisions(screen: &mut Screen) {
     );
 
     // Ledger: header row on its own bg + blank rows + the reversed cursor.
-    screen.fill(2, 1, 47, 2, Style::fg(color::FG).bold().bg("#232323"));
+    screen.fill(2, 1, left, 2, Style::fg(color::FG).bold().bg("#232323"));
     screen.text(
         2,
         1,
         " status      review      instrument      rati",
         Style::fg(color::FG).bold().bg("#232323"),
     );
-    screen.fill(2, 2, 47, content_bottom - 1, Style::fg(color::FG));
+    screen.fill(2, 2, left, content_bottom - 1, Style::fg(color::FG));
     screen.fill(
         2,
         content_bottom - 1,
@@ -479,7 +614,7 @@ pub fn draw_decisions(screen: &mut Screen) {
     screen.fill(
         42,
         content_bottom - 1,
-        47,
+        left,
         content_bottom,
         Style::fg(color::FG).bg("#0d0d0d"),
     );
@@ -487,10 +622,15 @@ pub fn draw_decisions(screen: &mut Screen) {
     // Timeline empty state (wrapped).
     let timeline_hint = Style::fg(color::MUTED);
     let timeline_key = Style::fg(color::BLUE).bold();
-    screen.text(50, 1, "no decisions yet — press ", timeline_hint);
-    screen.put(75, 1, 'n', timeline_key);
-    screen.text(76, 1, " to record the context you want to", timeline_hint);
-    screen.text(50, 2, "revisit", timeline_hint);
+    screen.text(right + 2, 1, "no decisions yet — press ", timeline_hint);
+    screen.put(right + 27, 1, 'n', timeline_key);
+    screen.text(
+        right + 28,
+        1,
+        " to record the context you want to",
+        timeline_hint,
+    );
+    screen.text(right + 2, 2, "revisit", timeline_hint);
 
     draw_status_bar_decisions(screen, screen.h - 1, screen.w);
 }
@@ -510,11 +650,11 @@ fn draw_status_bar_decisions(screen: &mut Screen, y: usize, w: usize) {
 
 /// Decisions at 200x50: journal table + timeline.
 pub fn draw_decisions_wide(screen: &mut Screen) {
-    let content_bottom = screen.h - 3; // 47 at h=50
+    let (left, right, content_bottom) = pane_columns(screen);
     screen.pane(
         1,
         0,
-        79,
+        left,
         content_bottom,
         true,
         &[
@@ -529,38 +669,43 @@ pub fn draw_decisions_wide(screen: &mut Screen) {
         ]),
     );
     screen.pane(
-        80,
+        right,
         0,
-        198,
+        screen.w - 2,
         content_bottom,
         false,
         &[("timeline", Style::fg(color::BLUE).bold())],
         &pane_hints(&[("r", "review"), ("o", "research"), ("↑↓", "scroll")]),
     );
     let header_style = Style::fg(color::FG).bold().bg("#232323");
-    screen.fill(2, 1, 79, 2, header_style);
+    screen.fill(2, 1, left, 2, header_style);
     screen.text(
         2,
         1,
         " status      review      instrument      rationale",
         header_style,
     );
-    screen.fill(2, 2, 79, content_bottom, Style::fg(color::FG));
+    screen.fill(2, 2, left, content_bottom, Style::fg(color::FG));
     let muted = Style::fg(color::MUTED);
-    screen.text(82, 1, "no decisions yet — press ", muted);
-    screen.put(107, 1, 'n', Style::fg(color::BLUE).bold());
-    screen.text(108, 1, " to record the context you want to revisit", muted);
+    screen.text(right + 2, 1, "no decisions yet — press ", muted);
+    screen.put(right + 27, 1, 'n', Style::fg(color::BLUE).bold());
+    screen.text(
+        right + 28,
+        1,
+        " to record the context you want to revisit",
+        muted,
+    );
     draw_status_bar_wide(screen, screen.h - 1, screen.w, "6 Decisions");
 }
 
 /// Decisions at 80x24: journal (focused) + timeline panes side by side.
 pub fn draw_decisions_narrow(screen: &mut Screen) {
-    let bottom = screen.h - 3; // 21 at h=24
-                               // Left: the decision journal table.
+    let (left, right, bottom) = pane_columns(screen);
+    // Left: the decision journal table.
     screen.pane(
         1,
         0,
-        32,
+        left,
         bottom,
         true,
         &[
@@ -583,24 +728,24 @@ pub fn draw_decisions_narrow(screen: &mut Screen) {
         ],
     );
     let header_style = Style::fg(color::FG).bold().bg("#232323");
-    screen.fill(2, 1, 32, 2, header_style);
+    screen.fill(2, 1, left, 2, header_style);
     screen.text(2, 1, " status      review      instr", header_style);
     // The focused table's empty rows still carry the foreground default.
-    screen.fill(2, 2, 32, bottom - 1, Style::fg(color::FG));
+    screen.fill(2, 2, left, bottom - 1, Style::fg(color::FG));
     // Bottom horizontal scrollbar: track, anchor, thumb to the edge.
     screen.fill(2, bottom - 1, 19, bottom, Style::fg("#3a3a3a"));
     screen.put(19, bottom - 1, '▊', Style::fg("#3a3a3a").bg("#0d0d0d"));
     screen.fill(
         20,
         bottom - 1,
-        32,
+        left,
         bottom,
         Style::fg(color::FG).bg("#0d0d0d"),
     );
 
     // Right: the timeline.
     screen.pane(
-        33,
+        right,
         0,
         screen.w - 2,
         bottom,
@@ -609,10 +754,80 @@ pub fn draw_decisions_narrow(screen: &mut Screen) {
         &pane_hints(&[("r", "review"), ("o", "research"), ("↑↓", "scroll")]),
     );
     let muted = Style::fg(color::MUTED);
-    screen.text(35, 1, "no decisions yet — press ", muted);
-    screen.put(60, 1, 'n', Style::fg(color::BLUE).bold());
-    screen.text(61, 1, " to record the", muted);
-    screen.text(35, 2, "context you want to revisit", muted);
+    screen.text(right + 2, 1, "no decisions yet — press ", muted);
+    screen.put(right + 27, 1, 'n', Style::fg(color::BLUE).bold());
+    screen.text(right + 28, 1, " to record the", muted);
+    screen.text(right + 2, 2, "context you want to revisit", muted);
 
     status_bar_narrow(screen, NarrowTab::Decisions);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Screen as _;
+    use crossterm::event::KeyModifiers;
+
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    #[test]
+    fn screen_owns_selection_filter_and_delete_confirmation() {
+        let date = chrono::NaiveDate::from_ymd_opt(2026, 9, 21).unwrap();
+        let decision = Decision {
+            id: "d1".into(),
+            instrument_id: "US:AAPL".into(),
+            rationale: "test".into(),
+            valuation_context: String::new(),
+            time_horizon: "1y".into(),
+            review_date: date,
+            invalidation_criteria: String::new(),
+            thesis_id: None,
+            thesis_claim_snapshot: None,
+            created_at: date.and_hms_opt(0, 0, 0).unwrap(),
+            status: "open".into(),
+        };
+        let mut screen = DecisionsScreen::default();
+        screen.set_data(Some(DecisionsData {
+            decisions: vec![decision.clone(), decision],
+            selected: 0,
+            reviews: Vec::new(),
+            current_price: None,
+            filter: String::new(),
+            spend: 0.0,
+            confirm_delete: false,
+        }));
+        assert_eq!(
+            screen.handle_key(key(KeyCode::Down)),
+            Some(Action::Decision(DecisionCommand::SelectionChanged))
+        );
+        assert_eq!(screen.selected_index(), 1);
+        assert_eq!(
+            screen.handle_key(key(KeyCode::Char('d'))),
+            Some(Action::Decision(DecisionCommand::ConfirmDelete))
+        );
+        assert!(screen.data().unwrap().confirm_delete);
+        assert_eq!(
+            screen.handle_key(key(KeyCode::Esc)),
+            Some(Action::Decision(DecisionCommand::Cancel))
+        );
+        assert!(!screen.data().unwrap().confirm_delete);
+        assert_eq!(screen.handle_key(key(KeyCode::Char('y'))), None);
+        screen.set_filter("AAPL".into());
+        assert_eq!(screen.filter(), "AAPL");
+        assert_eq!(screen.selected_index(), 0);
+    }
+
+    #[test]
+    fn pane_layout_tracks_terminal_width() {
+        for (width, expected_left) in [(80, 32), (120, 47), (140, 55), (200, 79)] {
+            let screen = Screen::new(width, 40);
+            let (left, right, bottom) = pane_columns(&screen);
+            assert_eq!(
+                (left, right, bottom),
+                (expected_left, expected_left + 1, 37)
+            );
+        }
+    }
 }

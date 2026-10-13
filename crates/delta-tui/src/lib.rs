@@ -60,6 +60,8 @@ impl Breakpoint {
 pub enum Action {
     /// No state change.
     Noop,
+    /// A Decisions-screen intent; the app performs persistence and navigation.
+    Decision(crate::screens::decisions::DecisionCommand),
     /// Shut the app down.
     Quit,
     /// Open a modal dialog by name.
