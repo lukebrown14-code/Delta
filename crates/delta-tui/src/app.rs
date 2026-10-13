@@ -25,11 +25,10 @@ use delta_tui::screens::decisions::{DecisionCommand, DecisionsData, DecisionsScr
 use delta_tui::screens::SettingsFocus;
 use delta_tui::screens::{
     draw_glossary_overlay, draw_home, draw_home_live, draw_home_narrow, draw_home_setup,
-    draw_home_wide, draw_research, draw_research_live, draw_research_narrow, draw_research_wide,
-    draw_theses_live, draw_thesis_form_runtime, draw_watchlist, draw_watchlist_add_results,
-    draw_watchlist_filter, draw_watchlist_narrow, draw_watchlist_narrow_list, draw_watchlist_wide,
-    AddSearchState, AskState, ResearchData, ResearchState, ResearchView, SettingsCommand,
-    SettingsComponent, ThesesPane, ThesesState,
+    draw_home_wide, draw_theses_live, draw_thesis_form_runtime, draw_watchlist,
+    draw_watchlist_add_results, draw_watchlist_filter, draw_watchlist_narrow,
+    draw_watchlist_narrow_list, draw_watchlist_wide, AddSearchState, AskState, ResearchComponent,
+    ResearchData, ResearchView, SettingsCommand, SettingsComponent, ThesesPane, ThesesState,
 };
 use delta_tui::theme::Palette;
 use delta_tui::{is_quit_key, workers, Action, Breakpoint, Component};
@@ -170,8 +169,7 @@ pub(crate) struct App {
     /// The Settings screen's interaction state.
     settings: SettingsComponent,
     theses: ThesesState,
-    research: Option<ResearchData>,
-    research_state: ResearchState,
+    research: ResearchComponent,
     ask: AskState,
     ask_worker: Option<tokio::task::JoinHandle<()>>,
     decisions: DecisionsScreen,
@@ -206,135 +204,14 @@ impl App {
     fn open_research_for_instrument(&mut self, instrument_id: &str) {
         self.tab = Tab::Research;
         if let Some(data) = load_research_for(&self.desk, instrument_id) {
-            self.research = Some(data);
-            self.research_state = ResearchState::default();
+            self.research.set_data(Some(data));
+            self.research.state = Default::default();
         }
     }
 
     fn handle_research_key(&mut self, key: KeyEvent) -> Option<Action> {
-        let state = &mut self.research_state;
-        if state.search_active {
-            match key.code {
-                KeyCode::Esc | KeyCode::Enter => state.search_active = false,
-                KeyCode::Backspace => {
-                    state.search.pop();
-                }
-                KeyCode::Char(c) => {
-                    state.search.push(c);
-                    state.selected = 0;
-                }
-                _ => return None,
-            }
-            return Some(Action::Noop);
-        }
-        match key.code {
-            KeyCode::Char('n') => Some(Action::GenerateReport),
-            KeyCode::Char('u') => self
-                .research
-                .as_ref()
-                .map(|data| Action::GatherCompany(data.company.clone())),
-            KeyCode::Char('e') => {
-                state.view = ResearchView::Evidence;
-                Some(Action::Noop)
-            }
-            KeyCode::Char('r') => {
-                state.view = ResearchView::Report;
-                Some(Action::Noop)
-            }
-            KeyCode::Char('t') => {
-                state.view = ResearchView::Company;
-                Some(Action::Noop)
-            }
-            KeyCode::Char('k') => {
-                state.cycle_kind();
-                state.view = ResearchView::Evidence;
-                Some(Action::Noop)
-            }
-            KeyCode::Char('l') => {
-                state.load_more();
-                Some(Action::Noop)
-            }
-            KeyCode::Char('o') => {
-                let data = self.research.as_ref()?;
-                let id = state
-                    .selected_id
-                    .clone()
-                    .or_else(|| state.selected_evidence_id(data))?;
-                let url = data
-                    .evidence
-                    .iter()
-                    .find(|item| item.id == id)?
-                    .url
-                    .as_ref()?;
-                if url.starts_with("https://") || url.starts_with("http://") {
-                    Some(Action::OpenSource(url.clone()))
-                } else {
-                    None
-                }
-            }
-            KeyCode::Char(' ') => {
-                if let Some(data) = &self.research {
-                    state.toggle_selected_price_run(data);
-                }
-                Some(Action::Noop)
-            }
-            KeyCode::Char('/') => {
-                state.search_active = true;
-                state.view = ResearchView::Evidence;
-                Some(Action::Noop)
-            }
-            KeyCode::Esc => {
-                if state.detail_open {
-                    state.detail_open = false;
-                } else {
-                    state.view = ResearchView::Company;
-                }
-                state.zoom = false;
-                Some(Action::Noop)
-            }
-            KeyCode::Enter if state.view == ResearchView::Report => {
-                if let Some(data) = &self.research {
-                    state.open_next_citation(data);
-                }
-                Some(Action::Noop)
-            }
-            KeyCode::Enter if state.view == ResearchView::Evidence => {
-                if let Some(data) = &self.research {
-                    state.selected_id = state.selected_evidence_id(data);
-                    state.detail_open = state.selected_id.is_some();
-                }
-                Some(Action::Noop)
-            }
-            KeyCode::Up if state.view == ResearchView::Report => {
-                state.report_scroll = state.report_scroll.saturating_sub(1);
-                Some(Action::Noop)
-            }
-            KeyCode::Down if state.view == ResearchView::Report => {
-                state.report_scroll += 1;
-                Some(Action::Noop)
-            }
-            KeyCode::Up => {
-                state.selected_id = None;
-                state.selected = state.selected.saturating_sub(1);
-                Some(Action::Noop)
-            }
-            KeyCode::Down => {
-                state.selected_id = None;
-                state.selected += 1;
-                Some(Action::Noop)
-            }
-            KeyCode::Char('z') => {
-                state.zoom = !state.zoom;
-                Some(Action::Noop)
-            }
-            KeyCode::Char('v') if state.selected_id.is_some() => {
-                if let (Some(data), Some(id)) = (&self.research, state.selected_id.clone()) {
-                    state.reveal_claim(data, &id, self.viewport.0 as usize);
-                }
-                Some(Action::Noop)
-            }
-            _ => None,
-        }
+        self.research.set_viewport_width(self.viewport.0 as usize);
+        delta_tui::Screen::handle_key(&mut self.research, key)
     }
 
     fn paint(&mut self, screen: &mut Screen) {
@@ -404,15 +281,7 @@ impl App {
                 }
             }
             Tab::Research => {
-                if let Some(data) = &self.research {
-                    draw_research_live(screen, data, &self.research_state);
-                } else {
-                    route!(
-                        draw_research_wide(screen),
-                        draw_research(screen),
-                        draw_research_narrow(screen)
-                    );
-                }
+                self.research.paint_into(screen);
             }
             Tab::Theses => draw_theses_live(screen, &self.theses),
             Tab::Ask => delta_tui::screens::draw_ask_live(screen, &self.ask),
@@ -854,9 +723,9 @@ impl App {
             .or_else(|| self.ask.instrument_ids().into_iter().next());
         if let Some(instrument) = instrument {
             self.open_research_for_instrument(&instrument);
-            self.research_state.view = ResearchView::Evidence;
-            self.research_state.selected_id = Some(citation);
-            self.research_state.detail_open = true;
+            self.research.state.view = ResearchView::Evidence;
+            self.research.state.selected_id = Some(citation);
+            self.research.state.detail_open = true;
         }
     }
 
@@ -2314,8 +2183,7 @@ pub(crate) async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> st
         overlay: None,
         settings,
         theses: ThesesState::default(),
-        research,
-        research_state: ResearchState::default(),
+        research: ResearchComponent::new(research),
         ask,
         ask_worker: None,
         decisions: DecisionsScreen::default(),
@@ -2388,10 +2256,10 @@ pub(crate) async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> st
                                     }));
                                 }
                                 Action::GenerateReport => {
-                                    if !app.research_state.busy {
-                                        app.research_state.busy = true;
-                                        app.research_state.error = None;
-                                        app.research_state.activity = app.research.as_ref().map(|data| {
+                                    if !app.research.state.busy {
+                                        app.research.state.busy = true;
+                                        app.research.state.error = None;
+                                        app.research.state.activity = app.research.data.as_ref().map(|data| {
                                             format!(
                                                 "generating report for {} via {} — esc to cancel…",
                                                 data.company, app.desk.settings.model
@@ -2399,7 +2267,7 @@ pub(crate) async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> st
                                         });
                                         app.status = "generating report".into();
                                         let config = app.desk.config_path.clone();
-                                        let company = app.research.as_ref().map(|r| r.company.clone());
+                                        let company = app.research.data.as_ref().map(|r| r.company.clone());
                                         let tx = research_tx.clone();
                                         let runtime = tokio::runtime::Handle::current();
                                         std::thread::spawn(move || {
@@ -2443,9 +2311,9 @@ pub(crate) async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> st
             }
             Some(result) = research_rx.recv() => {
                 dirty = true;
-                app.research_state.busy = false;
-                app.research_state.activity = None;
-                match result { Ok(data) => { app.research = Some(data); app.status = "report generated".into(); }, Err(error) => { app.research_state.error = Some(error.clone()); app.status = error; } }
+                app.research.state.busy = false;
+                app.research.state.activity = None;
+                match result { Ok(data) => { app.research.set_data(Some(data)); app.status = "report generated".into(); }, Err(error) => { app.research.state.error = Some(error.clone()); app.status = error; } }
             }
             _ = clock.tick() => {
                 // The home clock reads the wall clock; repaint once a second.
@@ -2615,8 +2483,7 @@ mod tests {
             overlay: None,
             settings,
             theses: ThesesState::default(),
-            research: None,
-            research_state: ResearchState::default(),
+            research: ResearchComponent::default(),
             ask: AskState::default(),
             ask_worker: None,
             decisions: DecisionsScreen::default(),
@@ -2684,7 +2551,7 @@ mod tests {
         });
         app.handle_key(key(KeyCode::Char('o')));
         assert_eq!(app.tab, Tab::Research);
-        assert_eq!(app.research_state.selected_id.as_deref(), Some("news:n1"));
+        assert_eq!(app.research.state.selected_id.as_deref(), Some("news:n1"));
         app.handle_key(key(KeyCode::Char('5')));
         app.handle_key(key(KeyCode::Char('s')));
         let Some(Overlay::SettingsForm(modal)) = &app.overlay else {
@@ -2732,7 +2599,7 @@ mod tests {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let mut app = app();
         app.tab = Tab::Research;
-        app.research = Some(
+        app.research.set_data(Some(
             ResearchData::load(
                 &root.join("fixtures/golden_seed.db"),
                 &root.join("fixtures/golden_reports"),
@@ -2742,18 +2609,20 @@ mod tests {
                 "USD",
             )
             .expect("research seed"),
-        );
+        ));
         app.handle_key(key(KeyCode::Char('r')));
-        assert_eq!(app.research_state.view, ResearchView::Report);
+        assert_eq!(app.research.state.view, ResearchView::Report);
         app.handle_key(key(KeyCode::Enter));
-        assert_eq!(app.research_state.view, ResearchView::Evidence);
+        assert_eq!(app.research.state.view, ResearchView::Evidence);
         let selected = app
-            .research_state
+            .research
+            .state
             .selected_id
             .as_ref()
             .expect("citation selection");
         assert!(app
             .research
+            .data
             .as_ref()
             .unwrap()
             .evidence
@@ -2763,19 +2632,19 @@ mod tests {
             app.handle_key(key(KeyCode::Char('o'))),
             Some(Action::OpenSource(url)) if url == "https://example.com/news/aapl-chip"
         ));
-        assert!(app.research_state.detail_open);
+        assert!(app.research.state.detail_open);
         app.handle_key(key(KeyCode::Char('v')));
-        assert_eq!(app.research_state.view, ResearchView::Report);
-        assert!(app.research_state.report_scroll > 0);
+        assert_eq!(app.research.state.view, ResearchView::Report);
+        assert!(app.research.state.report_scroll > 0);
         let mut frame = Screen::new(120, 40);
         app.paint(&mut frame);
         let visible: String = frame.cells.iter().map(|cell| cell.ch).collect();
         assert!(visible.contains("The announced chip"));
         app.handle_key(key(KeyCode::Esc));
-        assert!(!app.research_state.detail_open);
+        assert!(!app.research.state.detail_open);
         app.handle_key(key(KeyCode::Char('/')));
         assert_eq!(app.handle_key(key(KeyCode::Char('n'))), Some(Action::Noop));
-        assert_eq!(app.research_state.search, "n");
+        assert_eq!(app.research.state.search, "n");
         app.handle_key(key(KeyCode::Esc));
         assert_eq!(
             app.handle_key(key(KeyCode::Char('n'))),

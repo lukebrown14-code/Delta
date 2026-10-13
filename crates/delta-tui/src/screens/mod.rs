@@ -23,8 +23,8 @@ pub use home::{
     HomeFeed, HomeLiveData, HomeSetupData, HomeState,
 };
 pub use research::{
-    draw_research, draw_research_live, draw_research_narrow, draw_research_wide, ResearchData,
-    ResearchState, ResearchView,
+    draw_research, draw_research_live, draw_research_narrow, draw_research_wide, ResearchComponent,
+    ResearchData, ResearchState, ResearchView,
 };
 pub use settings::{
     comma, draw_settings, draw_settings_narrow, draw_settings_wide, exporter_world, human_size,
