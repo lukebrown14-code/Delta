@@ -578,7 +578,7 @@ fn paint_theses_base(screen: &mut Screen) {
         }),
     );
     if narrow {
-        paint_narrow_header(screen, claims.1 + 1, "#232323");
+        paint_narrow_header(screen, claims, claims.1 + 1, "#232323");
         screen.fill(
             claims.0 + 1,
             claims.1 + 2,
@@ -708,13 +708,18 @@ fn paint_theses_base(screen: &mut Screen) {
     }
 }
 
-fn paint_narrow_header(screen: &mut Screen, y: usize, background: &'static str) {
+fn paint_narrow_header(
+    screen: &mut Screen,
+    pane: super::PaneRect,
+    y: usize,
+    background: &'static str,
+) {
     let style = Style::fg(color::FG).bold().bg(background);
-    screen.fill(2, y, screen.w - 2, y + 1, style);
-    screen.text(2, y, "   Claim", style);
-    screen.text(49, y, "Health", style);
-    screen.text(62, y, "Tilt", style);
-    screen.text(72, y, "Queue", style);
+    screen.fill(pane.0 + 1, y, pane.2 - 1, y + 1, style);
+    screen.text(pane.0 + 1, y, "   Claim", style);
+    screen.text(pane.0 + 48, y, "Health", style);
+    screen.text(pane.0 + 61, y, "Tilt", style);
+    screen.text(pane.0 + 71, y, "Queue", style);
 }
 
 /// Overlay real thesis rows on the layout-driven base.
@@ -832,44 +837,69 @@ pub fn draw_theses_live(screen: &mut Screen, state: &ThesesState) {
     }
     let list_top = if state.filtering {
         if narrow {
-            paint_narrow_header(screen, 2, color::PANEL);
+            paint_narrow_header(screen, claims, claims.1 + 2, color::PANEL);
         }
         let right = claims.2 - 1;
-        screen.fill(2, 1, right, 2, Style::fg(color::FG).bg("#161616"));
-        screen.put(2, 1, '█', Style::fg(color::BLUE).bg("#161616"));
-        screen.put(3, 1, ' ', Style::DEFAULT.bg("#161616"));
-        screen.text(4, 1, &state.filter, Style::fg(color::FG).bg("#161616"));
+        screen.fill(
+            claims.0 + 1,
+            claims.1 + 1,
+            right,
+            claims.1 + 2,
+            Style::fg(color::FG).bg("#161616"),
+        );
         screen.put(
-            4 + state.filter.chars().count(),
-            1,
+            claims.0 + 1,
+            claims.1 + 1,
+            '█',
+            Style::fg(color::BLUE).bg("#161616"),
+        );
+        screen.put(
+            claims.0 + 2,
+            claims.1 + 1,
+            ' ',
+            Style::DEFAULT.bg("#161616"),
+        );
+        screen.text(
+            claims.0 + 3,
+            claims.1 + 1,
+            &state.filter,
+            Style::fg(color::FG).bg("#161616"),
+        );
+        screen.put(
+            claims.0 + 3 + state.filter.chars().count(),
+            claims.1 + 1,
             ' ',
             Style::fg(color::BLACK).bg(color::FG),
         );
-        screen.put(right - 1, 1, ' ', Style::DEFAULT.bg("#161616"));
+        screen.put(right - 1, claims.1 + 1, ' ', Style::DEFAULT.bg("#161616"));
         if narrow {
-            3
+            claims.1 + 3
         } else {
-            2
+            claims.1 + 2
         }
     } else if narrow {
-        2
+        claims.1 + 2
     } else {
-        1
+        claims.1 + 1
     };
-    if narrow {
-        screen.fill(2, list_top, claims.2 - 1, bottom, Style::fg(color::FG));
-    } else {
-        screen.fill(2, list_top, claims.2 - 1, bottom, Style::fg(color::FG));
+    screen.fill(
+        claims.0 + 1,
+        list_top,
+        claims.2 - 1,
+        bottom,
+        Style::fg(color::FG),
+    );
+    if !narrow {
         screen.fill(
             columns[0][1].0 + 1,
-            1,
+            columns[0][1].1 + 1,
             columns[0][1].2 - 1,
             bottom,
             Style::DEFAULT,
         );
         screen.fill(
             columns[0][2].0 + 1,
-            1,
+            columns[0][2].1 + 1,
             columns[0][2].2 - 1,
             bottom,
             Style::DEFAULT,
@@ -881,7 +911,7 @@ pub fn draw_theses_live(screen: &mut Screen, state: &ThesesState) {
             .to_lowercase()
             .contains(&state.filter.to_lowercase())
     });
-    for (i, row) in rows.enumerate().take(screen.h.saturating_sub(7)) {
+    for (i, row) in rows.enumerate().take(claims.3.saturating_sub(claims.1 + 5)) {
         let y = i + list_top;
         let health = row.state().as_str();
         let glyph = if row.thesis.status == "concluded" {
@@ -904,7 +934,7 @@ pub fn draw_theses_live(screen: &mut Screen, state: &ThesesState) {
             Style::fg(color::FG)
         };
         if selected {
-            screen.fill(2, y, if narrow { screen.w - 2 } else { 36 }, y + 1, style);
+            screen.fill(claims.0 + 1, y, claims.2 - 1, y + 1, style);
         }
         let max = if narrow { 44 } else { 32 };
         let text = format!("{glyph} {}", row.thesis.claim);
@@ -914,11 +944,11 @@ pub fn draw_theses_live(screen: &mut Screen, state: &ThesesState) {
             text
         };
         if selected {
-            screen.text(3, y, &text, style);
+            screen.text(claims.0 + 2, y, &text, style);
         } else {
-            screen.text(3, y, glyph, Style::fg(color::MUTED));
+            screen.text(claims.0 + 2, y, glyph, Style::fg(color::MUTED));
             screen.text(
-                5,
+                claims.0 + 4,
                 y,
                 text.strip_prefix(&format!("{glyph} ")).unwrap_or(&text),
                 style,
@@ -926,7 +956,7 @@ pub fn draw_theses_live(screen: &mut Screen, state: &ThesesState) {
         }
         if narrow {
             screen.text(
-                49,
+                claims.0 + 48,
                 y,
                 health,
                 if selected {
@@ -937,7 +967,7 @@ pub fn draw_theses_live(screen: &mut Screen, state: &ThesesState) {
             );
             if let Some(result) = &row.result {
                 if health != "emerging" {
-                    screen.text(62, y, &format!("{:+.2}", result.tilt), style);
+                    screen.text(claims.0 + 61, y, &format!("{:+.2}", result.tilt), style);
                 }
             }
             if let Some(pending) = state
@@ -946,7 +976,7 @@ pub fn draw_theses_live(screen: &mut Screen, state: &ThesesState) {
                 .filter(|count| **count > 0)
             {
                 screen.text(
-                    68,
+                    claims.0 + 67,
                     y,
                     &format!("{pending} pending"),
                     Style::fg(if state.focus_active {
@@ -962,14 +992,14 @@ pub fn draw_theses_live(screen: &mut Screen, state: &ThesesState) {
         return;
     };
     screen.fill(
-        2,
+        claims.0 + 1,
         bottom - 1,
-        if narrow { screen.w - 2 } else { 36 },
+        claims.2 - 1,
         bottom,
         Style::DEFAULT,
     );
     screen.text(
-        3,
+        claims.0 + 2,
         bottom - 1,
         &if state.filtering
             || (state.focus_active && state.view == ThesesPane::Detail && screen.w == 120)
@@ -984,16 +1014,18 @@ pub fn draw_theses_live(screen: &mut Screen, state: &ThesesState) {
     let health = row.state().as_str();
     if narrow {
         if !state.focus_active {
-            recolor_claims_focus(screen, screen.w - 2, bottom);
+            recolor_claims_focus(screen, claims.2 - 1, bottom);
         }
         return;
     }
-    let detail_x = 39;
-    let detail_width = screen.w.saturating_sub(43 + detail_x);
+    let detail = columns[0][1];
+    let evidence = columns[0][2];
+    let detail_x = detail.0 + 2;
+    let detail_width = detail.2.saturating_sub(detail_x + 2);
     let mut y = paint_wrapped(
         screen,
         detail_x,
-        1,
+        detail.1 + 1,
         detail_width,
         &row.thesis.claim,
         Style::fg(color::FG).bold(),
@@ -1189,13 +1221,19 @@ pub fn draw_theses_live(screen: &mut Screen, state: &ThesesState) {
             Style::fg(color::MUTED),
         );
     }
-    let evidence_x = screen.w.saturating_sub(40);
+    let evidence_x = evidence.0 + 1;
     let counts = result.map_or((0, 0, 0), |r| (r.support, r.against, r.neutral));
-    let separator = bottom - 8;
-    screen.fill(evidence_x, 3, screen.w - 2, separator, Style::fg(color::FG));
+    let separator = evidence.3 - 9;
+    screen.fill(
+        evidence_x,
+        evidence.1 + 3,
+        evidence.2 - 1,
+        separator,
+        Style::fg(color::FG),
+    );
     let x = screen.text(
         evidence_x + 1,
-        1,
+        evidence.1 + 1,
         &format!("+{}", counts.0),
         Style::fg(if evidence_toned {
             color::GREEN
@@ -1203,11 +1241,11 @@ pub fn draw_theses_live(screen: &mut Screen, state: &ThesesState) {
             "#9b9b9b"
         }),
     );
-    let x = screen.text(x, 1, " support", Style::fg(color::MUTED));
-    let x = screen.text(x, 1, "  ", Style::fg(color::FG));
+    let x = screen.text(x, evidence.1 + 1, " support", Style::fg(color::MUTED));
+    let x = screen.text(x, evidence.1 + 1, "  ", Style::fg(color::FG));
     let x = screen.text(
         x,
-        1,
+        evidence.1 + 1,
         &format!("−{}", counts.1),
         Style::fg(if evidence_toned {
             color::RED
@@ -1215,11 +1253,11 @@ pub fn draw_theses_live(screen: &mut Screen, state: &ThesesState) {
             "#8e8e8e"
         }),
     );
-    let x = screen.text(x, 1, " against", Style::fg(color::MUTED));
-    let x = screen.text(x, 1, "  ", Style::fg(color::FG));
+    let x = screen.text(x, evidence.1 + 1, " against", Style::fg(color::MUTED));
+    let x = screen.text(x, evidence.1 + 1, "  ", Style::fg(color::FG));
     let x = screen.text(
         x,
-        1,
+        evidence.1 + 1,
         &format!("?{}", counts.2),
         Style::fg(if evidence_toned {
             color::AMBER
@@ -1227,12 +1265,12 @@ pub fn draw_theses_live(screen: &mut Screen, state: &ThesesState) {
             "#a6a6a6"
         }),
     );
-    screen.text(x, 1, " neutral", Style::fg(color::MUTED));
+    screen.text(x, evidence.1 + 1, " neutral", Style::fg(color::MUTED));
     screen.fill(
         evidence_x,
-        2,
-        screen.w - 2,
-        3,
+        evidence.1 + 2,
+        evidence.2 - 1,
+        evidence.1 + 3,
         Style::fg(color::FG).bold().bg(if evidence_focused {
             "#232323"
         } else {
@@ -1241,7 +1279,7 @@ pub fn draw_theses_live(screen: &mut Screen, state: &ThesesState) {
     );
     screen.text(
         evidence_x + 1,
-        2,
+        evidence.1 + 2,
         "   ±  age   note",
         Style::fg(color::FG).bold().bg(if evidence_focused {
             "#232323"
@@ -1253,7 +1291,7 @@ pub fn draw_theses_live(screen: &mut Screen, state: &ThesesState) {
         .links
         .iter()
         .enumerate()
-        .take(screen.h.saturating_sub(14))
+        .take(evidence.3.saturating_sub(evidence.1 + 12))
     {
         let glyph = if link.accepted { "✓" } else { "•" };
         let side = match link.side.as_str() {
@@ -1281,7 +1319,13 @@ pub fn draw_theses_live(screen: &mut Screen, state: &ThesesState) {
             Style::fg(color::FG)
         };
         if i == state.evidence_selected {
-            screen.fill(evidence_x, i + 3, screen.w - 2, i + 4, style);
+            screen.fill(
+                evidence_x,
+                evidence.1 + i + 3,
+                evidence.2 - 1,
+                evidence.1 + i + 4,
+                style,
+            );
         }
         let note = if link.note.is_empty() {
             &link.evidence_id
@@ -1290,12 +1334,12 @@ pub fn draw_theses_live(screen: &mut Screen, state: &ThesesState) {
         };
         screen.text(
             evidence_x + 1,
-            i + 3,
+            evidence.1 + i + 3,
             &format!("{glyph}  {side}  {age:<4}  {}", truncate(note, 24)),
             style,
         );
     }
-    for x in evidence_x..screen.w - 2 {
+    for x in evidence_x..evidence.2 - 1 {
         screen.put(x, separator, '─', Style::fg(color::BORDER_BLURRED));
     }
     if let Some(link) = state.selected_link() {
@@ -1341,21 +1385,21 @@ pub fn draw_theses_live(screen: &mut Screen, state: &ThesesState) {
                 screen,
                 evidence_x + 1,
                 separator + 4,
-                36,
+                evidence.2.saturating_sub(evidence_x + 3),
                 &delta_services::cite(item),
                 Style::fg(color::MUTED),
             );
         }
     }
     if !state.focus_active {
-        recolor_claims_focus(screen, 36, bottom);
-        recolor_live_pane_chrome(screen, bottom);
+        recolor_claims_focus(screen, claims.2 - 1, bottom);
+        recolor_live_pane_chrome(screen, claims.2, evidence.2, bottom);
     }
 }
 
-fn recolor_live_pane_chrome(screen: &mut Screen, bottom: usize) {
+fn recolor_live_pane_chrome(screen: &mut Screen, start: usize, end: usize, bottom: usize) {
     for y in [0, bottom] {
-        for x in 37..screen.w - 1 {
+        for x in start..end {
             let cell = &mut screen.cells[y * screen.w + x];
             if cell.fg == Some(color::BLUE) {
                 cell.fg = Some("#898989");
@@ -1410,33 +1454,35 @@ fn draw_theses_narrow_detail(screen: &mut Screen, state: &ThesesState) {
         ],
         &hints,
     );
-    screen.fill(2, 1, screen.w - 2, bottom, Style::DEFAULT);
+    let content_x = pane.0 + 2;
+    let content_width = pane.2.saturating_sub(content_x + 2);
+    screen.fill(pane.0 + 1, pane.1 + 1, pane.2 - 1, bottom, Style::DEFAULT);
     if !evidence {
-        let width = screen.w - 6;
+        let width = content_width;
         let mut y = paint_wrapped(
             screen,
-            3,
-            1,
+            content_x,
+            pane.1 + 1,
             width,
             &row.thesis.claim,
             Style::fg(color::FG).bold(),
         ) + 1;
         let tilt = result.map_or(String::new(), |r| format!(" · tilt {:+.2}", r.tilt));
         screen.text(
-            3,
+            content_x,
             y,
             &format!(" {} {health}{tilt} ", mark(health)),
             Style::fg(color::MUTED).bold().bg(color::PANEL),
         );
         screen.text(
-            3 + 3 + health.len() + tilt.len(),
+            content_x + 3 + health.len() + tilt.len(),
             y,
             &format!("  {accepted} accepted"),
             Style::fg(color::MUTED).bold(),
         );
         y += 1;
         screen.text(
-            3,
+            content_x,
             y,
             &format!(
                 "{} · horizon {} · opened {}",
@@ -1462,7 +1508,7 @@ fn draw_theses_narrow_detail(screen: &mut Screen, state: &ThesesState) {
                     .collect::<Vec<_>>()
                     .join(", ");
                 screen.text(
-                    3,
+                    content_x,
                     y,
                     &truncate(&format!("moved by  {names}"), width),
                     Style::fg(color::MUTED),
@@ -1473,19 +1519,19 @@ fn draw_theses_narrow_detail(screen: &mut Screen, state: &ThesesState) {
         y += 1;
         y = paint_field(
             screen,
-            3,
+            content_x,
             y,
             width,
             "targets",
             &row.thesis.targets.join(", "),
         );
         if !row.thesis.scope.is_empty() {
-            y = paint_field(screen, 3, y, width, "scope", &row.thesis.scope);
+            y = paint_field(screen, content_x, y, width, "scope", &row.thesis.scope);
         }
         if !row.thesis.assumptions.is_empty() {
             y = paint_field(
                 screen,
-                3,
+                content_x,
                 y,
                 width,
                 "holds if",
@@ -1495,7 +1541,7 @@ fn draw_theses_narrow_detail(screen: &mut Screen, state: &ThesesState) {
         if !row.thesis.falsifiers.is_empty() {
             y = paint_field(
                 screen,
-                3,
+                content_x,
                 y,
                 width,
                 "breaks if",
@@ -1503,40 +1549,63 @@ fn draw_theses_narrow_detail(screen: &mut Screen, state: &ThesesState) {
             );
         }
         y += 1;
-        screen.text(3, y, "summary", Style::fg(color::MUTED).bold());
+        screen.text(content_x, y, "summary", Style::fg(color::MUTED).bold());
         let summary = state
             .summary
             .as_ref()
             .map_or("no summary yet — press s to summarise", |s| {
                 s.summary.as_str()
             });
-        paint_wrapped(screen, 3, y + 1, width, summary, Style::fg(color::MUTED));
+        paint_wrapped(
+            screen,
+            content_x,
+            y + 1,
+            width,
+            summary,
+            Style::fg(color::MUTED),
+        );
     } else {
         let (support, against, neutral) =
             result.map_or((0, 0, 0), |r| (r.support, r.against, r.neutral));
-        let x = screen.text(3, 1, &format!("+{support}"), Style::fg(color::GREEN));
-        let x = screen.text(x, 1, " support", Style::fg(color::MUTED));
-        let x = screen.text(x, 1, "  ", Style::fg(color::FG));
-        let x = screen.text(x, 1, &format!("−{against}"), Style::fg(color::RED));
-        let x = screen.text(x, 1, " against", Style::fg(color::MUTED));
-        let x = screen.text(x, 1, "  ", Style::fg(color::FG));
-        let x = screen.text(x, 1, &format!("?{neutral}"), Style::fg(color::AMBER));
-        screen.text(x, 1, " neutral", Style::fg(color::MUTED));
+        let x = screen.text(
+            content_x,
+            pane.1 + 1,
+            &format!("+{support}"),
+            Style::fg(color::GREEN),
+        );
+        let x = screen.text(x, pane.1 + 1, " support", Style::fg(color::MUTED));
+        let x = screen.text(x, pane.1 + 1, "  ", Style::fg(color::FG));
+        let x = screen.text(x, pane.1 + 1, &format!("−{against}"), Style::fg(color::RED));
+        let x = screen.text(x, pane.1 + 1, " against", Style::fg(color::MUTED));
+        let x = screen.text(x, pane.1 + 1, "  ", Style::fg(color::FG));
+        let x = screen.text(
+            x,
+            pane.1 + 1,
+            &format!("?{neutral}"),
+            Style::fg(color::AMBER),
+        );
+        screen.text(x, pane.1 + 1, " neutral", Style::fg(color::MUTED));
         screen.fill(
-            2,
-            2,
-            screen.w - 2,
-            3,
+            pane.0 + 1,
+            pane.1 + 2,
+            pane.2 - 1,
+            pane.1 + 3,
             Style::fg(color::FG).bold().bg("#232323"),
         );
         screen.text(
-            3,
-            2,
+            content_x,
+            pane.1 + 2,
             "   ±  age   note",
             Style::fg(color::FG).bold().bg("#232323"),
         );
-        let separator = bottom - 8;
-        screen.fill(2, 4, screen.w - 2, separator, Style::fg(color::FG));
+        let separator = pane.3 - 9;
+        screen.fill(
+            pane.0 + 1,
+            pane.1 + 4,
+            pane.2 - 1,
+            separator,
+            Style::fg(color::FG),
+        );
         for (i, link) in state
             .links
             .iter()
@@ -1568,7 +1637,13 @@ fn draw_theses_narrow_detail(screen: &mut Screen, state: &ThesesState) {
                 Style::fg(color::FG)
             };
             if i == state.evidence_selected {
-                screen.fill(2, i + 3, screen.w - 2, i + 4, style);
+                screen.fill(
+                    pane.0 + 1,
+                    pane.1 + i + 3,
+                    pane.2 - 1,
+                    pane.1 + i + 4,
+                    style,
+                );
             }
             let note = if link.note.is_empty() {
                 &link.evidence_id
@@ -1576,16 +1651,16 @@ fn draw_theses_narrow_detail(screen: &mut Screen, state: &ThesesState) {
                 &link.note
             };
             screen.text(
-                3,
-                i + 3,
+                content_x,
+                pane.1 + i + 3,
                 &format!(
                     "{glyph}  {side}  {age:<4}  {}",
-                    truncate(note, screen.w - 24)
+                    truncate(note, pane.2 - pane.0 - 22)
                 ),
                 style,
             );
         }
-        for x in 2..screen.w - 2 {
+        for x in pane.0 + 1..pane.2 - 1 {
             screen.put(x, separator, '─', Style::fg(color::BORDER_BLURRED));
         }
         if let Some(link) = state.selected_link() {
@@ -1604,16 +1679,16 @@ fn draw_theses_narrow_detail(screen: &mut Screen, state: &ThesesState) {
             } else {
                 color::AMBER
             };
-            let x = screen.text(3, separator + 1, acceptance, Style::fg(tone).bold());
+            let x = screen.text(content_x, separator + 1, acceptance, Style::fg(tone).bold());
             let x = screen.text(x, separator + 1, " · ", Style::fg(color::MUTED));
             screen.text(x, separator + 1, side, Style::fg(tone));
-            screen.text(3, separator + 2, &link.note, Style::fg(color::FG));
+            screen.text(content_x, separator + 2, &link.note, Style::fg(color::FG));
             if let Some(item) = state.items.get(&link.evidence_id) {
                 paint_wrapped(
                     screen,
-                    3,
+                    content_x,
                     separator + 4,
-                    screen.w - 6,
+                    content_width,
                     &delta_services::cite(item),
                     Style::fg(color::MUTED),
                 );

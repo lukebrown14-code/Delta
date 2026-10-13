@@ -468,9 +468,9 @@ fn render_home_live(screen: &mut Screen, home: &HomeState, data: &HomeLiveData) 
             ],
             &pane_hints(&[("enter", "open"), ("tab", "next box")]),
         );
-        paint_home_agenda_rows(screen, agenda.1 + 1);
-        paint_due_row(screen, agenda.1 + 1, data.due_reviews);
-        paint_stale_row(screen, agenda.1 + 4, data.stale_sources);
+        paint_home_agenda_rows(screen, agenda, agenda.1 + 1);
+        paint_due_row(screen, agenda, agenda.1 + 1, data.due_reviews);
+        paint_stale_row(screen, agenda, agenda.1 + 4, data.stale_sources);
         return;
     }
 
@@ -807,9 +807,9 @@ fn render_home_live(screen: &mut Screen, home: &HomeState, data: &HomeLiveData) 
         ],
         &pane_hints(&[("enter", "open"), ("tab", "next box")]),
     );
-    paint_home_agenda_rows(screen, agenda_top + 1);
-    paint_due_row(screen, agenda_top + 1, data.due_reviews);
-    paint_stale_row(screen, agenda_top + 4, data.stale_sources);
+    paint_home_agenda_rows(screen, agenda, agenda_top + 1);
+    paint_due_row(screen, agenda, agenda_top + 1, data.due_reviews);
+    paint_stale_row(screen, agenda, agenda_top + 4, data.stale_sources);
 }
 
 fn style_table_row(
@@ -828,41 +828,46 @@ fn style_table_row(
     }
 }
 
-fn paint_home_agenda_rows(screen: &mut Screen, first_row: usize) {
+fn paint_home_agenda_rows(screen: &mut Screen, pane: super::PaneRect, first_row: usize) {
     for (offset, key) in ["6", "4", "3", "2"].into_iter().enumerate() {
         let y = first_row + offset;
-        screen.text(3, y, "▸", Style::fg(color::BLUE));
-        screen.text(5, y, key, Style::fg(color::BLUE).bold());
+        screen.text(pane.0 + 2, y, "▸", Style::fg(color::BLUE));
+        screen.text(pane.0 + 4, y, key, Style::fg(color::BLUE).bold());
     }
     for (offset, message) in [" no falsifier hits", " no earnings in the next 7 days"]
         .into_iter()
         .enumerate()
     {
         let y = first_row + offset + 1;
-        screen.text(8, y, "✓", Style::fg(color::MUTED));
-        screen.text(9, y, message, Style::fg(color::MUTED));
+        screen.text(pane.0 + 7, y, "✓", Style::fg(color::MUTED));
+        screen.text(pane.0 + 8, y, message, Style::fg(color::MUTED));
     }
 }
 
-fn paint_due_row(screen: &mut Screen, y: usize, due: usize) {
-    screen.fill(8, y, screen.w - 4, y + 1, Style::DEFAULT);
+fn paint_due_row(screen: &mut Screen, pane: super::PaneRect, y: usize, due: usize) {
+    screen.fill(pane.0 + 7, y, pane.2 - 3, y + 1, Style::DEFAULT);
     if due > 0 {
         screen.text(
-            8,
+            pane.0 + 7,
             y,
             &format!("{due} decision review due"),
             Style::fg(color::MUTED).bold(),
         );
     } else {
-        screen.text(8, y, "✓ no decision reviews due", Style::fg(color::MUTED));
+        screen.text(
+            pane.0 + 7,
+            y,
+            "✓ no decision reviews due",
+            Style::fg(color::MUTED),
+        );
     }
 }
 
-fn paint_stale_row(screen: &mut Screen, y: usize, stale: usize) {
-    screen.fill(8, y, screen.w - 4, y + 1, Style::DEFAULT);
+fn paint_stale_row(screen: &mut Screen, pane: super::PaneRect, y: usize, stale: usize) {
+    screen.fill(pane.0 + 7, y, pane.2 - 3, y + 1, Style::DEFAULT);
     if stale > 0 {
         screen.text(
-            8,
+            pane.0 + 7,
             y,
             &format!(
                 "⚠ {stale} stale source{}",
@@ -871,7 +876,12 @@ fn paint_stale_row(screen: &mut Screen, y: usize, stale: usize) {
             Style::fg(color::AMBER),
         );
     } else {
-        screen.text(8, y, "✓ bars and reports fresh", Style::fg(color::MUTED));
+        screen.text(
+            pane.0 + 7,
+            y,
+            "✓ bars and reports fresh",
+            Style::fg(color::MUTED),
+        );
     }
 }
 

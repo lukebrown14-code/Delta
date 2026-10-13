@@ -736,6 +736,7 @@ fn setup_column(
     provider_row(
         screen,
         provider_pane.1 + 1,
+        provider_pane.0,
         pane_right,
         provider_focused && state.provider_selected == 0,
         data,
@@ -743,6 +744,7 @@ fn setup_column(
     model_row(
         screen,
         provider_pane.1 + 2,
+        provider_pane.0,
         pane_right,
         provider_focused && state.provider_selected == 1,
         data,
@@ -773,7 +775,7 @@ fn setup_column(
     );
     if data.plugins.is_empty() {
         screen.text(
-            3,
+            plugins_pane.0 + 2,
             plugin_y + 1,
             "no plugins discovered",
             Style::fg(color::MUTED),
@@ -807,7 +809,7 @@ fn setup_column(
             table_row(
                 screen,
                 plugin_y + 1 + row,
-                pane_right,
+                (plugins_pane.0, pane_right),
                 &cells,
                 &cols,
                 index == state.plugin_selected,
@@ -819,7 +821,14 @@ fn setup_column(
     // Data sources & markets pane.
     let y = sources_pane.1;
     let mut cursor = y + 1;
-    section_heading(screen, cursor, pane_right, "sources", data.sources.len());
+    section_heading(
+        screen,
+        cursor,
+        sources_pane.0,
+        pane_right,
+        "sources",
+        data.sources.len(),
+    );
     cursor += 1;
     if !data.sources.is_empty() {
         let rows: Vec<[String; 3]> = data
@@ -845,6 +854,7 @@ fn setup_column(
         table_header(
             screen,
             cursor,
+            sources_pane.0,
             pane_right,
             &["Source", "Quality", "Status"],
             &cols,
@@ -855,7 +865,7 @@ fn setup_column(
             table_row(
                 screen,
                 cursor,
-                pane_right,
+                (sources_pane.0, pane_right),
                 cells,
                 &cols,
                 row == state.source_selected,
@@ -865,7 +875,14 @@ fn setup_column(
         }
     }
     cursor += 1; // #cfg-markets-head margin-top: 1
-    section_heading(screen, cursor, pane_right, "markets", data.markets.len());
+    section_heading(
+        screen,
+        cursor,
+        sources_pane.0,
+        pane_right,
+        "markets",
+        data.markets.len(),
+    );
     cursor += 1;
     let market_rows: Vec<[String; 4]> = data
         .markets
@@ -887,6 +904,7 @@ fn setup_column(
     table_header(
         screen,
         cursor,
+        sources_pane.0,
         pane_right,
         &["ID", "Market", "Currency", "Yahoo"],
         &market_cols,
@@ -897,7 +915,7 @@ fn setup_column(
         table_row(
             screen,
             cursor,
-            pane_right,
+            (sources_pane.0, pane_right),
             cells,
             &market_cols,
             row == state.market_selected,
@@ -921,8 +939,15 @@ fn setup_column(
     cursor + 1
 }
 
-fn section_heading(screen: &mut Screen, y: usize, pane_right: usize, label: &str, count: usize) {
-    screen.text(3, y, label, Style::fg(color::MUTED).bold());
+fn section_heading(
+    screen: &mut Screen,
+    y: usize,
+    pane_left: usize,
+    pane_right: usize,
+    label: &str,
+    count: usize,
+) {
+    screen.text(pane_left + 2, y, label, Style::fg(color::MUTED).bold());
     if count > 0 {
         screen.text_right(
             pane_right - 1,
@@ -952,13 +977,14 @@ fn columns<const N: usize>(headers: &[&str; N], rows: &[[String; N]]) -> [usize;
 fn table_header(
     screen: &mut Screen,
     y: usize,
+    pane_left: usize,
     pane_right: usize,
     headers: &[&str],
     cols: &[usize],
 ) {
     let style = Style::fg(color::FG).bg(color::PANEL).bold();
-    screen.fill(2, y, pane_right, y + 1, style);
-    let mut x = 2usize;
+    screen.fill(pane_left + 1, y, pane_right, y + 1, style);
+    let mut x = pane_left + 1;
     for (index, header) in headers.iter().enumerate() {
         screen.put(x, y, ' ', style);
         screen.text(x + 1, y, header, style);
@@ -971,12 +997,13 @@ fn table_header(
 fn table_row(
     screen: &mut Screen,
     y: usize,
-    pane_right: usize,
+    pane: (usize, usize),
     cells: &[String],
     cols: &[usize],
     cursor: bool,
     focused: bool,
 ) {
+    let (pane_left, pane_right) = pane;
     let style = if focused {
         Style::fg(color::WHITE).bg(color::BLUE_BG).bold()
     } else if cursor {
@@ -984,8 +1011,8 @@ fn table_row(
     } else {
         Style::fg(color::FG)
     };
-    screen.fill(2, y, pane_right, y + 1, style);
-    let mut x = 2usize;
+    screen.fill(pane_left + 1, y, pane_right, y + 1, style);
+    let mut x = pane_left + 1;
     for (index, cell) in cells.iter().enumerate() {
         if x + 1 >= pane_right {
             break;
@@ -1002,13 +1029,14 @@ fn table_row(
 fn provider_row(
     screen: &mut Screen,
     y: usize,
+    pane_left: usize,
     pane_right: usize,
     selected: bool,
     data: &SettingsData,
 ) {
     if selected {
         let style = Style::fg(color::WHITE).bg(color::BLUE_BG).bold();
-        screen.fill(2, y, pane_right, y + 1, style);
+        screen.fill(pane_left + 1, y, pane_right, y + 1, style);
         let text = if data.provider.is_empty() {
             "provider: ○ none — press p".to_string()
         } else {
@@ -1022,16 +1050,21 @@ fn provider_row(
                 }
             )
         };
-        screen.text(3, y, &text, style);
+        screen.text(pane_left + 2, y, &text, style);
         return;
     }
     let base = Style::fg(color::FG);
-    screen.fill(2, y, pane_right, y + 1, base);
+    screen.fill(pane_left + 1, y, pane_right, y + 1, base);
     if data.provider.is_empty() {
-        screen.text(3, y, "provider: ○ none — press p", Style::fg(color::RED));
+        screen.text(
+            pane_left + 2,
+            y,
+            "provider: ○ none — press p",
+            Style::fg(color::RED),
+        );
         return;
     }
-    let x = screen.text(3, y, "provider: ", base.bold());
+    let x = screen.text(pane_left + 2, y, "provider: ", base.bold());
     let dot = if data.provider_connected {
         Style::fg(color::GREEN)
     } else {
@@ -1048,6 +1081,7 @@ fn provider_row(
 fn model_row(
     screen: &mut Screen,
     y: usize,
+    pane_left: usize,
     pane_right: usize,
     selected: bool,
     data: &SettingsData,
@@ -1055,17 +1089,17 @@ fn model_row(
     let base = Style::fg(color::FG);
     if selected {
         let style = Style::fg(color::WHITE).bg(color::BLUE_BG).bold();
-        screen.fill(2, y, pane_right, y + 1, style);
+        screen.fill(pane_left + 1, y, pane_right, y + 1, style);
         let text = if data.model.is_empty() {
             "model: not chosen — press m".to_string()
         } else {
             format!("model: {}", data.model)
         };
-        screen.text(3, y, &text, style);
+        screen.text(pane_left + 2, y, &text, style);
         return;
     }
-    screen.fill(2, y, pane_right, y + 1, base);
-    let x = screen.text(3, y, "model: ", base.bold());
+    screen.fill(pane_left + 1, y, pane_right, y + 1, base);
+    let x = screen.text(pane_left + 2, y, "model: ", base.bold());
     if data.model.is_empty() {
         screen.text(x, y, "not chosen — press m", Style::fg(color::AMBER));
     } else {

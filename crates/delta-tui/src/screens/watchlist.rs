@@ -334,7 +334,7 @@ fn render_watchlist_normal(screen: &mut Screen, state: &WatchlistState, filter: 
     }
     draw_status_bar(screen, screen.h - 1, w, false);
     if let Some(query) = filter {
-        paint_filter_input(screen, query, list.2 - 1);
+        paint_filter_input(screen, query, list);
     }
 }
 
@@ -342,7 +342,8 @@ fn render_watchlist_normal(screen: &mut Screen, state: &WatchlistState, filter: 
 fn render_watchlist_filter(screen: &mut Screen, state: &WatchlistState, query: &str) {
     if screen.w < 100 {
         render_watchlist_narrow_list(screen, state, true);
-        paint_filter_input(screen, query, screen.w - 2);
+        let list = watchlist_panes(screen)[0][0];
+        paint_filter_input(screen, query, list);
     } else if screen.w >= 160 {
         render_watchlist_wide(screen, state, Some(query));
     } else {
@@ -350,19 +351,22 @@ fn render_watchlist_filter(screen: &mut Screen, state: &WatchlistState, query: &
     }
 }
 
-fn paint_filter_input(screen: &mut Screen, query: &str, end: usize) {
+fn paint_filter_input(screen: &mut Screen, query: &str, pane: super::PaneRect) {
+    let x = pane.0 + 1;
+    let y = pane.1 + 1;
+    let end = pane.2 - 1;
     let input = Style::fg(color::FG).bg("#161616");
-    screen.fill(2, 1, end, 2, input);
-    screen.put(2, 1, '█', Style::fg(color::BLUE).bg("#161616"));
-    screen.put(3, 1, ' ', Style::DEFAULT.bg("#161616"));
-    screen.text(4, 1, query, input);
+    screen.fill(x, y, end, y + 1, input);
+    screen.put(x, y, '█', Style::fg(color::BLUE).bg("#161616"));
+    screen.put(x + 1, y, ' ', Style::DEFAULT.bg("#161616"));
+    screen.text(x + 2, y, query, input);
     screen.put(
-        4 + query.chars().count(),
-        1,
+        x + 2 + query.chars().count(),
+        y,
         ' ',
         Style::fg(color::BLACK).bg(color::FG),
     );
-    screen.put(end - 1, 1, ' ', Style::DEFAULT.bg("#161616"));
+    screen.put(end - 1, y, ' ', Style::DEFAULT.bg("#161616"));
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1535,7 +1539,7 @@ fn render_watchlist_wide(screen: &mut Screen, state: &WatchlistState, filter: Op
         );
         draw_status_bar_wide(screen, screen.h - 1, w, "2 Watchlist");
         if let Some(query) = filter {
-            paint_filter_input(screen, query, list.2 - 1);
+            paint_filter_input(screen, query, list);
         }
         return;
     };
@@ -1698,7 +1702,7 @@ fn render_watchlist_wide(screen: &mut Screen, state: &WatchlistState, filter: Op
 
     draw_status_bar_wide(screen, screen.h - 1, w, "2 Watchlist");
     if let Some(query) = filter {
-        paint_filter_input(screen, query, list.2 - 1);
+        paint_filter_input(screen, query, list);
     }
 }
 
