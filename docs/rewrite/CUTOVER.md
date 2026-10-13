@@ -13,9 +13,6 @@ release packaging, and maintainer gates remain. The cutover is one PR into
 - [ ] Service parity: every `delta/services.py` operation plus reports, chat,
       theses, decisions and review match Python on the shared seed.
 - [ ] End-of-phase adversarial reviewer pass, findings triaged.
-- [ ] Benchmarks re-recorded on the populated app (`docs/rewrite/BENCHMARKS.md`):
-      launch, RSS, chart scrub, 50 live tickers. Local smoke measurements are
-      recorded; a repeatable first-frame run remains.
 - [ ] Packaging: validate cargo-dist archives and publish a GitHub Release
       from the tag workflow. The macOS arm64 archive and checksum were checked
       locally, and the dist plan passed in PR #37; a tag publish remains.
@@ -27,6 +24,9 @@ release packaging, and maintainer gates remain. The cutover is one PR into
 - [ ] **[gate]** Approve the PR merging `rewrite/rust` into `main`.
 - [ ] In the cutover PR: remove `delta/`, `tests/`, `uv.lock`, `pyproject.toml`
       (keep `fixtures/` and `docs/`); CI runs the Rust gates only.
+
+Populated local smoke measurements are in `BENCHMARKS.md`. Issue #26 treats
+repeatable launch, RSS, and frame benchmarks as informational work after V1.
 
 ## Keys / environment (current live app)
 
