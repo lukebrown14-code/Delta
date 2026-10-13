@@ -2,6 +2,8 @@ use super::status_bar::{
     draw_status_bar_nav, draw_status_bar_wide, pane_hints, status_bar_narrow, NarrowTab,
 };
 use crate::screen::{color, Screen, Style};
+use crate::{Action, Component};
+use crossterm::event::{KeyCode, KeyEvent};
 use delta_core::db::Db;
 use delta_services::{evidence, read_report, render_markdown, EvidenceItem, Report};
 use std::path::Path;
@@ -87,6 +89,201 @@ pub struct ResearchState {
     pub busy: bool,
     pub activity: Option<String>,
     pub error: Option<String>,
+}
+
+/// Owns Research data and interaction state. The app supplies refreshed data
+/// and executes returned service/browser actions; key and view state stay here.
+#[derive(Default)]
+pub struct ResearchComponent {
+    pub data: Option<ResearchData>,
+    pub state: ResearchState,
+    viewport_width: usize,
+}
+
+impl ResearchComponent {
+    pub fn new(data: Option<ResearchData>) -> Self {
+        Self {
+            data,
+            ..Self::default()
+        }
+    }
+
+    pub fn set_data(&mut self, data: Option<ResearchData>) {
+        self.data = data;
+    }
+
+    pub fn set_viewport_width(&mut self, width: usize) {
+        self.viewport_width = width;
+    }
+
+    pub fn paint_into(&self, screen: &mut Screen) {
+        let width = screen.w as u16;
+        match &self.data {
+            Some(data) => draw_research_live(screen, data, &self.state),
+            None if crate::Breakpoint::from_width(width) == crate::Breakpoint::Wide => {
+                draw_research_wide(screen)
+            }
+            None if crate::Breakpoint::from_width(width) == crate::Breakpoint::Narrow => {
+                draw_research_narrow(screen)
+            }
+            None => draw_research(screen),
+        }
+    }
+}
+
+impl crate::Screen for ResearchComponent {
+    fn name(&self) -> &'static str {
+        "reports"
+    }
+
+    fn handle_key(&mut self, key: KeyEvent) -> Option<Action> {
+        let state = &mut self.state;
+        if state.search_active {
+            match key.code {
+                KeyCode::Esc | KeyCode::Enter => state.search_active = false,
+                KeyCode::Backspace => {
+                    state.search.pop();
+                }
+                KeyCode::Char(c) => {
+                    state.search.push(c);
+                    state.selected = 0;
+                }
+                _ => return None,
+            }
+            return Some(Action::Noop);
+        }
+        match key.code {
+            KeyCode::Char('n') => Some(Action::GenerateReport),
+            KeyCode::Char('u') => self
+                .data
+                .as_ref()
+                .map(|data| Action::GatherCompany(data.company.clone())),
+            KeyCode::Char('e') => {
+                state.view = ResearchView::Evidence;
+                Some(Action::Noop)
+            }
+            KeyCode::Char('r') => {
+                state.view = ResearchView::Report;
+                Some(Action::Noop)
+            }
+            KeyCode::Char('t') => {
+                state.view = ResearchView::Company;
+                Some(Action::Noop)
+            }
+            KeyCode::Char('k') => {
+                state.cycle_kind();
+                state.view = ResearchView::Evidence;
+                Some(Action::Noop)
+            }
+            KeyCode::Char('l') => {
+                state.load_more();
+                Some(Action::Noop)
+            }
+            KeyCode::Char('o') => {
+                let data = self.data.as_ref()?;
+                let id = state
+                    .selected_id
+                    .clone()
+                    .or_else(|| state.selected_evidence_id(data))?;
+                let url = data
+                    .evidence
+                    .iter()
+                    .find(|item| item.id == id)?
+                    .url
+                    .as_ref()?;
+                if url.starts_with("https://") || url.starts_with("http://") {
+                    Some(Action::OpenSource(url.clone()))
+                } else {
+                    None
+                }
+            }
+            KeyCode::Char(' ') => {
+                if let Some(data) = &self.data {
+                    state.toggle_selected_price_run(data);
+                }
+                Some(Action::Noop)
+            }
+            KeyCode::Char('/') => {
+                state.search_active = true;
+                state.view = ResearchView::Evidence;
+                Some(Action::Noop)
+            }
+            KeyCode::Esc => {
+                if state.detail_open {
+                    state.detail_open = false;
+                } else {
+                    state.view = ResearchView::Company;
+                }
+                state.zoom = false;
+                Some(Action::Noop)
+            }
+            KeyCode::Enter if state.view == ResearchView::Report => {
+                if let Some(data) = &self.data {
+                    state.open_next_citation(data);
+                }
+                Some(Action::Noop)
+            }
+            KeyCode::Enter if state.view == ResearchView::Evidence => {
+                if let Some(data) = &self.data {
+                    state.selected_id = state.selected_evidence_id(data);
+                    state.detail_open = state.selected_id.is_some();
+                }
+                Some(Action::Noop)
+            }
+            KeyCode::Up if state.view == ResearchView::Report => {
+                state.report_scroll = state.report_scroll.saturating_sub(1);
+                Some(Action::Noop)
+            }
+            KeyCode::Down if state.view == ResearchView::Report => {
+                state.report_scroll += 1;
+                Some(Action::Noop)
+            }
+            KeyCode::Up => {
+                state.selected_id = None;
+                state.selected = state.selected.saturating_sub(1);
+                Some(Action::Noop)
+            }
+            KeyCode::Down => {
+                state.selected_id = None;
+                state.selected += 1;
+                Some(Action::Noop)
+            }
+            KeyCode::Char('z') => {
+                state.zoom = !state.zoom;
+                Some(Action::Noop)
+            }
+            KeyCode::Char('v') if state.selected_id.is_some() => {
+                if let (Some(data), Some(id)) = (&self.data, state.selected_id.clone()) {
+                    state.reveal_claim(data, &id, self.viewport_width);
+                }
+                Some(Action::Noop)
+            }
+            _ => None,
+        }
+    }
+
+    fn update(&mut self, _action: Action) {}
+
+    fn draw(&mut self, frame: &mut ratatui::Frame, area: ratatui::layout::Rect) {
+        self.viewport_width = area.width as usize;
+        let mut screen = Screen::new(area.width as usize, area.height as usize);
+        self.paint_into(&mut screen);
+        crate::screen::blit(frame, &screen, area);
+    }
+}
+
+impl Component for ResearchComponent {
+    fn handle_key(&mut self, key: KeyEvent) -> Option<Action> {
+        crate::Screen::handle_key(self, key)
+    }
+
+    fn update(&mut self, action: Action) {
+        crate::Screen::update(self, action)
+    }
+
+    fn draw(&mut self, frame: &mut ratatui::Frame, area: ratatui::layout::Rect) {
+        crate::Screen::draw(self, frame, area)
+    }
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
