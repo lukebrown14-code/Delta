@@ -1014,7 +1014,7 @@ pub fn draw_theses_live(screen: &mut Screen, state: &ThesesState) {
     let health = row.state().as_str();
     if narrow {
         if !state.focus_active {
-            recolor_claims_focus(screen, claims.2 - 1, bottom);
+            recolor_claims_focus(screen, claims);
         }
         return;
     }
@@ -1392,7 +1392,7 @@ pub fn draw_theses_live(screen: &mut Screen, state: &ThesesState) {
         }
     }
     if !state.focus_active {
-        recolor_claims_focus(screen, claims.2 - 1, bottom);
+        recolor_claims_focus(screen, claims);
         recolor_live_pane_chrome(screen, claims.2, evidence.2, bottom);
     }
 }
@@ -1738,9 +1738,9 @@ fn paint_wrapped(
     y + lines.len()
 }
 
-fn recolor_claims_focus(screen: &mut Screen, right: usize, bottom: usize) {
-    for y in 0..=bottom {
-        for x in 1..=right {
+fn recolor_claims_focus(screen: &mut Screen, pane: super::PaneRect) {
+    for y in pane.1..pane.3 {
+        for x in pane.0..pane.2 {
             let cell = &mut screen.cells[y * screen.w + x];
             if cell.fg == Some(color::BLUE) {
                 cell.fg = Some("#898989");

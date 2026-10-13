@@ -909,15 +909,7 @@ fn render_home_empty_normal(screen: &mut Screen, home: &HomeState) {
     let middle_right = panes[1][1];
     let agenda = panes[2][0];
 
-    // Header row: inked DELTA chip, "overview", clock right-aligned.
-    screen.put(0, 0, ' ', Style::DEFAULT);
-    let chip = Style::fg(color::WHITE).bg(color::BLUE_BG).bold();
-    screen.put(1, 0, ' ', chip);
-    screen.text(2, 0, "DELTA", chip);
-    screen.put(7, 0, ' ', chip);
-    screen.text(10, 0, "overview", Style::fg(color::MUTED));
-    let clock_x = w - 1 - home.clock.chars().count();
-    screen.text(clock_x, 0, &home.clock, Style::fg(color::MUTED));
+    paint_home_header(screen, home);
 
     // Row 1: watchlist (focused) + since you last looked (blurred).
     screen.pane(
@@ -1160,15 +1152,7 @@ fn render_home_empty_wide(screen: &mut Screen, home: &HomeState) {
     let rx1 = top_right.2 - 1;
     let inner = rx0 + 2; // right-hand content column
 
-    // Header row.
-    screen.put(0, 0, ' ', Style::DEFAULT);
-    let chip = Style::fg(color::WHITE).bg(color::BLUE_BG).bold();
-    screen.put(1, 0, ' ', chip);
-    screen.text(2, 0, "DELTA", chip);
-    screen.put(7, 0, ' ', chip);
-    screen.text(10, 0, "overview", Style::fg(color::MUTED));
-    let clock_x = w - 1 - home.clock.chars().count();
-    screen.text(clock_x, 0, &home.clock, Style::fg(color::MUTED));
+    paint_home_header(screen, home);
 
     // Watchlist + since-you-last-looked.
     screen.pane(
@@ -1340,20 +1324,11 @@ fn render_home_empty_wide(screen: &mut Screen, home: &HomeState) {
 /// Home at 80x24: one watchlist pane (table + since-you-last-looked lines),
 /// the agenda pane, narrow header/status bar.
 fn render_home_empty_narrow(screen: &mut Screen, home: &HomeState) {
-    let w = screen.w;
     let panes = home_panes(screen);
     let watch = panes[0][0];
     let agenda = panes[1][0];
 
-    // Header row: inked DELTA chip, "overview", clock right-aligned.
-    screen.put(0, 0, ' ', Style::DEFAULT);
-    let chip = Style::fg(color::WHITE).bg(color::BLUE_BG).bold();
-    screen.put(1, 0, ' ', chip);
-    screen.text(2, 0, "DELTA", chip);
-    screen.put(7, 0, ' ', chip);
-    screen.text(10, 0, "overview", Style::fg(color::MUTED));
-    let clock_x = w - 1 - home.clock.chars().count();
-    screen.text(clock_x, 0, &home.clock, Style::fg(color::MUTED));
+    paint_home_header(screen, home);
 
     let x1 = watch.2 - 1;
     screen.pane(
