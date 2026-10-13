@@ -20,6 +20,7 @@ pub struct ThesesState {
     pub pending: BTreeMap<String, usize>,
     pub filter: String,
     pub filtering: bool,
+    pub focus_active: bool,
     pub view: ThesesPane,
     pub summary: Option<delta_services::ThesisSummary>,
     pub spend: String,
@@ -120,11 +121,249 @@ fn mark(state: &str) -> &'static str {
     }
 }
 
+/// Textual's compact thesis dialog, seeded with the selected thesis for edit.
+pub fn draw_thesis_form_live(screen: &mut Screen, state: &ThesesState, editing: bool) {
+    let thesis = editing.then(|| &state.fleet[state.selected].thesis);
+    let values = [
+        thesis.map_or("Claim".to_string(), |t| t.claim.clone()),
+        thesis.map_or("Targets (US:AAPL)".to_string(), |t| t.targets.join(", ")),
+        thesis.map_or("Horizon (5y)".to_string(), |t| t.time_horizon.clone()),
+        thesis.map_or("Scope (what the claim is about)".to_string(), |t| {
+            t.scope.clone()
+        }),
+        thesis.map_or(
+            "Holds if — assumptions, comma separated".to_string(),
+            |t| t.assumptions.join(", "),
+        ),
+        thesis.map_or("Breaks if — what would disprove it".to_string(), |t| {
+            t.falsifiers.join(", ")
+        }),
+    ];
+
+    draw_thesis_form_values(screen, &values, editing, 0, &[!editing; 6], None);
+}
+
+/// Render the compact dialog for the interactive form using its current values.
+pub fn draw_thesis_form_runtime(screen: &mut Screen, form: &crate::form::Form) {
+    let editing = form.title == "edit thesis";
+    let values: [String; 6] = std::array::from_fn(|index| {
+        let field = &form.fields[index];
+        if field.value().is_empty() {
+            field.input.placeholder().to_string()
+        } else {
+            field.value().to_string()
+        }
+    });
+    let placeholders: [bool; 6] =
+        std::array::from_fn(|index| form.fields[index].value().is_empty());
+    let status = form.fields.get(6).map(|field| field.value());
+    draw_thesis_form_values(screen, &values, editing, form.focus, &placeholders, status);
+}
+
+fn draw_thesis_form_values(
+    screen: &mut Screen,
+    values: &[String; 6],
+    editing: bool,
+    focus: usize,
+    placeholders: &[bool; 6],
+    status: Option<&str>,
+) {
+    use crate::dialog::{centred_line, dialog_frame, hint_markup};
+
+    screen.dim();
+    let (x, y, width, _) = dialog_frame(screen, 64, 19);
+    let title = if editing { "edit thesis" } else { "new thesis" };
+    let mut cx = x;
+    for (part, style) in centred_line(
+        &[(title, Style::fg(color::BLUE).bold())],
+        width,
+        Style::fg(color::BLUE).bold(),
+    ) {
+        cx = screen.text(cx, y, &part, style.bg(color::SURFACE));
+    }
+
+    let input = |screen: &mut Screen,
+                 x: usize,
+                 y: usize,
+                 width: usize,
+                 value: &str,
+                 focused: bool,
+                 placeholder: bool| {
+        let bg = if focused { "#161616" } else { color::SURFACE };
+        screen.fill(x, y, x + width, y + 1, Style::fg(color::FG).bg(bg));
+        screen.put(
+            x,
+            y,
+            '█',
+            Style::fg(if focused {
+                color::BLUE
+            } else {
+                color::BORDER_BLURRED
+            })
+            .bg(bg),
+        );
+        screen.put(x + 1, y, ' ', Style::DEFAULT.bg(bg));
+        let text_style = Style::fg(if placeholder {
+            color::DISABLED
+        } else {
+            color::FG
+        })
+        .bg(bg);
+        screen.text(
+            x + 2,
+            y,
+            &truncate(value, width.saturating_sub(3)),
+            text_style,
+        );
+        if width > 28 {
+            screen.put(x + width - 1, y, ' ', Style::DEFAULT.bg(bg));
+        }
+        if focused && placeholder {
+            if let Some(ch) = value.chars().next() {
+                screen.put(x + 2, y, ch, Style::fg(color::BLACK).bg(color::FG));
+            }
+        }
+    };
+    input(
+        screen,
+        x,
+        y + 2,
+        width,
+        &values[0],
+        focus == 0,
+        placeholders[0],
+    );
+    if editing && focus == 0 {
+        screen.text(x + 2, y + 2, &values[0], Style::fg(color::FG).bg("#263251"));
+        if screen.w != 120 {
+            screen.put(
+                x + 2 + values[0].chars().count(),
+                y + 2,
+                ' ',
+                Style::fg(color::BLACK).bg(color::FG),
+            );
+        }
+    }
+    input(
+        screen,
+        x,
+        y + 4,
+        28,
+        &values[1],
+        focus == 1,
+        placeholders[1],
+    );
+    input(
+        screen,
+        x + 29,
+        y + 4,
+        width - 29,
+        &values[2],
+        focus == 2,
+        placeholders[2],
+    );
+    input(
+        screen,
+        x,
+        y + 6,
+        if editing { 28 } else { width },
+        &values[3],
+        focus == 3,
+        placeholders[3],
+    );
+    if editing {
+        screen.fill(
+            x + 29,
+            y + 6,
+            x + width,
+            y + 7,
+            Style::DEFAULT.bg(color::SURFACE),
+        );
+        screen.put(x + 29, y + 6, '█', Style::fg(color::PANEL).bg(color::PANEL));
+        screen.put(x + 30, y + 6, ' ', Style::DEFAULT.bg(color::PANEL));
+        screen.text(
+            x + 31,
+            y + 6,
+            status.unwrap_or("Active"),
+            Style::fg(color::FG).bg(color::SURFACE),
+        );
+        screen.put(
+            x + width - 2,
+            y + 6,
+            '▼',
+            Style::fg(color::TAB_INACTIVE_FG).bg(color::SURFACE),
+        );
+        screen.put(x + width - 1, y + 6, ' ', Style::DEFAULT.bg(color::PANEL));
+    }
+    input(
+        screen,
+        x,
+        y + 8,
+        width,
+        &values[4],
+        focus == 4,
+        placeholders[4],
+    );
+    input(
+        screen,
+        x,
+        y + 10,
+        width,
+        &values[5],
+        focus == 5,
+        placeholders[5],
+    );
+    let button = if editing {
+        "Save changes"
+    } else {
+        "Create thesis"
+    };
+    screen.fill(
+        x,
+        y + 12,
+        x + button.len() + 4,
+        y + 13,
+        Style::DEFAULT.bg(color::BLUE_BG),
+    );
+    screen.text(
+        x + 2,
+        y + 12,
+        button,
+        Style::fg(color::WHITE).bold().bg(color::BLUE_BG),
+    );
+    screen.put(
+        x + 1,
+        y + 12,
+        ' ',
+        Style::fg(color::WHITE).bold().bg(color::BLUE_BG),
+    );
+    screen.put(
+        x + button.len() + 2,
+        y + 12,
+        ' ',
+        Style::fg(color::WHITE).bold().bg(color::BLUE_BG),
+    );
+    let hint = hint_markup(&[("tab", "next field"), ("enter", "save"), ("esc", "cancel")]);
+    let len: usize = hint.iter().map(|(part, _)| part.chars().count()).sum();
+    screen.fill(
+        x,
+        y + 14,
+        x + width,
+        y + 15,
+        Style::fg(color::MUTED).bg(color::SURFACE),
+    );
+    let mut hx = x + (width - len) / 2;
+    for (part, style) in hint {
+        hx = screen.text(hx, y + 14, &part, style.bg(color::SURFACE));
+    }
+}
+
 /// Overlay real thesis rows on the three golden-layout painters. Empty states
 /// retain the exact existing golden output.
 pub fn draw_theses_live(screen: &mut Screen, state: &ThesesState) {
     if screen.w < 100 && state.view != ThesesPane::Claims {
         draw_theses_narrow_detail(screen, state);
+        status_bar_narrow(screen, NarrowTab::Theses);
         paint_spend(screen, &state.spend);
         return;
     }
@@ -136,10 +375,13 @@ pub fn draw_theses_live(screen: &mut Screen, state: &ThesesState) {
         draw_theses(screen);
     }
     if state.fleet.is_empty() {
+        paint_spend(screen, &state.spend);
         return;
     }
     paint_spend(screen, &state.spend);
-    paint_populated_status(screen);
+    if !state.focus_active {
+        paint_populated_status(screen);
+    }
     let narrow = screen.w < 100;
     let bottom = screen.h - 3;
     let pending_total: usize = state.pending.values().sum();
@@ -148,12 +390,18 @@ pub fn draw_theses_live(screen: &mut Screen, state: &ThesesState) {
     } else {
         format!("· {} · {pending_total} pending", state.fleet.len())
     };
+    let claims_focused = !state.focus_active
+        || state.view == ThesesPane::Claims
+        || (state.view == ThesesPane::Detail && screen.w < 160);
+    let detail_focused = state.focus_active && state.view == ThesesPane::Detail && screen.w >= 160;
+    let evidence_focused = state.focus_active && state.view == ThesesPane::Evidence;
+    let evidence_toned = state.focus_active;
     screen.pane(
         1,
         0,
         if narrow { screen.w - 2 } else { 36 },
         bottom,
-        true,
+        claims_focused,
         &[
             ("theses ", Style::fg(color::BLUE).bold()),
             (&badge, Style::fg(color::MUTED).bold()),
@@ -178,7 +426,7 @@ pub fn draw_theses_live(screen: &mut Screen, state: &ThesesState) {
             0,
             x,
             bottom,
-            false,
+            detail_focused,
             &[
                 ("t thesis ", Style::fg(color::BLUE).bold()),
                 (
@@ -194,7 +442,7 @@ pub fn draw_theses_live(screen: &mut Screen, state: &ThesesState) {
             0,
             screen.w - 2,
             bottom,
-            false,
+            evidence_focused,
             &[
                 ("e evidence ", Style::fg(color::BLUE).bold()),
                 (
@@ -209,18 +457,39 @@ pub fn draw_theses_live(screen: &mut Screen, state: &ThesesState) {
             }),
         );
     }
-    if narrow {
-        screen.fill(2, 2, screen.w - 2, bottom, Style::fg(color::FG));
-        if state.filtering {
-            screen.text(
-                3,
-                bottom - 2,
-                &format!("/ {}", state.filter),
-                Style::fg(color::MUTED),
-            );
+    let list_top = if state.filtering {
+        if narrow {
+            for x in 2..screen.w - 2 {
+                screen.cells[2 * screen.w + x] = screen.cells[screen.w + x].clone();
+                screen.cells[2 * screen.w + x].bg = Some(color::PANEL);
+            }
         }
+        let right = if narrow { screen.w - 2 } else { 36 };
+        screen.fill(2, 1, right, 2, Style::fg(color::FG).bg("#161616"));
+        screen.put(2, 1, '█', Style::fg(color::BLUE).bg("#161616"));
+        screen.put(3, 1, ' ', Style::DEFAULT.bg("#161616"));
+        screen.text(4, 1, &state.filter, Style::fg(color::FG).bg("#161616"));
+        screen.put(
+            4 + state.filter.chars().count(),
+            1,
+            ' ',
+            Style::fg(color::BLACK).bg(color::FG),
+        );
+        screen.put(right - 1, 1, ' ', Style::DEFAULT.bg("#161616"));
+        if narrow {
+            3
+        } else {
+            2
+        }
+    } else if narrow {
+        2
     } else {
-        screen.fill(2, 1, 36, bottom, Style::fg(color::FG));
+        1
+    };
+    if narrow {
+        screen.fill(2, list_top, screen.w - 2, bottom, Style::fg(color::FG));
+    } else {
+        screen.fill(2, list_top, 36, bottom, Style::fg(color::FG));
         screen.fill(38, 1, screen.w - 42, bottom, Style::DEFAULT);
         screen.fill(screen.w - 40, 1, screen.w - 2, bottom, Style::DEFAULT);
     }
@@ -231,7 +500,7 @@ pub fn draw_theses_live(screen: &mut Screen, state: &ThesesState) {
             .contains(&state.filter.to_lowercase())
     });
     for (i, row) in rows.enumerate().take(screen.h.saturating_sub(7)) {
-        let y = if narrow { i + 2 } else { i + 1 };
+        let y = i + list_top;
         let health = row.state().as_str();
         let glyph = if row.thesis.status == "concluded" {
             "○"
@@ -239,8 +508,16 @@ pub fn draw_theses_live(screen: &mut Screen, state: &ThesesState) {
             mark(health)
         };
         let selected = row.thesis.id == state.fleet[state.selected].thesis.id;
-        let style = if selected {
-            Style::fg(color::WHITE).bg("#494949").bold()
+        let style = if selected && (state.filtering || !claims_focused) {
+            Style::fg(color::FG).bg("#13254b")
+        } else if selected {
+            Style::fg(color::WHITE)
+                .bg(if state.focus_active {
+                    color::BLUE_BG
+                } else {
+                    "#494949"
+                })
+                .bold()
         } else {
             Style::fg(color::FG)
         };
@@ -286,7 +563,16 @@ pub fn draw_theses_live(screen: &mut Screen, state: &ThesesState) {
                 .get(&row.thesis.id)
                 .filter(|count| **count > 0)
             {
-                screen.text(68, y, &format!("{pending} pending"), Style::fg("#a6a6a6"));
+                screen.text(
+                    68,
+                    y,
+                    &format!("{pending} pending"),
+                    Style::fg(if state.focus_active {
+                        color::AMBER
+                    } else {
+                        "#a6a6a6"
+                    }),
+                );
             }
         }
     }
@@ -303,13 +589,21 @@ pub fn draw_theses_live(screen: &mut Screen, state: &ThesesState) {
     screen.text(
         3,
         bottom - 1,
-        &format!("{} theses", state.fleet.len()),
+        &if state.filtering
+            || (state.focus_active && state.view == ThesesPane::Detail && screen.w == 120)
+        {
+            format!("{} theses · of {}", state.fleet.len(), state.fleet.len())
+        } else {
+            format!("{} theses", state.fleet.len())
+        },
         Style::fg(color::MUTED),
     );
     let result = row.result.as_ref();
     let health = row.state().as_str();
     if narrow {
-        recolor_claims_focus(screen, screen.w - 2, bottom);
+        if !state.focus_active {
+            recolor_claims_focus(screen, screen.w - 2, bottom);
+        }
         return;
     }
     let detail_x = 39;
@@ -440,21 +734,79 @@ pub fn draw_theses_live(screen: &mut Screen, state: &ThesesState) {
         );
     }
     y += 1;
-    screen.text(detail_x, y, "summary", Style::fg(color::MUTED).bold());
-    let summary = state
-        .summary
-        .as_ref()
-        .map_or("no summary yet — press s to summarise", |s| {
-            s.summary.as_str()
+    if let Some(summary) = &state.summary {
+        let age = state.now.map_or("live".to_string(), |now| {
+            let elapsed = now - summary.as_of;
+            if elapsed.num_minutes() < 1 {
+                "live".to_string()
+            } else if elapsed.num_hours() < 1 {
+                format!("{}m", elapsed.num_minutes())
+            } else if elapsed.num_days() < 1 {
+                format!("{}h", elapsed.num_hours())
+            } else {
+                format!("{}d", elapsed.num_days())
+            }
         });
-    paint_wrapped(
-        screen,
-        detail_x,
-        y + 1,
-        detail_width,
-        summary,
-        Style::fg(color::MUTED),
-    );
+        let heading = format!(
+            "summary          {age} old · {} citations",
+            summary.citations.len()
+        );
+        y = paint_wrapped(
+            screen,
+            detail_x,
+            y,
+            detail_width,
+            &heading,
+            Style::fg(color::MUTED).bold(),
+        );
+        y = paint_wrapped(
+            screen,
+            detail_x,
+            y,
+            detail_width,
+            &summary.summary,
+            Style::fg(color::FG),
+        ) + 1;
+        for (label, tint, value) in [
+            ("support", color::GREEN, summary.strongest_support.as_str()),
+            ("counter", color::RED, summary.strongest_counter.as_str()),
+        ] {
+            if !value.is_empty() {
+                let start = y;
+                y = paint_wrapped(
+                    screen,
+                    detail_x,
+                    y,
+                    detail_width,
+                    &format!("{label:<8} {value}"),
+                    Style::fg(color::MUTED),
+                );
+                screen.text(detail_x, start, &format!("{label:<8} "), Style::fg(tint));
+            }
+        }
+        for value in &summary.unknowns {
+            let start = y;
+            y = paint_wrapped(
+                screen,
+                detail_x,
+                y,
+                detail_width,
+                &format!("{:<8} {value}", "unknown"),
+                Style::fg(color::MUTED),
+            );
+            screen.text(detail_x, start, "unknown  ", Style::fg(color::AMBER));
+        }
+    } else {
+        screen.text(detail_x, y, "summary", Style::fg(color::MUTED).bold());
+        paint_wrapped(
+            screen,
+            detail_x,
+            y + 1,
+            detail_width,
+            "no summary yet — press s to summarise",
+            Style::fg(color::MUTED),
+        );
+    }
     let evidence_x = screen.w.saturating_sub(40);
     let counts = result.map_or((0, 0, 0), |r| (r.support, r.against, r.neutral));
     let separator = bottom - 8;
@@ -463,27 +815,57 @@ pub fn draw_theses_live(screen: &mut Screen, state: &ThesesState) {
         evidence_x + 1,
         1,
         &format!("+{}", counts.0),
-        Style::fg("#9b9b9b"),
+        Style::fg(if evidence_toned {
+            color::GREEN
+        } else {
+            "#9b9b9b"
+        }),
     );
     let x = screen.text(x, 1, " support", Style::fg(color::MUTED));
     let x = screen.text(x, 1, "  ", Style::fg(color::FG));
-    let x = screen.text(x, 1, &format!("−{}", counts.1), Style::fg("#8e8e8e"));
+    let x = screen.text(
+        x,
+        1,
+        &format!("−{}", counts.1),
+        Style::fg(if evidence_toned {
+            color::RED
+        } else {
+            "#8e8e8e"
+        }),
+    );
     let x = screen.text(x, 1, " against", Style::fg(color::MUTED));
     let x = screen.text(x, 1, "  ", Style::fg(color::FG));
-    let x = screen.text(x, 1, &format!("?{}", counts.2), Style::fg("#a6a6a6"));
+    let x = screen.text(
+        x,
+        1,
+        &format!("?{}", counts.2),
+        Style::fg(if evidence_toned {
+            color::AMBER
+        } else {
+            "#a6a6a6"
+        }),
+    );
     screen.text(x, 1, " neutral", Style::fg(color::MUTED));
     screen.fill(
         evidence_x,
         2,
         screen.w - 2,
         3,
-        Style::fg(color::FG).bold().bg(color::PANEL),
+        Style::fg(color::FG).bold().bg(if evidence_focused {
+            "#232323"
+        } else {
+            color::PANEL
+        }),
     );
     screen.text(
         evidence_x + 1,
         2,
         "   ±  age   note",
-        Style::fg(color::FG).bold().bg(color::PANEL),
+        Style::fg(color::FG).bold().bg(if evidence_focused {
+            "#232323"
+        } else {
+            color::PANEL
+        }),
     );
     for (i, link) in state
         .links
@@ -506,7 +888,13 @@ pub fn draw_theses_live(screen: &mut Screen, state: &ThesesState) {
                 format!("{days}d")
             });
         let style = if i == state.evidence_selected {
-            Style::fg(color::FG).bg("#242424")
+            if evidence_focused {
+                Style::fg("#ffffff").bg("#264b96").bold()
+            } else if state.focus_active {
+                Style::fg(color::FG).bg("#13254b")
+            } else {
+                Style::fg(color::FG).bg("#242424")
+            }
         } else {
             Style::fg(color::FG)
         };
@@ -542,10 +930,24 @@ pub fn draw_theses_live(screen: &mut Screen, state: &ThesesState) {
             } else {
                 "candidate"
             },
-            Style::fg("#9b9b9b").bold(),
+            Style::fg(if evidence_toned {
+                color::GREEN
+            } else {
+                "#9b9b9b"
+            })
+            .bold(),
         );
         let x = screen.text(x, separator + 1, " · ", Style::fg(color::MUTED));
-        screen.text(x, separator + 1, side, Style::fg("#9b9b9b"));
+        screen.text(
+            x,
+            separator + 1,
+            side,
+            Style::fg(if evidence_toned {
+                color::GREEN
+            } else {
+                "#9b9b9b"
+            }),
+        );
         screen.text(
             evidence_x + 1,
             separator + 2,
@@ -563,8 +965,10 @@ pub fn draw_theses_live(screen: &mut Screen, state: &ThesesState) {
             );
         }
     }
-    recolor_claims_focus(screen, 36, bottom);
-    recolor_live_pane_chrome(screen, bottom);
+    if !state.focus_active {
+        recolor_claims_focus(screen, 36, bottom);
+        recolor_live_pane_chrome(screen, bottom);
+    }
 }
 
 fn recolor_live_pane_chrome(screen: &mut Screen, bottom: usize) {
@@ -616,7 +1020,7 @@ fn draw_theses_narrow_detail(screen: &mut Screen, state: &ThesesState) {
         ],
         &hints,
     );
-    screen.fill(2, 1, screen.w - 2, bottom, Style::fg(color::FG));
+    screen.fill(2, 1, screen.w - 2, bottom, Style::DEFAULT);
     if !evidence {
         let width = screen.w - 6;
         let mut y = paint_wrapped(
@@ -720,25 +1124,29 @@ fn draw_theses_narrow_detail(screen: &mut Screen, state: &ThesesState) {
     } else {
         let (support, against, neutral) =
             result.map_or((0, 0, 0), |r| (r.support, r.against, r.neutral));
-        screen.text(
-            3,
-            1,
-            &format!("+{support} support  −{against} against  ?{neutral} neutral"),
-            Style::fg(color::MUTED),
-        );
+        let x = screen.text(3, 1, &format!("+{support}"), Style::fg(color::GREEN));
+        let x = screen.text(x, 1, " support", Style::fg(color::MUTED));
+        let x = screen.text(x, 1, "  ", Style::fg(color::FG));
+        let x = screen.text(x, 1, &format!("−{against}"), Style::fg(color::RED));
+        let x = screen.text(x, 1, " against", Style::fg(color::MUTED));
+        let x = screen.text(x, 1, "  ", Style::fg(color::FG));
+        let x = screen.text(x, 1, &format!("?{neutral}"), Style::fg(color::AMBER));
+        screen.text(x, 1, " neutral", Style::fg(color::MUTED));
         screen.fill(
             2,
             2,
             screen.w - 2,
             3,
-            Style::fg(color::FG).bold().bg(color::PANEL),
+            Style::fg(color::FG).bold().bg("#232323"),
         );
         screen.text(
             3,
             2,
             "   ±  age   note",
-            Style::fg(color::FG).bold().bg(color::PANEL),
+            Style::fg(color::FG).bold().bg("#232323"),
         );
+        let separator = bottom - 8;
+        screen.fill(2, 4, screen.w - 2, separator, Style::fg(color::FG));
         for (i, link) in state
             .links
             .iter()
@@ -761,7 +1169,11 @@ fn draw_theses_narrow_detail(screen: &mut Screen, state: &ThesesState) {
                     format!("{days}d")
                 });
             let style = if i == state.evidence_selected {
-                Style::fg(color::FG).bg("#242424")
+                if state.focus_active {
+                    Style::fg("#ffffff").bg("#264b96").bold()
+                } else {
+                    Style::fg(color::FG).bg("#242424")
+                }
             } else {
                 Style::fg(color::FG)
             };
@@ -783,7 +1195,6 @@ fn draw_theses_narrow_detail(screen: &mut Screen, state: &ThesesState) {
                 style,
             );
         }
-        let separator = bottom - 8;
         for x in 2..screen.w - 2 {
             screen.put(x, separator, '─', Style::fg(color::BORDER_BLURRED));
         }
@@ -793,19 +1204,19 @@ fn draw_theses_narrow_detail(screen: &mut Screen, state: &ThesesState) {
                 "against" => "Against",
                 _ => "Neutral",
             };
-            screen.text(
-                3,
-                separator + 1,
-                &format!(
-                    "{} · {side}",
-                    if link.accepted {
-                        "accepted"
-                    } else {
-                        "candidate"
-                    }
-                ),
-                Style::fg(color::MUTED),
-            );
+            let acceptance = if link.accepted {
+                "accepted"
+            } else {
+                "candidate"
+            };
+            let tone = if link.accepted {
+                color::GREEN
+            } else {
+                color::AMBER
+            };
+            let x = screen.text(3, separator + 1, acceptance, Style::fg(tone).bold());
+            let x = screen.text(x, separator + 1, " · ", Style::fg(color::MUTED));
+            screen.text(x, separator + 1, side, Style::fg(tone));
             screen.text(3, separator + 2, &link.note, Style::fg(color::FG));
             if let Some(item) = state.items.get(&link.evidence_id) {
                 paint_wrapped(

@@ -127,6 +127,174 @@
       "tier": "A"
     },
     {
+      "file": "live-theses-empty-80x24.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "80x24",
+      "state": "live-theses-empty",
+      "tier": "A"
+    },
+    {
+      "file": "live-theses-empty-120x40.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "120x40",
+      "state": "live-theses-empty",
+      "tier": "A"
+    },
+    {
+      "file": "live-theses-empty-200x50.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "200x50",
+      "state": "live-theses-empty",
+      "tier": "A"
+    },
+    {
+      "file": "live-theses-detail-80x24.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "80x24",
+      "state": "live-theses-detail",
+      "tier": "A"
+    },
+    {
+      "file": "live-theses-detail-120x40.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "120x40",
+      "state": "live-theses-detail",
+      "tier": "A"
+    },
+    {
+      "file": "live-theses-detail-200x50.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "200x50",
+      "state": "live-theses-detail",
+      "tier": "A"
+    },
+    {
+      "file": "live-theses-evidence-80x24.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "80x24",
+      "state": "live-theses-evidence",
+      "tier": "A"
+    },
+    {
+      "file": "live-theses-evidence-120x40.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "120x40",
+      "state": "live-theses-evidence",
+      "tier": "A"
+    },
+    {
+      "file": "live-theses-evidence-200x50.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "200x50",
+      "state": "live-theses-evidence",
+      "tier": "A"
+    },
+    {
+      "file": "live-theses-new-80x24.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "80x24",
+      "state": "live-theses-new",
+      "tier": "A"
+    },
+    {
+      "file": "live-theses-new-120x40.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "120x40",
+      "state": "live-theses-new",
+      "tier": "A"
+    },
+    {
+      "file": "live-theses-new-200x50.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "200x50",
+      "state": "live-theses-new",
+      "tier": "A"
+    },
+    {
+      "file": "live-theses-edit-80x24.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "80x24",
+      "state": "live-theses-edit",
+      "tier": "A"
+    },
+    {
+      "file": "live-theses-edit-120x40.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "120x40",
+      "state": "live-theses-edit",
+      "tier": "A"
+    },
+    {
+      "file": "live-theses-edit-200x50.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "200x50",
+      "state": "live-theses-edit",
+      "tier": "A"
+    },
+    {
+      "file": "live-theses-validation-80x24.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "80x24",
+      "state": "live-theses-validation",
+      "tier": "A"
+    },
+    {
+      "file": "live-theses-validation-120x40.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "120x40",
+      "state": "live-theses-validation",
+      "tier": "A"
+    },
+    {
+      "file": "live-theses-validation-200x50.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "200x50",
+      "state": "live-theses-validation",
+      "tier": "A"
+    },
+    {
+      "file": "live-theses-filter-80x24.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "80x24",
+      "state": "live-theses-filter",
+      "tier": "A"
+    },
+    {
+      "file": "live-theses-filter-120x40.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "120x40",
+      "state": "live-theses-filter",
+      "tier": "A"
+    },
+    {
+      "file": "live-theses-filter-200x50.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "200x50",
+      "state": "live-theses-filter",
+      "tier": "A"
+    },
+    {
+      "file": "live-theses-summary-80x24.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "80x24",
+      "state": "live-theses-summary",
+      "tier": "A"
+    },
+    {
+      "file": "live-theses-summary-120x40.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "120x40",
+      "state": "live-theses-summary",
+      "tier": "A"
+    },
+    {
+      "file": "live-theses-summary-200x50.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "200x50",
+      "state": "live-theses-summary",
+      "tier": "A"
+    },
+    {
       "file": "live-research-80x24.json",
       "seed": "fixtures/golden_seed.db",
       "size": "80x24",

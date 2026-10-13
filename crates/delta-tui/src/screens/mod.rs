@@ -33,7 +33,8 @@ pub use settings::{
 };
 pub use status_bar::{Footer, NarrowTab};
 pub use theses::{
-    draw_theses, draw_theses_live, draw_theses_narrow, draw_theses_wide, ThesesPane, ThesesState,
+    draw_theses, draw_theses_live, draw_theses_narrow, draw_theses_wide, draw_thesis_form_runtime,
+    ThesesPane, ThesesState,
 };
 pub use watchlist::{
     chart_window, draw_glossary_overlay, draw_watchlist, draw_watchlist_narrow,

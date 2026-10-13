@@ -108,6 +108,8 @@ fn dim_hex(hex: &'static str) -> &'static str {
         color::HIT_DESC => "#383838",
         color::HIT_DESC_SELECTED => "#3a3d42",
         color::HIT_SELECTED_BG => "#08101f",
+        "#232323" => "#0e0e0e",
+        "#13254b" => "#070e1e",
         // delta-light tokens (palette.remap outputs).
         "#f4f4ef" => "#61615f",
         "#e9e9e1" => "#5d5d5a",

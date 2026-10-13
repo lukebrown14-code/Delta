@@ -40,7 +40,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent))  # conftest / test_tui imports
 
-from conftest import seed_bars  # noqa: E402
+from conftest import FakeLLM, seed_bars  # noqa: E402
 from golden_scenarios import LIVE_SCENARIOS, SCENARIOS, Scenario  # noqa: E402
 from test_tui import AAPL, FakeRig  # noqa: E402
 
@@ -171,11 +171,25 @@ def export_scenario(scenario: Scenario, tmp_path: Path, out_dir: Path) -> Path:
             tmp_path.joinpath("config.toml").write_text(tomli_w.dumps(config), "utf-8")
             shutil.copy2(Path(__file__).resolve().parent.parent / SEED, tmp_path / "delta.db")
             engine = init_engine(tmp_path / "delta.db")
+            if scenario.name == "live-theses-empty":
+                with engine.begin() as connection:
+                    connection.exec_driver_sql("DELETE FROM thesis_evidence")
+                    connection.exec_driver_sql("DELETE FROM thesis")
             if scenario.name == "live-decisions-empty":
                 with engine.begin() as connection:
                     connection.exec_driver_sql("DELETE FROM decision_review")
                     connection.exec_driver_sql("DELETE FROM decision")
             rig = FakeRig(engine, [AAPL.model_copy(update={"watchlists": ("apple",)})])
+            if scenario.name == "live-theses-summary":
+                rig.llm = FakeLLM(
+                    {"thesis_summary": {
+                        "summary": "Accepted capex guidance supports margin pressure.",
+                        "strongest_support": "Guidance implies margin pressure.",
+                        "strongest_counter": "",
+                        "unknowns": ["Pricing response remains unknown."],
+                        "citations": ["news:news-msft-capex"],
+                    }}
+                )
             rig.cfg = build_config(config)
             rig.plugins = {"sec_edgar": SECEdgar()}
             if scenario.name.startswith("live-research") and scenario.name != "live-research-no-report":
@@ -212,7 +226,14 @@ def export_scenario(scenario: Scenario, tmp_path: Path, out_dir: Path) -> Path:
 
                 async def run() -> list[list[dict]]:
                     async with app.run_test(size=scenario.size) as pilot:
-                        await pilot.press(*scenario.keys)
+                        if scenario.name == "live-theses-new":
+                            # Let the responsive Theses screen mount before
+                            # sending its modal binding at narrow widths.
+                            await pilot.press("4")
+                            await pilot.pause()
+                            await pilot.press("n")
+                        else:
+                            await pilot.press(*scenario.keys)
                         if scenario.name == "live-research-citation":
                             await app.screen.inspect_evidence("news:news-aapl-chip")
                         if scenario.name == "live-research-generating":
