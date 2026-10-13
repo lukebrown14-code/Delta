@@ -1,5 +1,5 @@
 //! Watchlist inspector metrics: the equity metric table from Python's
-//! `delta/metrics.toml` (label, Yahoo info key, format), formatting parity
+//! `fixtures/python_reference/metrics.toml` (label, Yahoo info key, format), formatting parity
 //! with `asset_metrics._fmt`, and the quoteSummary -> info merge.
 
 use serde_json::Value;

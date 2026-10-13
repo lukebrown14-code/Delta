@@ -728,7 +728,7 @@ pub fn draw_watchlist_narrow_list(screen: &mut Screen, state: &WatchlistState) {
 }
 
 /// The equity glossary help entries: (label, help) per group, from
-/// `delta/metrics.toml` `[help]` and the equity group table, in card order.
+/// `fixtures/python_reference/metrics.toml` `[help]` and the equity group table, in card order.
 pub const GLOSSARY_EQUITY: &[(&str, &[(&str, &str)])] = &[
     (
         "Profitability",

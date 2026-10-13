@@ -2,7 +2,7 @@
 //! implementations produce on `fixtures/golden_seed.db`.
 //!
 //! The expected values are dumped by `tests/dump_shared_expected.py` (run it
-//! after reseeding) into `tests/fixtures/shared_services_expected.json`; this
+//! after reseeding) into `fixtures/python_reference/shared_services_expected.json`; this
 //! test asserts the Rust ports against them. The round-trip test additionally
 //! writes theses/decisions through the Rust APIs and proves the stored bytes
 //! are Python-readable encodings (JSON round-trip); the reverse direction
@@ -20,7 +20,7 @@ fn repo_root() -> PathBuf {
 }
 
 fn expected() -> Value {
-    let path = repo_root().join("tests/fixtures/shared_services_expected.json");
+    let path = repo_root().join("fixtures/python_reference/shared_services_expected.json");
     serde_json::from_str(
         &std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display())),
     )

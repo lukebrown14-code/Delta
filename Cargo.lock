@@ -382,7 +382,7 @@ checksum = "092966b41edc516079bdf31ec78a2e0588d1d0c08f78b91d8307215928642b2b"
 
 [[package]]
 name = "delta-core"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "chrono",
  "log",
@@ -398,7 +398,7 @@ dependencies = [
 
 [[package]]
 name = "delta-llm"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -416,7 +416,7 @@ dependencies = [
 
 [[package]]
 name = "delta-plugins"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -438,7 +438,7 @@ dependencies = [
 
 [[package]]
 name = "delta-services"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -459,7 +459,7 @@ dependencies = [
 
 [[package]]
 name = "delta-tui"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "chrono",
  "crossterm",

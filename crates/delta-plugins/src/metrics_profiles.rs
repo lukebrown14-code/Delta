@@ -1,4 +1,5 @@
-//! Ordered profile tables and glossary generated from canonical delta/metrics.toml.
+//! Ordered profile tables and glossary generated from the frozen
+//! `fixtures/python_reference/metrics.toml` contract.
 pub type KeySpec = (&'static str, &'static str, &'static str);
 pub type GroupSpec = (&'static str, &'static [&'static str]);
 pub const EQUITY_KEYS: &[KeySpec] = &[

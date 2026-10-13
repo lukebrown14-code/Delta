@@ -5,18 +5,6 @@ on:
   pull_request:
 
 jobs:
-  check:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
-        with:
-          enable-cache: true
-      - run: uv sync --all-groups
-      - run: uv run ruff check .
-      - run: uv run mypy --strict delta/core delta/llm
-      - run: uv run pytest
-
   rust:
     runs-on: ubuntu-latest
     steps:
