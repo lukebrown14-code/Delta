@@ -60,6 +60,10 @@ impl Breakpoint {
 pub enum Action {
     /// No state change.
     Noop,
+    /// Home selection or navigation, applied by the app to the desk.
+    Home(crate::screens::HomeCommand),
+    /// Watchlist navigation or a service-backed target operation.
+    Watchlist(crate::screens::WatchlistCommand),
     /// A Decisions-screen intent; the app performs persistence and navigation.
     Decision(crate::screens::decisions::DecisionCommand),
     /// Shut the app down.

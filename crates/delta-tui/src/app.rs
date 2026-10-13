@@ -24,14 +24,13 @@ use delta_tui::screens::decisions::{DecisionCommand, DecisionsData, DecisionsScr
 #[cfg(test)]
 use delta_tui::screens::SettingsFocus;
 use delta_tui::screens::{
-    draw_glossary_overlay, draw_home, draw_home_live, draw_home_narrow, draw_home_setup,
-    draw_home_wide, draw_theses_live, draw_thesis_form_runtime, draw_watchlist,
-    draw_watchlist_add_results, draw_watchlist_filter, draw_watchlist_narrow,
-    draw_watchlist_narrow_list, draw_watchlist_wide, AddSearchState, AskState, ResearchComponent,
-    ResearchData, ResearchView, SettingsCommand, SettingsComponent, ThesesPane, ThesesState,
+    draw_theses_live, draw_thesis_form_runtime, paint_watchlist_add_overlay, AddSearchState,
+    AskState, HomeCommand, HomeComponent, ResearchComponent, ResearchData, ResearchView,
+    SettingsCommand, SettingsComponent, ThesesPane, ThesesState, WatchlistCommand,
+    WatchlistComponent,
 };
 use delta_tui::theme::Palette;
-use delta_tui::{is_quit_key, workers, Action, Breakpoint, Component};
+use delta_tui::{is_quit_key, workers, Action, Component};
 
 /// The shell modals the app can float over a pane.
 enum Overlay {
@@ -150,8 +149,8 @@ impl FrameStats {
 pub(crate) struct App {
     desk: Desk,
     tab: Tab,
-    glossary: bool,
-    watch_filter: Option<String>,
+    home: HomeComponent,
+    watchlist: WatchlistComponent,
     add_search: AddSearchState,
     add_results: Vec<SearchResult>,
     add_generation: u64,
@@ -215,27 +214,11 @@ impl App {
     }
 
     fn paint(&mut self, screen: &mut Screen) {
-        let w = screen.w;
-        // The shell breakpoints (`shell.py::NARROW_WIDTH` plus the wide
-        // layout the goldens capture).
-        let wide = Breakpoint::from_width(w as u16) == Breakpoint::Wide;
-        let narrow = Breakpoint::from_width(w as u16) == Breakpoint::Narrow;
-        macro_rules! route {
-            ($wide:expr, $normal:expr, $narrow:expr) => {
-                if wide {
-                    $wide
-                } else if narrow {
-                    $narrow
-                } else {
-                    $normal
-                }
-            };
-        }
         match self.tab {
             Tab::Home => {
-                if self.desk.instruments.is_empty() && self.desk.config_path.is_some() {
+                let setup = if self.desk.instruments.is_empty() && self.desk.config_path.is_some() {
                     let settings = &self.desk.settings;
-                    let setup = delta_tui::screens::HomeSetupData {
+                    Some(delta_tui::screens::HomeSetupData {
                         provider: settings.provider.clone(),
                         provider_connected: settings.provider_connected,
                         config_exists: true,
@@ -248,37 +231,22 @@ impl App {
                             .diagnostics
                             .as_ref()
                             .is_ok_and(|diag| !diag.health.latest_bar.is_empty()),
-                    };
-                    draw_home_setup(screen, &self.desk.home_state(), &setup);
-                } else if let Some(data) = &self.desk.home_live {
-                    draw_home_live(screen, &self.desk.home_state(), data);
+                    })
                 } else {
-                    route!(
-                        draw_home_wide(screen, &self.desk.home_state()),
-                        draw_home(screen, &self.desk.home_state()),
-                        draw_home_narrow(screen, &self.desk.home_state())
-                    );
-                }
+                    None
+                };
+                self.home.set_snapshot(
+                    self.desk.home_state(),
+                    self.desk.home_live.clone(),
+                    setup,
+                    self.desk.selected,
+                    self.desk.instruments.len(),
+                );
+                self.home.paint_into(screen);
             }
             Tab::Watchlist => {
-                let mut state = self.desk.watch_state();
-                if let Some(query) = &self.watch_filter {
-                    let needle = query.to_lowercase();
-                    state.entries.retain(|entry| {
-                        entry.symbol.to_lowercase().contains(&needle)
-                            || entry.asset_class.to_lowercase().contains(&needle)
-                    });
-                    state.selected = state.selected.min(state.entries.len().saturating_sub(1));
-                    draw_watchlist_filter(screen, &state, query);
-                } else if narrow && !self.desk.watch_detail_open {
-                    draw_watchlist_narrow_list(screen, &state);
-                } else {
-                    route!(
-                        draw_watchlist_wide(screen, &state),
-                        draw_watchlist(screen, &state),
-                        draw_watchlist_narrow(screen, &state)
-                    );
-                }
+                self.watchlist.set_snapshot(self.desk.watch_state());
+                self.watchlist.paint_into(screen);
             }
             Tab::Research => {
                 self.research.paint_into(screen);
@@ -293,15 +261,12 @@ impl App {
                 self.settings.paint_into(screen);
             }
         }
-        if self.glossary && self.tab == Tab::Watchlist {
-            draw_glossary_overlay(screen, &self.desk.watch_state());
-        }
         match &mut self.overlay {
             Some(Overlay::Go) => GoPicker::draw_screen(screen),
             Some(Overlay::Help(help)) => help.draw_screen(screen),
             Some(Overlay::Palette(palette)) => palette.draw_screen(screen),
             Some(Overlay::AddTarget(query)) => {
-                draw_watchlist_add_results(
+                paint_watchlist_add_overlay(
                     screen,
                     &self.desk.watch_state(),
                     query,
@@ -766,17 +731,45 @@ impl App {
         Action::Noop
     }
 
-    /// The shell keys, in `DeltaApp.BINDINGS` order (plus the esc close and
-    /// the palette keys Textual/the plan install). Per-screen keys (the
-    /// watchlist's `r`/`R` range, `enter` inspect, ...) belong to their
-    /// screens in R3.2.
+    fn handle_home_command(&mut self, command: HomeCommand) {
+        match command {
+            HomeCommand::Select(index) => self.desk.selected = index,
+            HomeCommand::OpenSelected => {
+                self.tab = Tab::Watchlist;
+                self.watchlist.open_detail();
+            }
+        }
+    }
+
+    fn handle_watchlist_command(&mut self, command: WatchlistCommand) {
+        match command {
+            WatchlistCommand::Select(index) => self.desk.selected = index,
+            WatchlistCommand::CycleRange(delta) => self.desk.cycle_range(delta),
+            WatchlistCommand::MoveScrub(delta) => self.desk.move_scrub(delta),
+            WatchlistCommand::Add => {
+                self.overlay = Some(Overlay::AddTarget(String::new()));
+                self.add_search = AddSearchState::Ready;
+                self.add_results.clear();
+                self.add_selected = 0;
+                self.add_picked = false;
+                self.add_picked_result = None;
+            }
+            WatchlistCommand::Remove => {
+                if let Err(error) = self.remove_instrument_at(Path::new("config.toml")) {
+                    self.status = error;
+                }
+            }
+        }
+    }
+
+    /// Global shell keys run after the active screen has handled its own keys.
     fn handle_shell_key(&mut self, key: KeyEvent) -> Option<Action> {
         if is_quit_key(key) {
             return Some(Action::Quit);
         }
         match key.code {
             KeyCode::Esc => {
-                self.glossary = false;
+                self.watchlist.close_glossary();
                 return Some(Action::Noop);
             }
             KeyCode::Char('1') => self.tab = Tab::Home,
@@ -824,12 +817,6 @@ impl App {
                     Some(Overlay::Help(_)) => None,
                     _ => Some(Overlay::Help(HelpDialog::default())),
                 };
-                return Some(Action::Noop);
-            }
-            KeyCode::Char('i') if self.tab == Tab::Watchlist => {
-                // The watchlist's glossary (`i` metric_help) until its
-                // screen owns its keys in R3.2.
-                self.glossary = !self.glossary;
                 return Some(Action::Noop);
             }
             KeyCode::Char('U') => return Some(Action::Gather),
@@ -1850,77 +1837,27 @@ impl Component for App {
             return None;
         }
         if self.tab == Tab::Watchlist {
-            if let Some(query) = &mut self.watch_filter {
-                match key.code {
-                    KeyCode::Esc => self.watch_filter = None,
-                    KeyCode::Backspace => {
-                        query.pop();
-                    }
-                    KeyCode::Char(ch)
-                        if !key
-                            .modifiers
-                            .contains(crossterm::event::KeyModifiers::CONTROL) =>
-                    {
-                        query.push(ch)
-                    }
-                    _ => {}
+            self.watchlist.set_snapshot(self.desk.watch_state());
+            if let Some(action) = delta_tui::Screen::handle_key(&mut self.watchlist, key) {
+                if let Action::Watchlist(command) = action {
+                    self.handle_watchlist_command(command);
                 }
                 return Some(Action::Noop);
             }
-            match key.code {
-                KeyCode::Char('/') => {
-                    self.desk.watch_detail_open = false;
-                    self.watch_filter = Some(String::new());
-                    return Some(Action::Noop);
+        }
+        if self.tab == Tab::Home {
+            self.home.set_snapshot(
+                self.desk.home_state(),
+                self.desk.home_live.clone(),
+                None,
+                self.desk.selected,
+                self.desk.instruments.len(),
+            );
+            if let Some(action) = delta_tui::Screen::handle_key(&mut self.home, key) {
+                if let Action::Home(command) = action {
+                    self.handle_home_command(command);
                 }
-                KeyCode::Enter => {
-                    self.desk.watch_detail_open = true;
-                    return Some(Action::Noop);
-                }
-                KeyCode::Esc if self.desk.watch_detail_open => {
-                    self.desk.watch_detail_open = false;
-                    return Some(Action::Noop);
-                }
-                KeyCode::Char('a') => {
-                    self.overlay = Some(Overlay::AddTarget(String::new()));
-                    self.add_search = AddSearchState::Ready;
-                    self.add_results.clear();
-                    self.add_selected = 0;
-                    self.add_picked = false;
-                    self.add_picked_result = None;
-                    return Some(Action::Noop);
-                }
-                KeyCode::Char('d') => {
-                    if let Err(error) = self.remove_instrument_at(Path::new("config.toml")) {
-                        self.status = error;
-                    }
-                    return Some(Action::Noop);
-                }
-                KeyCode::Char(']') => {
-                    self.desk.move_scrub(1);
-                    return Some(Action::Noop);
-                }
-                KeyCode::Char('[') => {
-                    self.desk.move_scrub(-1);
-                    return Some(Action::Noop);
-                }
-                KeyCode::Char('r') => {
-                    self.desk.cycle_range(1);
-                    return Some(Action::Noop);
-                }
-                KeyCode::Char('R') => {
-                    self.desk.cycle_range(-1);
-                    return Some(Action::Noop);
-                }
-                KeyCode::Down => {
-                    self.desk.cycle_instrument(1);
-                    return Some(Action::Noop);
-                }
-                KeyCode::Up => {
-                    self.desk.cycle_instrument(-1);
-                    return Some(Action::Noop);
-                }
-                _ => {}
+                return Some(Action::Noop);
             }
         }
         if self.tab == Tab::Research {
@@ -1962,6 +1899,8 @@ impl Component for App {
 
     fn update(&mut self, action: Action) {
         match action {
+            Action::Home(command) => self.handle_home_command(command),
+            Action::Watchlist(command) => self.handle_watchlist_command(command),
             Action::SettingsCommand(command) => {
                 let next = self.execute_settings_command(command);
                 self.update(next);
@@ -2076,7 +2015,7 @@ impl Component for App {
                         self.reload_theses();
                     }
                     self.overlay = None;
-                    self.glossary = false;
+                    self.watchlist.close_glossary();
                 }
             }
             Action::ShowHelp => self.overlay = Some(Overlay::Help(HelpDialog::default())),
@@ -2167,8 +2106,8 @@ pub(crate) async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> st
     let mut app = App {
         desk,
         tab: Tab::Watchlist,
-        glossary: false,
-        watch_filter: None,
+        home: HomeComponent::default(),
+        watchlist: WatchlistComponent::default(),
         add_search: AddSearchState::Ready,
         add_results: Vec::new(),
         add_generation: 0,
@@ -2467,8 +2406,8 @@ mod tests {
         App {
             desk,
             tab: Tab::Watchlist,
-            glossary: false,
-            watch_filter: None,
+            home: HomeComponent::default(),
+            watchlist: WatchlistComponent::default(),
             add_search: AddSearchState::Ready,
             add_results: Vec::new(),
             add_generation: 0,
@@ -2753,13 +2692,13 @@ mod tests {
     fn glossary_toggles_on_watchlist_with_i_and_esc_closes() {
         let mut a = app();
         a.handle_key(key(KeyCode::Char('i')));
-        assert!(a.glossary);
+        assert!(a.watchlist.glossary_open());
         a.handle_key(key(KeyCode::Esc));
-        assert!(!a.glossary);
+        assert!(!a.watchlist.glossary_open());
         // `i` on another pane does not open it.
         a.handle_key(key(KeyCode::Char('3')));
         a.handle_key(key(KeyCode::Char('i')));
-        assert!(!a.glossary);
+        assert!(!a.watchlist.glossary_open());
     }
 
     #[test]

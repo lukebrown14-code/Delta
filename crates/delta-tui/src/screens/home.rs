@@ -1,5 +1,185 @@
 use super::status_bar::{draw_status_bar_wide, pane_hints, status_bar_narrow, NarrowTab};
 use crate::screen::{color, Screen, Style};
+use crate::Action;
+use crossterm::event::{KeyCode, KeyEvent};
+use ratatui::{layout::Rect, Frame};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HomeCommand {
+    Select(usize),
+    OpenSelected,
+}
+
+#[derive(Default)]
+pub struct HomeComponent {
+    snapshot: Option<HomeState>,
+    live: Option<HomeLiveData>,
+    setup: Option<HomeSetupData>,
+    selected: usize,
+    rows: usize,
+}
+
+impl HomeComponent {
+    pub fn set_snapshot(
+        &mut self,
+        snapshot: HomeState,
+        live: Option<HomeLiveData>,
+        setup: Option<HomeSetupData>,
+        selected: usize,
+        rows: usize,
+    ) {
+        self.snapshot = Some(snapshot);
+        self.live = live;
+        self.setup = setup;
+        self.rows = rows;
+        self.selected = selected.min(rows.saturating_sub(1));
+    }
+
+    pub fn paint_into(&self, screen: &mut Screen) {
+        let Some(home) = &self.snapshot else { return };
+        if let Some(setup) = &self.setup {
+            render_home_setup(screen, home, setup);
+        } else if let Some(live) = &self.live {
+            render_home_live(screen, home, live);
+        } else if screen.w < 100 {
+            render_home_empty_narrow(screen, home);
+        } else if screen.w >= 160 {
+            render_home_empty_wide(screen, home);
+        } else {
+            render_home_empty_normal(screen, home);
+        }
+    }
+}
+
+impl crate::Screen for HomeComponent {
+    fn name(&self) -> &'static str {
+        "home"
+    }
+
+    fn handle_key(&mut self, key: KeyEvent) -> Option<Action> {
+        match key.code {
+            KeyCode::Up if self.rows > 0 => {
+                self.selected = self.selected.saturating_sub(1);
+                Some(Action::Home(HomeCommand::Select(self.selected)))
+            }
+            KeyCode::Down if self.rows > 0 => {
+                self.selected = (self.selected + 1).min(self.rows - 1);
+                Some(Action::Home(HomeCommand::Select(self.selected)))
+            }
+            KeyCode::Enter if self.rows > 0 => Some(Action::Home(HomeCommand::OpenSelected)),
+            _ => None,
+        }
+    }
+
+    fn draw(&mut self, frame: &mut Frame, area: Rect) {
+        let mut screen = Screen::new(area.width as usize, area.height as usize);
+        self.paint_into(&mut screen);
+        crate::screen::blit(frame, &screen, area);
+    }
+}
+
+fn home_panes(screen: &Screen) -> Vec<Vec<super::PaneRect>> {
+    let bottom = screen.h.saturating_sub(3);
+    if screen.w < 100 {
+        let top = 14.min(bottom);
+        super::pane_layout(
+            1,
+            1,
+            screen.w.saturating_sub(1),
+            bottom + 1,
+            &[top, bottom - top],
+            &[screen.w.saturating_sub(2)],
+        )
+    } else {
+        let upper = bottom.saturating_sub(7);
+        let top = if screen.w >= 160 {
+            upper / 2
+        } else {
+            upper.saturating_sub(15)
+        };
+        let mut panes = super::pane_layout(
+            1,
+            1,
+            screen.w - 1,
+            bottom + 1,
+            &[top, upper - top, 7],
+            &[screen.w / 2 - 1, screen.w - screen.w / 2 - 1],
+        );
+        panes[2][0].2 = screen.w - 1;
+        panes
+    }
+}
+
+fn paint_home_header(screen: &mut Screen, home: &HomeState) {
+    screen.put(0, 0, ' ', Style::DEFAULT);
+    let chip = Style::fg(color::WHITE).bg(color::BLUE_BG).bold();
+    screen.put(1, 0, ' ', chip);
+    screen.text(2, 0, "DELTA", chip);
+    screen.put(7, 0, ' ', chip);
+    screen.text(10, 0, "overview", Style::fg(color::MUTED));
+    let clock_x = screen.w - 1 - home.clock.chars().count();
+    screen.text(clock_x, 0, &home.clock, Style::fg(color::MUTED));
+}
+
+fn paint_home_status(screen: &mut Screen) {
+    let y = screen.h - 1;
+    if screen.w < 100 {
+        status_bar_narrow(screen, NarrowTab::Home);
+    } else if screen.w >= 160 {
+        draw_status_bar_wide(screen, y, screen.w, "1 Home");
+    } else {
+        draw_status_bar_home(screen, y, screen.w);
+    }
+}
+
+/// The populated view keeps the same selected watch row but paints each
+/// remaining pane directly from the live read model below.
+fn paint_home_live_watchlist(screen: &mut Screen, home: &HomeState) {
+    let pane = home_panes(screen)[0][0];
+    screen.pane(
+        pane.0,
+        pane.1,
+        pane.2 - 1,
+        pane.3 - 1,
+        true,
+        &[
+            ("watchlist ", Style::fg(color::BLUE).bold()),
+            ("· 1", Style::fg(color::MUTED).bold()),
+        ],
+        &pane_hints(&[("↑↓", "select"), ("enter", "open"), ("tab", "next box")]),
+    );
+    screen.text(
+        2,
+        2,
+        " Symbol          close     chg%   age  40 closes",
+        Style::fg(color::MUTED),
+    );
+    let blue = Style::DEFAULT.bg(color::BLUE_BG);
+    let white = Style::fg(color::WHITE).bg(color::BLUE_BG);
+    let white_bold = white.bold();
+    let end = pane.2 - 1;
+    screen.fill(2, 3, end, 4, blue);
+    screen.put(2, 3, ' ', blue);
+    let mut x = screen.text(3, 3, &home.symbol, white_bold);
+    x = screen.text(x + 11, 3, &home.last, white);
+    screen.put(x, 3, ' ', blue);
+    x = screen.text(x + 1, 3, "▲ ", white);
+    screen.text(x, 3, &home.chg_label, white);
+    let spark = if screen.w < 100 || screen.w >= 160 {
+        crate::braille::BrailleGraph::filled(home.closes.clone()).rows(end - 42, 1)[0].clone()
+    } else {
+        home.spark.clone()
+    };
+    screen.text(41, 3, &spark, white);
+    if screen.w >= 100 {
+        screen.text(
+            3,
+            5,
+            "spark: 40 daily closes · chg%: move on the day",
+            Style::fg(color::MUTED),
+        );
+    }
+}
 
 /// Live Home overview values, formatted by the desk from the analytics
 /// queries (headline, pulse, upcoming events, bar staleness, spend).
@@ -57,6 +237,7 @@ impl HomeFeed {
 }
 
 /// Home state the painter renders (the seeded golden scenario's values).
+#[derive(Clone)]
 pub struct HomeState {
     pub clock: String,
     pub symbol: String,
@@ -89,6 +270,7 @@ pub struct HomeLiveData {
     pub theses: Vec<(String, String, String)>,
 }
 
+#[derive(Clone)]
 pub struct HomeSetupData {
     pub provider: String,
     pub provider_connected: bool,
@@ -99,14 +281,9 @@ pub struct HomeSetupData {
 }
 
 /// The first-run checklist takes the whole overview when no targets exist.
-pub fn draw_home_setup(screen: &mut Screen, home: &HomeState, setup: &HomeSetupData) {
-    if screen.w < 100 {
-        draw_home_narrow(screen, home);
-    } else if screen.w >= 160 {
-        draw_home_wide(screen, home);
-    } else {
-        draw_home(screen, home);
-    }
+fn render_home_setup(screen: &mut Screen, home: &HomeState, setup: &HomeSetupData) {
+    paint_home_header(screen, home);
+    paint_home_status(screen);
     screen.fill(
         0,
         1,
@@ -180,17 +357,12 @@ pub fn draw_home_setup(screen: &mut Screen, home: &HomeState, setup: &HomeSetupD
     }
 }
 
-/// Paint the populated Home panels over the base geometry. The base painter
-/// continues to handle the empty/offline screen while these rows come from
-/// analytics, decisions, calendar events and accepted thesis evidence.
-pub fn draw_home_live(screen: &mut Screen, home: &HomeState, data: &HomeLiveData) {
-    if screen.w < 100 {
-        draw_home_narrow(screen, home);
-    } else if screen.w >= 160 {
-        draw_home_wide(screen, home);
-    } else {
-        draw_home(screen, home);
-    }
+/// Paint the populated Home frame once from the screen snapshot and the
+/// service-backed analytics, decisions, calendar and thesis rows.
+fn render_home_live(screen: &mut Screen, home: &HomeState, data: &HomeLiveData) {
+    paint_home_header(screen, home);
+    paint_home_live_watchlist(screen, home);
+    paint_home_status(screen);
     let muted = Style::fg(color::MUTED);
     let warn = Style::fg(color::AMBER);
     let count = data.articles + data.filings + data.events;
@@ -242,12 +414,13 @@ pub fn draw_home_live(screen: &mut Screen, home: &HomeState, data: &HomeLiveData
         }
         screen.fill(55, 5, screen.w - 3, 6, Style::DEFAULT);
         screen.fill(50, 6, screen.w - 3, 7, Style::DEFAULT);
-        let agenda_bottom = screen.h - 3;
+        let panes = home_panes(screen);
+        let agenda = panes[1][0];
         screen.pane(
-            1,
-            15,
-            screen.w - 2,
-            agenda_bottom,
+            agenda.0,
+            agenda.1,
+            agenda.2 - 1,
+            agenda.3 - 1,
             false,
             &[
                 ("needs you today ", Style::fg(color::BLUE).bold()),
@@ -258,22 +431,19 @@ pub fn draw_home_live(screen: &mut Screen, home: &HomeState, data: &HomeLiveData
             ],
             &pane_hints(&[("enter", "open"), ("tab", "next box")]),
         );
+        paint_home_agenda_rows(screen, 16);
         paint_due_row(screen, 16, data.due_reviews);
         paint_stale_row(screen, 19, data.stale_sources);
         return;
     }
 
-    let (right, top_bottom, mid_top, mid_bottom, agenda_top) = if screen.w >= 160 {
-        (100, 20, 21, 40, 41)
-    } else {
-        (
-            60,
-            screen.h - 25,
-            screen.h - 24,
-            screen.h - 10,
-            screen.h - 9,
-        )
-    };
+    let panes = home_panes(screen);
+    let right_pane = panes[0][1];
+    let middle_pane = panes[1][0];
+    let middle_right = panes[1][1];
+    let agenda = panes[2][0];
+    let (right, mid_top, mid_bottom, agenda_top) =
+        (right_pane.0, middle_pane.1, middle_pane.3 - 1, agenda.1);
     let rx1 = screen.w - 2;
     let inner = right + 2;
     let left_end = right - 1;
@@ -289,10 +459,10 @@ pub fn draw_home_live(screen: &mut Screen, home: &HomeState, data: &HomeLiveData
         format!("· {count} new")
     };
     screen.pane(
-        right,
-        1,
-        rx1,
-        top_bottom,
+        right_pane.0,
+        right_pane.1,
+        right_pane.2 - 1,
+        right_pane.3 - 1,
         false,
         &[
             (since_title, Style::fg(color::BLUE).bold()),
@@ -378,10 +548,10 @@ pub fn draw_home_live(screen: &mut Screen, home: &HomeState, data: &HomeLiveData
     }
 
     screen.pane(
-        1,
-        mid_top,
-        left_end,
-        mid_bottom,
+        middle_pane.0,
+        middle_pane.1,
+        middle_pane.2 - 1,
+        middle_pane.3 - 1,
         false,
         &[
             ("upcoming ", Style::fg(color::BLUE).bold()),
@@ -422,10 +592,10 @@ pub fn draw_home_live(screen: &mut Screen, home: &HomeState, data: &HomeLiveData
     );
 
     screen.pane(
-        right,
-        mid_top,
-        rx1,
-        mid_bottom,
+        middle_right.0,
+        middle_right.1,
+        middle_right.2 - 1,
+        middle_right.3 - 1,
         false,
         &[
             ("theses ", Style::fg(color::BLUE).bold()),
@@ -525,10 +695,10 @@ pub fn draw_home_live(screen: &mut Screen, home: &HomeState, data: &HomeLiveData
     }
 
     screen.pane(
-        1,
-        agenda_top,
-        rx1,
-        screen.h - 3,
+        agenda.0,
+        agenda.1,
+        agenda.2 - 1,
+        agenda.3 - 1,
         false,
         &[
             ("needs you today ", Style::fg(color::BLUE).bold()),
@@ -539,6 +709,7 @@ pub fn draw_home_live(screen: &mut Screen, home: &HomeState, data: &HomeLiveData
         ],
         &pane_hints(&[("enter", "open"), ("tab", "next box")]),
     );
+    paint_home_agenda_rows(screen, agenda_top + 1);
     paint_due_row(screen, agenda_top + 1, data.due_reviews);
     paint_stale_row(screen, agenda_top + 4, data.stale_sources);
 }
@@ -556,6 +727,22 @@ fn style_table_row(
         cell.fg = Some(color::FG);
         cell.bg = Some(bg);
         cell.bold = bold || cell.bold;
+    }
+}
+
+fn paint_home_agenda_rows(screen: &mut Screen, first_row: usize) {
+    for (offset, key) in ["6", "4", "3", "2"].into_iter().enumerate() {
+        let y = first_row + offset;
+        screen.text(3, y, "▸", Style::fg(color::BLUE));
+        screen.text(5, y, key, Style::fg(color::BLUE).bold());
+    }
+    for (offset, message) in [" no falsifier hits", " no earnings in the next 7 days"]
+        .into_iter()
+        .enumerate()
+    {
+        let y = first_row + offset + 1;
+        screen.text(8, y, "✓", Style::fg(color::MUTED));
+        screen.text(9, y, message, Style::fg(color::MUTED));
     }
 }
 
@@ -605,9 +792,15 @@ fn truncate_home(text: &str, width: usize) -> String {
 /// The Home screen: header chip + clock, watchlist / since-you-last-looked,
 /// upcoming / theses, the agenda, and the status bar with `1 Home` active
 /// (port of `delta/tui/screens/home.py` at the captured 120x40 layout).
-pub fn draw_home(screen: &mut Screen, home: &HomeState) {
+fn render_home_empty_normal(screen: &mut Screen, home: &HomeState) {
     let w = screen.w;
     let content_bottom = screen.h - 3; // 37 at h=40
+    let panes = home_panes(screen);
+    let top_left = panes[0][0];
+    let top_right = panes[0][1];
+    let middle_left = panes[1][0];
+    let middle_right = panes[1][1];
+    let agenda = panes[2][0];
 
     // Header row: inked DELTA chip, "overview", clock right-aligned.
     screen.put(0, 0, ' ', Style::DEFAULT);
@@ -621,10 +814,10 @@ pub fn draw_home(screen: &mut Screen, home: &HomeState) {
 
     // Row 1: watchlist (focused) + since you last looked (blurred).
     screen.pane(
-        1,
-        1,
-        59,
-        content_bottom - 22,
+        top_left.0,
+        top_left.1,
+        top_left.2 - 1,
+        top_left.3 - 1,
         true,
         &[
             ("watchlist ", Style::fg(color::BLUE).bold()),
@@ -633,10 +826,10 @@ pub fn draw_home(screen: &mut Screen, home: &HomeState) {
         &pane_hints(&[("↑↓", "select"), ("enter", "open"), ("tab", "next box")]),
     );
     screen.pane(
-        60,
-        1,
-        w - 2,
-        content_bottom - 22,
+        top_right.0,
+        top_right.1,
+        top_right.2 - 1,
+        top_right.3 - 1,
         false,
         &[("since you last looked", Style::fg(color::BLUE).bold())],
         &pane_hints(&[("3", "research")]),
@@ -700,19 +893,19 @@ pub fn draw_home(screen: &mut Screen, home: &HomeState) {
 
     // Middle row: upcoming + theses.
     screen.pane(
-        1,
-        content_bottom - 21,
-        59,
-        content_bottom - 7,
+        middle_left.0,
+        middle_left.1,
+        middle_left.2 - 1,
+        middle_left.3 - 1,
         false,
         &[("upcoming", Style::fg(color::BLUE).bold())],
         &pane_hints(&[("enter", "open evidence")]),
     );
     screen.pane(
-        60,
-        content_bottom - 21,
-        w - 2,
-        content_bottom - 7,
+        middle_right.0,
+        middle_right.1,
+        middle_right.2 - 1,
+        middle_right.3 - 1,
         false,
         &[("theses", Style::fg(color::BLUE).bold())],
         &pane_hints(&[("enter", "open thesis"), ("4", "all")]),
@@ -744,10 +937,10 @@ pub fn draw_home(screen: &mut Screen, home: &HomeState) {
 
     // Agenda: full width, jump keys with ✓/⚠ verdicts.
     screen.pane(
-        1,
-        content_bottom - 6,
-        w - 2,
-        content_bottom,
+        agenda.0,
+        agenda.1,
+        agenda.2 - 1,
+        agenda.3 - 1,
         false,
         &[
             ("needs you today ", Style::fg(color::BLUE).bold()),
@@ -826,14 +1019,19 @@ fn draw_status_bar_home(screen: &mut Screen, y: usize, w: usize) {
 }
 
 /// Home at 200x50: the 120 layout with the split at half width.
-pub fn draw_home_wide(screen: &mut Screen, home: &HomeState) {
+fn render_home_empty_wide(screen: &mut Screen, home: &HomeState) {
     let content_bottom = screen.h - 3; // 47 at h=50
     let mid_bottom = screen.h - 10; // 40 at h=50
     let w = screen.w;
-    let s = w / 2; // pane split (100 at w=200)
-    let lx1 = s - 1;
-    let rx0 = s;
-    let rx1 = w - 2;
+    let panes = home_panes(screen);
+    let top_left = panes[0][0];
+    let top_right = panes[0][1];
+    let middle_left = panes[1][0];
+    let middle_right = panes[1][1];
+    let agenda = panes[2][0];
+    let lx1 = top_left.2 - 1;
+    let rx0 = top_right.0;
+    let rx1 = top_right.2 - 1;
     let inner = rx0 + 2; // right-hand content column
 
     // Header row.
@@ -848,10 +1046,10 @@ pub fn draw_home_wide(screen: &mut Screen, home: &HomeState) {
 
     // Watchlist + since-you-last-looked.
     screen.pane(
-        1,
-        1,
+        top_left.0,
+        top_left.1,
         lx1,
-        20,
+        top_left.3 - 1,
         true,
         &[
             ("watchlist ", Style::fg(color::BLUE).bold()),
@@ -860,10 +1058,10 @@ pub fn draw_home_wide(screen: &mut Screen, home: &HomeState) {
         &pane_hints(&[("↑↓", "select"), ("enter", "open"), ("tab", "next box")]),
     );
     screen.pane(
-        rx0,
-        1,
+        top_right.0,
+        top_right.1,
         rx1,
-        20,
+        top_right.3 - 1,
         false,
         &[("since you last looked", Style::fg(color::BLUE).bold())],
         &pane_hints(&[("3", "research")]),
@@ -928,19 +1126,19 @@ pub fn draw_home_wide(screen: &mut Screen, home: &HomeState) {
 
     // Upcoming + theses.
     screen.pane(
-        1,
-        21,
-        lx1,
-        mid_bottom,
+        middle_left.0,
+        middle_left.1,
+        middle_left.2 - 1,
+        middle_left.3 - 1,
         false,
         &[("upcoming", Style::fg(color::BLUE).bold())],
         &pane_hints(&[("enter", "open evidence")]),
     );
     screen.pane(
-        rx0,
-        21,
-        rx1,
-        mid_bottom,
+        middle_right.0,
+        middle_right.1,
+        middle_right.2 - 1,
+        middle_right.3 - 1,
         false,
         &[("theses", Style::fg(color::BLUE).bold())],
         &pane_hints(&[("enter", "open thesis"), ("4", "all")]),
@@ -962,10 +1160,10 @@ pub fn draw_home_wide(screen: &mut Screen, home: &HomeState) {
 
     // Agenda.
     screen.pane(
-        1,
-        mid_bottom + 1,
-        rx1,
-        content_bottom,
+        agenda.0,
+        agenda.1,
+        agenda.2 - 1,
+        agenda.3 - 1,
         false,
         &[
             ("needs you today ", Style::fg(color::BLUE).bold()),
@@ -995,8 +1193,11 @@ pub fn draw_home_wide(screen: &mut Screen, home: &HomeState) {
 
 /// Home at 80x24: one watchlist pane (table + since-you-last-looked lines),
 /// the agenda pane, narrow header/status bar.
-pub fn draw_home_narrow(screen: &mut Screen, home: &HomeState) {
+fn render_home_empty_narrow(screen: &mut Screen, home: &HomeState) {
     let w = screen.w;
+    let panes = home_panes(screen);
+    let watch = panes[0][0];
+    let agenda = panes[1][0];
 
     // Header row: inked DELTA chip, "overview", clock right-aligned.
     screen.put(0, 0, ' ', Style::DEFAULT);
@@ -1008,12 +1209,12 @@ pub fn draw_home_narrow(screen: &mut Screen, home: &HomeState) {
     let clock_x = w - 1 - home.clock.chars().count();
     screen.text(clock_x, 0, &home.clock, Style::fg(color::MUTED));
 
-    let x1 = w - 2;
+    let x1 = watch.2 - 1;
     screen.pane(
-        1,
-        1,
+        watch.0,
+        watch.1,
         x1,
-        14,
+        watch.3 - 1,
         true,
         &[
             ("watchlist ", Style::fg(color::BLUE).bold()),
@@ -1074,12 +1275,11 @@ pub fn draw_home_narrow(screen: &mut Screen, home: &HomeState) {
     );
 
     // Agenda: full width, jump keys with verdicts (bottom-anchored).
-    let agenda_bottom = screen.h - 3; // 21 at h=24
     screen.pane(
-        1,
-        15,
-        x1,
-        agenda_bottom,
+        agenda.0,
+        agenda.1,
+        agenda.2 - 1,
+        agenda.3 - 1,
         false,
         &[
             ("needs you today ", Style::fg(color::BLUE).bold()),
@@ -1105,4 +1305,81 @@ pub fn draw_home_narrow(screen: &mut Screen, home: &HomeState) {
     }
 
     status_bar_narrow(screen, NarrowTab::Home);
+}
+
+/// Oracle compatibility entry points. The running component uses the renderers directly.
+pub fn draw_home(screen: &mut Screen, home: &HomeState) {
+    render_home_empty_normal(screen, home);
+}
+
+pub fn draw_home_wide(screen: &mut Screen, home: &HomeState) {
+    render_home_empty_wide(screen, home);
+}
+
+pub fn draw_home_narrow(screen: &mut Screen, home: &HomeState) {
+    render_home_empty_narrow(screen, home);
+}
+
+pub fn draw_home_live(screen: &mut Screen, home: &HomeState, data: &HomeLiveData) {
+    render_home_live(screen, home, data);
+}
+
+pub fn draw_home_setup(screen: &mut Screen, home: &HomeState, setup: &HomeSetupData) {
+    render_home_setup(screen, home, setup);
+}
+
+#[cfg(test)]
+mod component_tests {
+    use super::*;
+    use crate::Screen as _;
+    use crossterm::event::KeyModifiers;
+
+    #[test]
+    fn home_selection_and_open_are_screen_owned() {
+        let mut home = HomeComponent::default();
+        home.set_snapshot(
+            HomeState {
+                clock: String::new(),
+                symbol: "AAPL".into(),
+                last: String::new(),
+                chg_label: String::new(),
+                spark: String::new(),
+                since_stamp: String::new(),
+                closes: Vec::new(),
+                feed: HomeFeed::default(),
+            },
+            None,
+            None,
+            0,
+            2,
+        );
+        let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+        assert_eq!(
+            home.handle_key(key(KeyCode::Down)),
+            Some(Action::Home(HomeCommand::Select(1)))
+        );
+        assert_eq!(
+            home.handle_key(key(KeyCode::Down)),
+            Some(Action::Home(HomeCommand::Select(1)))
+        );
+        assert_eq!(
+            home.handle_key(key(KeyCode::Enter)),
+            Some(Action::Home(HomeCommand::OpenSelected))
+        );
+    }
+
+    #[test]
+    fn home_panes_follow_breakpoint_grid() {
+        for (w, h, split, top, agenda) in [
+            (80, 24, None, 14, 15),
+            (120, 40, Some(60), 15, 31),
+            (200, 50, Some(100), 20, 41),
+        ] {
+            let screen = Screen::new(w, h);
+            let panes = home_panes(&screen);
+            assert_eq!(panes[0][0].3 - 1, top);
+            assert_eq!(panes.last().unwrap()[0].1, agenda);
+            assert_eq!(panes[0].get(1).map(|pane| pane.0), split);
+        }
+    }
 }
