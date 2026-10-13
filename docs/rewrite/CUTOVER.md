@@ -1,21 +1,26 @@
 # Cutover checklist (R4 -> main)
 
 **Not ready.** The Rust app and shared services are integrated on
-`spec/26-rust-v1` in draft PR #37. The expanded populated golden matrix,
-release packaging, and maintainer gates remain. The cutover is one PR into
-`main`; the human steps are marked **[gate]**.
+`spec/26-rust-v1` in draft PR #37. The Rust-only removal and 1.0.0 version are
+prepared on `spec/26-cutover`. Screen ownership/layout work, the real-database
+pass, and maintainer gates remain. The cutover is one PR into `main`; human
+steps are marked **[gate]**.
 
 - [ ] Every R3 task card in `docs/rewrite/tasks/` is done and merged.
 - [ ] Full 3-size golden matrix green over every scenario, including populated
       and dialog states (Tier A cell-for-cell, Tier B triaged, approved
-      deviations only). The integrated landing and initial populated states
-      are green; extended R4 scenarios are in progress.
+      deviations only). The current 159 live and 40 static oracle frames pass
+      locally; rerun after the Component/layout refactor.
+- [ ] Research, Theses, Ask, Decisions and Settings own data-driven screen
+      components and pane layouts (D2). Their live behavior is present, but
+      central App routing and some fixed-coordinate painters remain.
 - [ ] Service parity: every `delta/services.py` operation plus reports, chat,
       theses, decisions and review match Python on the shared seed.
 - [ ] End-of-phase adversarial reviewer pass, findings triaged.
 - [ ] Packaging: validate cargo-dist archives and publish a GitHub Release
-      from the tag workflow. The macOS arm64 archive and checksum were checked
-      locally, and the dist plan passed in PR #37; a tag publish remains.
+      from the tag workflow. A macOS arm64 archive and checksum were checked
+      locally before the 1.0.0 bump, and the dist plan passed in PR #37;
+      repeat on the final cutover commit and tag publish.
       Release binaries only; no Homebrew tap (D12).
 - [ ] Manual pass: `cargo run --release` on a copy of the real `data/delta.db`,
       every panel. A seed database pass succeeded; repository instructions
@@ -23,7 +28,8 @@ release packaging, and maintainer gates remain. The cutover is one PR into
 - [ ] **[gate]** Tag `python-final` on `main` before the merge lands.
 - [ ] **[gate]** Approve the PR merging `rewrite/rust` into `main`.
 - [ ] In the cutover PR: remove `delta/`, `tests/`, `uv.lock`, `pyproject.toml`
-      (keep `fixtures/` and `docs/`); CI runs the Rust gates only.
+      (keep `fixtures/` and `docs/`); CI runs the Rust gates only. This is
+      prepared on `spec/26-cutover`, pending its draft PR and CI.
 
 Populated local smoke measurements are in `BENCHMARKS.md`. Issue #26 treats
 repeatable launch, RSS, and frame benchmarks as informational work after V1.
