@@ -28,8 +28,8 @@ pub use research::{
 };
 pub use settings::{
     comma, draw_settings, draw_settings_narrow, draw_settings_wide, exporter_world, human_size,
-    stamp, SettingsData, SettingsDiagnostics, SettingsFocus, SettingsMarket, SettingsSource,
-    SettingsState, SettingsView,
+    stamp, SettingsCommand, SettingsComponent, SettingsData, SettingsDiagnostics, SettingsFocus,
+    SettingsMarket, SettingsSource, SettingsState, SettingsView,
 };
 pub use status_bar::{Footer, NarrowTab};
 pub use theses::{
