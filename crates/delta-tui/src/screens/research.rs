@@ -495,7 +495,14 @@ impl ResearchLayout {
                 full,
                 company: None,
                 report: None,
-                evidence: super::pane_layout(1, 0, 41, bottom + 1, &[bottom + 1], &[40])[0][0],
+                evidence: super::pane_layout(
+                    full.0,
+                    full.1,
+                    full.0 + 40,
+                    full.3,
+                    &[full.3 - full.1],
+                    &[40],
+                )[0][0],
             };
         }
         if screen.w < 100 {
@@ -508,8 +515,8 @@ impl ResearchLayout {
             };
         }
         let panes = super::pane_layout(
-            1,
-            0,
+            full.0,
+            full.1,
             end,
             bottom + 1,
             &[bottom + 1],
@@ -800,8 +807,8 @@ pub fn draw_research_live(screen: &mut Screen, data: &ResearchData, state: &Rese
             pane_hints(&[("z", "restore"), ("↑↓", "scroll"), ("enter", "citation")])
         };
         screen.pane(
-            1,
-            0,
+            layout.full.0,
+            layout.full.1,
             right,
             bottom,
             true,
@@ -915,9 +922,9 @@ pub fn draw_research_live(screen: &mut Screen, data: &ResearchData, state: &Rese
         paint_live(screen, data, state, zoom_layout);
         let count = state.filtered(data).len().to_string();
         screen.pane(
-            1,
-            0,
-            40,
+            zoom_layout.evidence.0,
+            zoom_layout.evidence.1,
+            zoom_layout.evidence.2 - 1,
             bottom,
             true,
             &[

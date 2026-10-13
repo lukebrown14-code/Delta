@@ -147,7 +147,7 @@ impl DecisionsData {
 /// Textual's journal/timeline split, expressed as two pane rectangles.
 /// The one-cell adjustment at normal and wide sizes is the border shared by
 /// the panes; the narrow table keeps that cell for its horizontal scrollbar.
-fn pane_columns(screen: &Screen) -> (usize, usize, usize) {
+fn pane_columns(screen: &Screen) -> (super::PaneRect, super::PaneRect) {
     let bottom = screen.h.saturating_sub(3);
     let journal_width = screen.w.saturating_mul(2) / 5 - usize::from(screen.w >= 100);
     let panes = super::pane_layout(
@@ -158,7 +158,7 @@ fn pane_columns(screen: &Screen) -> (usize, usize, usize) {
         &[bottom + 1],
         &[journal_width, screen.w.saturating_sub(2 + journal_width)],
     );
-    (panes[0][0].2 - 1, panes[0][1].0, bottom)
+    (panes[0][0], panes[0][1])
 }
 
 /// Paint the populated journal on the same cell-grid chrome as the empty state.
@@ -167,7 +167,8 @@ pub fn draw_decisions_live(screen: &mut Screen, data: &DecisionsData) {
 }
 
 fn draw_decisions_frame(screen: &mut Screen, data: &DecisionsData, component_empty: bool) {
-    let (left, right, bottom) = pane_columns(screen);
+    let (journal, timeline) = pane_columns(screen);
+    let (left, right, bottom) = (journal.2 - 1, timeline.0, journal.3 - 1);
     if screen.w >= 160 {
         draw_status_bar_wide(screen, screen.h - 1, screen.w, "6 Decisions");
     } else if screen.w < 100 {
@@ -176,7 +177,13 @@ fn draw_decisions_frame(screen: &mut Screen, data: &DecisionsData, component_emp
         draw_status_bar_decisions(screen, screen.h - 1, screen.w);
     }
     let header_style = Style::fg(color::FG).bold().bg("#232323");
-    screen.fill(2, 1, left, 2, header_style);
+    screen.fill(
+        journal.0 + 1,
+        journal.1 + 1,
+        left,
+        journal.1 + 2,
+        header_style,
+    );
     let header = if screen.w < 100 {
         " status      review      instr"
     } else if screen.w >= 160 {
@@ -184,12 +191,12 @@ fn draw_decisions_frame(screen: &mut Screen, data: &DecisionsData, component_emp
     } else {
         " status      review      instrument      rati"
     };
-    screen.text(2, 1, header, header_style);
+    screen.text(journal.0 + 1, journal.1 + 1, header, header_style);
     let title = Style::fg(color::BLUE).bold();
     let count = format!("· {}", data.decisions.len());
     screen.pane(
-        1,
-        0,
+        journal.0,
+        journal.1,
         left,
         bottom,
         true,
@@ -227,9 +234,9 @@ fn draw_decisions_frame(screen: &mut Screen, data: &DecisionsData, component_emp
         format!(" · {} reviews", data.reviews.len())
     };
     screen.pane(
-        right,
-        0,
-        screen.w - 2,
+        timeline.0,
+        timeline.1,
+        timeline.2 - 1,
         bottom,
         false,
         &[
@@ -243,12 +250,12 @@ fn draw_decisions_frame(screen: &mut Screen, data: &DecisionsData, component_emp
         },
     );
     if component_empty {
-        paint_empty_decisions(screen, left, right, bottom, true);
+        paint_empty_decisions(screen, journal, timeline, true);
         return;
     }
-    for y in 0..=bottom {
-        for x in 1..=left {
-            if y == 0 || y == bottom || x == 1 || x == left {
+    for y in journal.1..=bottom {
+        for x in journal.0..=left {
+            if y == journal.1 || y == bottom || x == journal.0 || x == left {
                 let cell = &mut screen.cells[y * screen.w + x];
                 if cell.fg == Some(color::BLUE) {
                     cell.fg = Some("#898989");
@@ -256,14 +263,14 @@ fn draw_decisions_frame(screen: &mut Screen, data: &DecisionsData, component_emp
             }
         }
     }
-    for x in right + 2..screen.w - 2 {
+    for x in timeline.0 + 2..timeline.2 - 1 {
         let cell = &mut screen.cells[x];
         if cell.fg == Some(color::BLUE) {
             cell.fg = Some("#898989");
         }
     }
     screen.cells[right + 11].fg = Some("#898989");
-    for x in right + 1..screen.w - 2 {
+    for x in timeline.0 + 1..timeline.2 - 1 {
         let cell = &mut screen.cells[bottom * screen.w + x];
         if cell.fg == Some(color::BLUE) {
             cell.fg = Some("#898989");
@@ -287,44 +294,72 @@ fn draw_decisions_frame(screen: &mut Screen, data: &DecisionsData, component_emp
     }
 
     if data.decisions.is_empty() {
-        paint_empty_decisions(screen, left, right, bottom, false);
+        paint_empty_decisions(screen, journal, timeline, false);
         return;
     }
 
     let list_style = Style::fg(color::FG);
-    screen.fill(2, 2, left, bottom - 1, list_style);
+    screen.fill(journal.0 + 1, journal.1 + 2, left, bottom - 1, list_style);
     if screen.w < 100 {
         screen.fill(
-            2,
+            journal.0 + 1,
             bottom - 1,
-            10,
+            journal.0 + 9,
             bottom,
             Style::fg("#3a3a3a").attrs_reverse(),
         );
-        screen.put(10, bottom - 1, '▌', Style::fg("#3a3a3a").bg("#0d0d0d"));
-        screen.fill(11, bottom - 1, left, bottom, list_style.bg("#0d0d0d"));
+        screen.put(
+            journal.0 + 9,
+            bottom - 1,
+            '▌',
+            Style::fg("#3a3a3a").bg("#0d0d0d"),
+        );
+        screen.fill(
+            journal.0 + 10,
+            bottom - 1,
+            left,
+            bottom,
+            list_style.bg("#0d0d0d"),
+        );
     } else if screen.w < 160 {
         screen.fill(
-            2,
+            journal.0 + 1,
             bottom - 1,
-            21,
+            journal.0 + 20,
             bottom,
             Style::fg("#3a3a3a").attrs_reverse(),
         );
-        screen.put(21, bottom - 1, '▏', Style::fg("#3a3a3a").bg("#0d0d0d"));
-        screen.fill(22, bottom - 1, left, bottom, list_style.bg("#0d0d0d"));
+        screen.put(
+            journal.0 + 20,
+            bottom - 1,
+            '▏',
+            Style::fg("#3a3a3a").bg("#0d0d0d"),
+        );
+        screen.fill(
+            journal.0 + 21,
+            bottom - 1,
+            left,
+            bottom,
+            list_style.bg("#0d0d0d"),
+        );
     } else {
         screen.fill(
-            2,
+            journal.0 + 1,
             bottom - 1,
-            58,
+            journal.0 + 57,
             bottom,
             Style::fg("#3a3a3a").attrs_reverse(),
         );
-        screen.fill(58, bottom - 1, left, bottom, list_style.bg("#0d0d0d"));
+        screen.fill(
+            journal.0 + 57,
+            bottom - 1,
+            left,
+            bottom,
+            list_style.bg("#0d0d0d"),
+        );
     }
     for (index, decision) in data.decisions.iter().enumerate() {
-        let y = 2 + index;
+        let y = journal.1 + 2 + index;
         if y >= bottom - 1 {
             break;
         }
@@ -335,32 +370,38 @@ fn draw_decisions_frame(screen: &mut Screen, data: &DecisionsData, component_emp
             decision.instrument_id,
             decision.rationale
         );
-        let visible: String = text.chars().take(left - 2).collect();
+        let visible: String = text.chars().take(left - journal.0 - 1).collect();
         let style = if index == data.selected {
             Style::fg("#ffffff").bg("#494949").bold()
         } else {
             list_style
         };
         if index == data.selected {
-            screen.fill(2, y, left, y + 1, style);
+            screen.fill(journal.0 + 1, y, left, y + 1, style);
         }
-        screen.text(2, y, &visible, style);
+        screen.text(journal.0 + 1, y, &visible, style);
     }
 
-    screen.fill(right + 1, 1, screen.w - 4, bottom, Style::DEFAULT);
+    screen.fill(
+        timeline.0 + 1,
+        timeline.1 + 1,
+        timeline.2 - 3,
+        bottom,
+        Style::DEFAULT,
+    );
     if screen.w < 100 {
-        for y in 1..bottom {
+        for y in timeline.1 + 1..bottom {
             screen.fill(
-                screen.w - 4,
+                timeline.2 - 3,
                 y,
-                screen.w - 2,
+                timeline.2 - 1,
                 y + 1,
                 Style::fg("#3a3a3a").attrs_reverse(),
             );
         }
     }
     if screen.w < 100 {
-        for x in screen.w - 4..screen.w - 2 {
+        for x in timeline.2 - 3..timeline.2 - 1 {
             if data.reviews.is_empty() {
                 screen.put(
                     x,
@@ -377,9 +418,9 @@ fn draw_decisions_frame(screen: &mut Screen, data: &DecisionsData, component_emp
     let Some(decision) = data.selected() else {
         return;
     };
-    let x = right + 2;
-    let width = screen.w.saturating_sub(x + 5);
-    let mut row = 1;
+    let x = timeline.0 + 2;
+    let width = timeline.2.saturating_sub(x + 4);
+    let mut row = timeline.1 + 1;
     let line = |screen: &mut Screen, text: &str, style: Style, row: &mut usize| {
         if *row < bottom {
             screen.text(x, *row, text, style);
@@ -483,15 +524,27 @@ fn draw_decisions_frame(screen: &mut Screen, data: &DecisionsData, component_emp
 
 fn paint_empty_decisions(
     screen: &mut Screen,
-    left: usize,
-    right: usize,
-    bottom: usize,
+    journal: super::PaneRect,
+    timeline: super::PaneRect,
     component_empty: bool,
 ) {
-    screen.fill(2, 2, left, bottom - 1, Style::fg(color::FG));
+    let (left, right, bottom) = (journal.2 - 1, timeline.0, journal.3 - 1);
+    screen.fill(
+        journal.0 + 1,
+        journal.1 + 2,
+        left,
+        bottom - 1,
+        Style::fg(color::FG),
+    );
     if screen.w < 160 {
-        let thumb = if screen.w < 100 { 19 } else { 41 };
-        screen.fill(2, bottom - 1, thumb, bottom, Style::fg("#3a3a3a"));
+        let thumb = journal.0 + if screen.w < 100 { 18 } else { 40 };
+        screen.fill(
+            journal.0 + 1,
+            bottom - 1,
+            thumb,
+            bottom,
+            Style::fg("#3a3a3a"),
+        );
         screen.put(thumb, bottom - 1, '▊', Style::fg("#3a3a3a").bg("#0d0d0d"));
         screen.fill(
             thumb + 1,
@@ -501,13 +554,24 @@ fn paint_empty_decisions(
             Style::fg(color::FG).bg("#0d0d0d"),
         );
     } else {
-        screen.fill(2, bottom - 1, left, bottom, Style::fg(color::FG));
+        screen.fill(
+            journal.0 + 1,
+            bottom - 1,
+            left,
+            bottom,
+            Style::fg(color::FG),
+        );
     }
     let muted = Style::fg(color::MUTED);
-    screen.text(right + 2, 1, "no decisions yet — press ", muted);
+    screen.text(
+        right + 2,
+        timeline.1 + 1,
+        "no decisions yet — press ",
+        muted,
+    );
     screen.put(
         right + 27,
-        1,
+        timeline.1 + 1,
         'n',
         Style::fg(if component_empty {
             color::BLUE
@@ -523,11 +587,11 @@ fn paint_empty_decisions(
     } else {
         " to record the context you want to"
     };
-    screen.text(right + 28, 1, continuation, muted);
+    screen.text(right + 28, timeline.1 + 1, continuation, muted);
     if screen.w < 160 {
         screen.text(
             right + 2,
-            2,
+            timeline.1 + 2,
             if screen.w < 100 {
                 "context you want to revisit"
             } else {
@@ -631,7 +695,8 @@ pub fn draw_decision_review_form(screen: &mut Screen, note: &str, status: &str) 
 /// The Decisions screen: ledger + timeline (empty states; port of
 /// `delta/tui/screens/decisions.py`, seeded golden layout).
 pub fn draw_decisions(screen: &mut Screen) {
-    let (left, right, content_bottom) = pane_columns(screen);
+    let (journal, timeline) = pane_columns(screen);
+    let (left, right, content_bottom) = (journal.2 - 1, timeline.0, journal.3 - 1);
     screen.pane(
         1,
         0,
@@ -720,7 +785,8 @@ fn draw_status_bar_decisions(screen: &mut Screen, y: usize, w: usize) {
 
 /// Decisions at 200x50: journal table + timeline.
 pub fn draw_decisions_wide(screen: &mut Screen) {
-    let (left, right, content_bottom) = pane_columns(screen);
+    let (journal, timeline) = pane_columns(screen);
+    let (left, right, content_bottom) = (journal.2 - 1, timeline.0, journal.3 - 1);
     screen.pane(
         1,
         0,
@@ -770,7 +836,8 @@ pub fn draw_decisions_wide(screen: &mut Screen) {
 
 /// Decisions at 80x24: journal (focused) + timeline panes side by side.
 pub fn draw_decisions_narrow(screen: &mut Screen) {
-    let (left, right, bottom) = pane_columns(screen);
+    let (journal, timeline) = pane_columns(screen);
+    let (left, right, bottom) = (journal.2 - 1, timeline.0, journal.3 - 1);
     // Left: the decision journal table.
     screen.pane(
         1,
@@ -920,7 +987,8 @@ mod tests {
     fn pane_layout_tracks_terminal_width() {
         for (width, expected_left) in [(80, 32), (120, 47), (140, 55), (200, 79)] {
             let screen = Screen::new(width, 40);
-            let (left, right, bottom) = pane_columns(&screen);
+            let (journal, timeline) = pane_columns(&screen);
+            let (left, right, bottom) = (journal.2 - 1, timeline.0, journal.3 - 1);
             assert_eq!(
                 (left, right, bottom),
                 (expected_left, expected_left + 1, 37)

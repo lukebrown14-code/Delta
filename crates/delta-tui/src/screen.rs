@@ -361,7 +361,7 @@ pub fn blit(frame: &mut ratatui::Frame, screen: &Screen, area: ratatui::layout::
             }
             frame
                 .buffer_mut()
-                .cell_mut((x as u16, y as u16))
+                .cell_mut((area.x + x as u16, area.y + y as u16))
                 .expect("cell in bounds")
                 .set_char(cell.ch)
                 .set_style(style);
@@ -373,4 +373,24 @@ pub fn blit(frame: &mut ratatui::Frame, screen: &Screen, area: ratatui::layout::
 pub fn hex_color(hex: &str) -> ratatui::style::Color {
     let byte = |i: usize| u8::from_str_radix(&hex[i..i + 2], 16).unwrap_or(0);
     ratatui::style::Color::Rgb(byte(1), byte(3), byte(5))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{blit, Screen, Style};
+    use ratatui::{backend::TestBackend, layout::Rect, Terminal};
+
+    #[test]
+    fn blit_respects_the_frame_area_origin() {
+        let mut terminal = Terminal::new(TestBackend::new(6, 4)).unwrap();
+        let mut screen = Screen::new(2, 1);
+        screen.text(0, 0, "Hi", Style::DEFAULT);
+        terminal
+            .draw(|frame| blit(frame, &screen, Rect::new(2, 1, 2, 1)))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        assert_eq!(buffer[(2, 1)].symbol(), "H");
+        assert_eq!(buffer[(3, 1)].symbol(), "i");
+        assert_eq!(buffer[(0, 0)].symbol(), " ");
+    }
 }

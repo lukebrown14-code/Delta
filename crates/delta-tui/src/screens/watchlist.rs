@@ -973,43 +973,48 @@ fn render_watchlist_narrow(screen: &mut Screen, state: &WatchlistState) {
         ]),
     );
 
-    let cx = 3usize; // pane border 1 + padding 1
-    let right_edge = 77usize;
+    let cx = pane.0 + 2;
+    let right_edge = pane.2 - 2;
     let Some(metric) = &state.metric else {
-        screen.text(cx, 2, "No instrument selected", Style::fg(color::MUTED));
+        screen.text(
+            cx,
+            pane.1 + 2,
+            "No instrument selected",
+            Style::fg(color::MUTED),
+        );
         draw_status_bar(screen, screen.h - 1, w, true);
         return;
     };
 
     // Row 1: name + meta.
     let mut x = cx;
-    x = screen.text(x, 1, &metric.symbol, Style::fg(color::FG).bold());
+    x = screen.text(x, pane.1 + 1, &metric.symbol, Style::fg(color::FG).bold());
     let meta = format!(
         "  {} · {} · {}",
         metric.market.to_uppercase(),
         metric.asset_class,
         metric.currency
     );
-    screen.text(x, 1, &meta, Style::fg(color::MUTED).bold());
+    screen.text(x, pane.1 + 1, &meta, Style::fg(color::MUTED).bold());
 
     // Row 2: hero.
     let mut x = cx;
-    x = screen.text(x, 2, &metric.current, Style::fg(color::FG).bold());
+    x = screen.text(x, pane.1 + 2, &metric.current, Style::fg(color::FG).bold());
     x = screen.text(
         x,
-        2,
+        pane.1 + 2,
         &format!(" {}", metric.currency),
         Style::fg(color::MUTED),
     );
-    x = screen.text(x, 2, "   ", Style::fg(color::FG));
+    x = screen.text(x, pane.1 + 2, "   ", Style::fg(color::FG));
     let closed = metric
         .history_end
         .as_deref()
         .map(friendly_date)
         .map(|d| format!("closed · last {d}"))
         .unwrap_or_else(|| "— today".to_string());
-    x = screen.text(x, 2, &closed, Style::fg(color::MUTED));
-    screen.text(x, 2, "   ", Style::fg(color::FG));
+    x = screen.text(x, pane.1 + 2, &closed, Style::fg(color::MUTED));
+    screen.text(x, pane.1 + 2, "   ", Style::fg(color::FG));
 
     // Row 3: range tabs + summary (15-cell lead-in here).
     let mut x = cx;
@@ -1017,7 +1022,7 @@ fn render_watchlist_narrow(screen: &mut Screen, state: &WatchlistState) {
         let active = label == state.range;
         x = screen.text(
             x,
-            3,
+            pane.1 + 3,
             range_label(label),
             if active {
                 Style::fg(color::BLUE).bold()
@@ -1025,9 +1030,9 @@ fn render_watchlist_narrow(screen: &mut Screen, state: &WatchlistState) {
                 Style::fg(color::MUTED)
             },
         );
-        x = screen.text(x, 3, "  ", Style::fg(color::MUTED));
+        x = screen.text(x, pane.1 + 3, "  ", Style::fg(color::MUTED));
     }
-    x = screen.text(x, 3, "             ", Style::fg(color::MUTED));
+    x = screen.text(x, pane.1 + 3, "             ", Style::fg(color::MUTED));
     if let Some(label) = &metric.change_label {
         let (arrow, style) = if label.starts_with('+') {
             ("▲", Style::fg(color::GREEN))
@@ -1036,19 +1041,19 @@ fn render_watchlist_narrow(screen: &mut Screen, state: &WatchlistState) {
         } else {
             ("─", Style::fg(color::MUTED))
         };
-        x = screen.text(x, 3, &format!("{arrow} {label}"), style);
+        x = screen.text(x, pane.1 + 3, &format!("{arrow} {label}"), style);
         if let (Some(hi), Some(lo)) = (metric.period_high, metric.period_low) {
-            x = screen.text(x, 3, "   ", Style::fg(color::MUTED));
+            x = screen.text(x, pane.1 + 3, "   ", Style::fg(color::MUTED));
             x = screen.text(
                 x,
-                3,
+                pane.1 + 3,
                 &format!("hi {}", grouped(hi)),
                 Style::fg(color::MUTED),
             );
-            x = screen.text(x, 3, "   ", Style::fg(color::MUTED));
+            x = screen.text(x, pane.1 + 3, "   ", Style::fg(color::MUTED));
             screen.text(
                 x,
-                3,
+                pane.1 + 3,
                 &format!("lo {}", grouped(lo)),
                 Style::fg(color::MUTED),
             );
@@ -1068,28 +1073,46 @@ fn render_watchlist_narrow(screen: &mut Screen, state: &WatchlistState) {
         l if l.starts_with('+') => color::GREEN,
         _ => color::BLUE,
     };
-    screen.price_chart(cx + 1, 4, &chart, 72, 12, line);
-    paint_scrub(screen, state, &chart, cx + 1, 4, 72, 12);
+    let chart_width = pane.2 - pane.0 - 6;
+    screen.price_chart(cx + 1, pane.1 + 4, &chart, chart_width, 12, line);
+    paint_scrub(screen, state, &chart, cx + 1, pane.1 + 4, chart_width, 12);
 
     // Metric grid.
-    screen.text(cx, 16, "Available Metrics", Style::fg(color::MUTED).bold());
+    screen.text(
+        cx,
+        pane.1 + 16,
+        "Available Metrics",
+        Style::fg(color::MUTED).bold(),
+    );
     screen.text(
         cx + 17,
-        16,
+        pane.1 + 16,
         "              ",
         Style::fg(color::MUTED).bold(),
     );
-    screen.fill(cx + 31, 16, right_edge, 17, Style::fg(color::FG));
-    screen.fill(cx, 17, right_edge, 19, Style::fg(color::FG));
-    let mut gy = 17usize;
+    screen.fill(
+        cx + 31,
+        pane.1 + 16,
+        right_edge,
+        pane.1 + 17,
+        Style::fg(color::FG),
+    );
+    screen.fill(
+        cx,
+        pane.1 + 17,
+        right_edge,
+        pane.1 + 19,
+        Style::fg(color::FG),
+    );
+    let mut gy = pane.1 + 17;
     let mut index = 0usize;
     while index < metric.values.len() {
         let (label, value) = &metric.values[index];
         screen.text(cx, gy, label, Style::fg(color::FG));
-        screen.text_right(41, gy, value, Style::fg(color::FG));
+        screen.text_right(pane.0 + 40, gy, value, Style::fg(color::FG));
         if index + 1 < metric.values.len() {
             let (rlabel, rvalue) = &metric.values[index + 1];
-            screen.text(42, gy, rlabel, Style::fg(color::FG));
+            screen.text(pane.0 + 41, gy, rlabel, Style::fg(color::FG));
             screen.text_right(right_edge, gy, rvalue, Style::fg(color::FG));
         }
         index += 2;
@@ -1114,9 +1137,9 @@ fn render_watchlist_narrow(screen: &mut Screen, state: &WatchlistState) {
 /// that later state.
 fn render_watchlist_narrow_list(screen: &mut Screen, state: &WatchlistState, filter: bool) {
     let w = screen.w;
-    let bottom = screen.h - 3;
     let offset = usize::from(filter);
     let pane = watchlist_panes(screen)[0][0];
+    let bottom = pane.3 - 1;
     screen.pane(
         pane.0,
         pane.1,
@@ -1137,23 +1160,35 @@ fn render_watchlist_narrow_list(screen: &mut Screen, state: &WatchlistState, fil
             ("space", "fold"),
         ]),
     );
-    screen.fill(3, 2 + offset, w - 3, bottom, Style::fg(color::FG));
-    screen.fill(3, 1 + offset, w - 3, 2 + offset, Style::fg(color::MUTED));
+    screen.fill(
+        pane.0 + 2,
+        pane.1 + 2 + offset,
+        pane.2 - 2,
+        bottom,
+        Style::fg(color::FG),
+    );
+    screen.fill(
+        pane.0 + 2,
+        pane.1 + 1 + offset,
+        pane.2 - 2,
+        pane.1 + 2 + offset,
+        Style::fg(color::MUTED),
+    );
     screen.text(
-        3,
-        1 + offset,
+        pane.0 + 2,
+        pane.1 + 1 + offset,
         "   Name              Last      Chg%   Age",
         Style::fg(color::MUTED),
     );
     if state.entries.is_empty() {
         screen.text(
-            4,
-            3 + offset,
+            pane.0 + 3,
+            pane.1 + 3 + offset,
             "No instruments yet · press a to add",
             Style::fg(color::MUTED),
         );
     }
-    let mut y = 2 + offset;
+    let mut y = pane.1 + 2 + offset;
     let mut last_class = "";
     for (index, entry) in state.entries.iter().enumerate() {
         if entry.asset_class != last_class {
@@ -1166,9 +1201,9 @@ fn render_watchlist_narrow_list(screen: &mut Screen, state: &WatchlistState, fil
                 .iter()
                 .filter(|item| item.asset_class == last_class)
                 .count();
-            screen.text(4, y, "▾ ", Style::fg(color::BLUE).bold());
-            screen.text(6, y, last_class, Style::fg(color::BLUE).bold());
-            let count_x = 6 + last_class.len();
+            screen.text(pane.0 + 3, y, "▾ ", Style::fg(color::BLUE).bold());
+            screen.text(pane.0 + 5, y, last_class, Style::fg(color::BLUE).bold());
+            let count_x = pane.0 + 5 + last_class.len();
             screen.put(count_x, y, ' ', Style::fg(color::BLUE).bold());
             screen.text(
                 count_x + 1,
@@ -1194,8 +1229,8 @@ fn render_watchlist_narrow_list(screen: &mut Screen, state: &WatchlistState, fil
                     Style::fg(color::MUTED).bg(color::BLUE_BG).bold(),
                 )
             };
-            screen.fill(3, y, w - 3, y + 1, row_style);
-            screen.fill(18, y, 44, y + 1, value_style);
+            screen.fill(pane.0 + 2, y, pane.2 - 2, y + 1, row_style);
+            screen.fill(pane.0 + 17, y, pane.0 + 43, y + 1, value_style);
         }
         let symbol_style = if selected {
             if filter {
@@ -1215,8 +1250,8 @@ fn render_watchlist_narrow_list(screen: &mut Screen, state: &WatchlistState, fil
         } else {
             Style::fg(color::MUTED)
         };
-        screen.text(6, y, &entry.symbol, symbol_style);
-        screen.text(27, y, "—         —", values_style);
+        screen.text(pane.0 + 5, y, &entry.symbol, symbol_style);
+        screen.text(pane.0 + 26, y, "—         —", values_style);
         y += 1;
     }
     draw_status_bar(screen, screen.h - 1, w, true);
@@ -1492,7 +1527,12 @@ fn render_watchlist_wide(screen: &mut Screen, state: &WatchlistState, filter: Op
     let cx = inspector.0 + 1;
     let right_edge = inspector.2 - 3;
     let Some(metric) = &state.metric else {
-        screen.text(cx + 1, 2, "No instrument selected", Style::fg(color::MUTED));
+        screen.text(
+            cx + 1,
+            inspector.1 + 2,
+            "No instrument selected",
+            Style::fg(color::MUTED),
+        );
         draw_status_bar_wide(screen, screen.h - 1, w, "2 Watchlist");
         if let Some(query) = filter {
             paint_filter_input(screen, query, list.2 - 1);
@@ -1501,39 +1541,49 @@ fn render_watchlist_wide(screen: &mut Screen, state: &WatchlistState, filter: Op
     };
 
     let mut x = cx + 1;
-    x = screen.text(x, 1, &metric.symbol, Style::fg(color::FG).bold());
+    x = screen.text(
+        x,
+        inspector.1 + 1,
+        &metric.symbol,
+        Style::fg(color::FG).bold(),
+    );
     let meta = format!(
         "  {} · {} · {}",
         metric.market.to_uppercase(),
         metric.asset_class,
         metric.currency
     );
-    screen.text(x, 1, &meta, Style::fg(color::MUTED).bold());
+    screen.text(x, inspector.1 + 1, &meta, Style::fg(color::MUTED).bold());
 
     let mut x = cx + 1;
-    x = screen.text(x, 2, &metric.current, Style::fg(color::FG).bold());
     x = screen.text(
         x,
-        2,
+        inspector.1 + 2,
+        &metric.current,
+        Style::fg(color::FG).bold(),
+    );
+    x = screen.text(
+        x,
+        inspector.1 + 2,
         &format!(" {}", metric.currency),
         Style::fg(color::MUTED),
     );
-    x = screen.text(x, 2, "   ", Style::fg(color::FG));
+    x = screen.text(x, inspector.1 + 2, "   ", Style::fg(color::FG));
     let closed = metric
         .history_end
         .as_deref()
         .map(friendly_date)
         .map(|d| format!("closed · last {d}"))
         .unwrap_or_else(|| "— today".to_string());
-    x = screen.text(x, 2, &closed, Style::fg(color::MUTED));
-    screen.text(x, 2, "   ", Style::fg(color::FG));
+    x = screen.text(x, inspector.1 + 2, &closed, Style::fg(color::MUTED));
+    screen.text(x, inspector.1 + 2, "   ", Style::fg(color::FG));
 
     let mut x = cx + 1;
     for label in RANGES {
         let active = label == state.range;
         x = screen.text(
             x,
-            3,
+            inspector.1 + 3,
             range_label(label),
             if active {
                 Style::fg(color::BLUE).bold()
@@ -1541,9 +1591,9 @@ fn render_watchlist_wide(screen: &mut Screen, state: &WatchlistState, filter: Op
                 Style::fg(color::MUTED)
             },
         );
-        x = screen.text(x, 3, "  ", Style::fg(color::MUTED));
+        x = screen.text(x, inspector.1 + 3, "  ", Style::fg(color::MUTED));
     }
-    x = screen.text(x, 3, &" ".repeat(87), Style::fg(color::MUTED));
+    x = screen.text(x, inspector.1 + 3, &" ".repeat(87), Style::fg(color::MUTED));
     if let Some(label) = &metric.change_label {
         let (arrow, style) = if label.starts_with('+') {
             ("▲", Style::fg(color::GREEN))
@@ -1552,19 +1602,19 @@ fn render_watchlist_wide(screen: &mut Screen, state: &WatchlistState, filter: Op
         } else {
             ("─", Style::fg(color::MUTED))
         };
-        x = screen.text(x, 3, &format!("{arrow} {label}"), style);
+        x = screen.text(x, inspector.1 + 3, &format!("{arrow} {label}"), style);
         if let (Some(hi), Some(lo)) = (metric.period_high, metric.period_low) {
-            x = screen.text(x, 3, "   ", Style::fg(color::MUTED));
+            x = screen.text(x, inspector.1 + 3, "   ", Style::fg(color::MUTED));
             x = screen.text(
                 x,
-                3,
+                inspector.1 + 3,
                 &format!("hi {}", grouped(hi)),
                 Style::fg(color::MUTED),
             );
-            x = screen.text(x, 3, "   ", Style::fg(color::MUTED));
+            x = screen.text(x, inspector.1 + 3, "   ", Style::fg(color::MUTED));
             screen.text(
                 x,
-                3,
+                inspector.1 + 3,
                 &format!("lo {}", grouped(lo)),
                 Style::fg(color::MUTED),
             );
@@ -1583,20 +1633,46 @@ fn render_watchlist_wide(screen: &mut Screen, state: &WatchlistState, filter: Op
         l if l.starts_with('+') => color::GREEN,
         _ => color::BLUE,
     };
-    screen.price_chart(cx + 2, 4, &chart, 146, 16, line);
-    paint_scrub(screen, state, &chart, cx + 2, 4, 146, 16);
+    let chart_width = inspector.2 - inspector.0 - 6;
+    screen.price_chart(cx + 2, inspector.1 + 4, &chart, chart_width, 16, line);
+    paint_scrub(
+        screen,
+        state,
+        &chart,
+        cx + 2,
+        inspector.1 + 4,
+        chart_width,
+        16,
+    );
 
     // Metric grid at the captured 200-wide ratio positions.
     screen.text(
         cx + 1,
-        20,
+        inspector.1 + 20,
         "Available Metrics",
         Style::fg(color::MUTED).bold(),
     );
-    screen.text(66, 20, &" ".repeat(51), Style::fg(color::MUTED).bold());
-    screen.fill(cx + 69, 20, right_edge + 1, 21, Style::fg(color::FG));
-    screen.fill(cx + 1, 21, right_edge + 1, 23, Style::fg(color::FG));
-    let mut gy = 21usize;
+    screen.text(
+        cx + 18,
+        inspector.1 + 20,
+        &" ".repeat(51),
+        Style::fg(color::MUTED).bold(),
+    );
+    screen.fill(
+        cx + 69,
+        inspector.1 + 20,
+        right_edge + 1,
+        inspector.1 + 21,
+        Style::fg(color::FG),
+    );
+    screen.fill(
+        cx + 1,
+        inspector.1 + 21,
+        right_edge + 1,
+        inspector.1 + 23,
+        Style::fg(color::FG),
+    );
+    let mut gy = inspector.1 + 21;
     let mut index = 0usize;
     while index < metric.values.len() {
         let (label, value) = &metric.values[index];
