@@ -14,6 +14,7 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::{Frame, Terminal};
 use tokio::sync::mpsc;
 
+use delta_plugins::yahoo::SearchResult;
 use delta_tui::components::CommandPalette;
 use delta_tui::desk::Desk;
 use delta_tui::dialog::{GoPicker, HelpDialog};
@@ -23,11 +24,12 @@ use delta_tui::screens::decisions::{draw_decisions_live, DecisionsData};
 use delta_tui::screens::{
     draw_ask, draw_ask_narrow, draw_ask_wide, draw_decisions, draw_decisions_narrow,
     draw_decisions_wide, draw_glossary_overlay, draw_home, draw_home_live, draw_home_narrow,
-    draw_home_wide, draw_research, draw_research_live, draw_research_narrow, draw_research_wide,
-    draw_settings, draw_settings_narrow, draw_settings_wide, draw_theses_live, draw_watchlist,
-    draw_watchlist_narrow, draw_watchlist_narrow_list, draw_watchlist_wide, paint_ask_state,
-    AskState, ResearchData, ResearchState, ResearchView, SettingsFocus, SettingsState,
-    SettingsView, ThesesPane, ThesesState,
+    draw_home_setup, draw_home_wide, draw_research, draw_research_live, draw_research_narrow,
+    draw_research_wide, draw_settings, draw_settings_narrow, draw_settings_wide, draw_theses_live,
+    draw_watchlist, draw_watchlist_add_results, draw_watchlist_filter, draw_watchlist_narrow,
+    draw_watchlist_narrow_list, draw_watchlist_wide, paint_ask_state, AddSearchState, AskState,
+    ResearchData, ResearchState, ResearchView, SettingsFocus, SettingsState, SettingsView,
+    ThesesPane, ThesesState,
 };
 use delta_tui::theme::Palette;
 use delta_tui::{is_quit_key, workers, Action, Breakpoint, Component};
@@ -150,6 +152,14 @@ pub(crate) struct App {
     desk: Desk,
     tab: Tab,
     glossary: bool,
+    watch_filter: Option<String>,
+    add_search: AddSearchState,
+    add_results: Vec<SearchResult>,
+    add_generation: u64,
+    add_selected: usize,
+    add_picked: bool,
+    add_picked_result: Option<SearchResult>,
+    add_search_worker: Option<tokio::task::JoinHandle<()>>,
     status: String,
     frame_stats: FrameStats,
     quit: bool,
@@ -168,6 +178,28 @@ pub(crate) struct App {
     confirm_decision_delete: bool,
     /// The terminal size the last frame painted (breakpoint decisions).
     viewport: (u16, u16),
+}
+
+fn local_target_search(desk: &Desk, query: &str) -> Vec<SearchResult> {
+    let needle = query.to_lowercase();
+    let matches = desk
+        .instruments
+        .iter()
+        .filter_map(|row| {
+            let inst = &row.instrument;
+            let name = inst.name.as_deref().unwrap_or(&inst.symbol);
+            let haystack = format!("{} {name} {}", inst.symbol, inst.market).to_lowercase();
+            haystack.contains(&needle).then(|| SearchResult {
+                symbol: inst.symbol.clone(),
+                name: name.to_string(),
+                market: inst.market.clone(),
+                currency: inst.currency.clone(),
+                exchange: String::new(),
+                asset_class: inst.asset_class.as_str().to_string(),
+            })
+        })
+        .collect::<Vec<_>>();
+    delta_services::merge_target_search(Vec::new(), matches)
 }
 
 impl App {
@@ -325,7 +357,24 @@ impl App {
         }
         match self.tab {
             Tab::Home => {
-                if let Some(data) = &self.desk.home_live {
+                if self.desk.instruments.is_empty() && self.desk.config_path.is_some() {
+                    let settings = &self.desk.settings;
+                    let setup = delta_tui::screens::HomeSetupData {
+                        provider: settings.provider.clone(),
+                        provider_connected: settings.provider_connected,
+                        config_exists: true,
+                        database_reachable: settings.diagnostics.is_ok(),
+                        sec_contact: settings
+                            .sources
+                            .iter()
+                            .any(|source| source.id == "sec_edgar" && !source.contact.is_empty()),
+                        price_history: settings
+                            .diagnostics
+                            .as_ref()
+                            .is_ok_and(|diag| !diag.health.latest_bar.is_empty()),
+                    };
+                    draw_home_setup(screen, &self.desk.home_state(), &setup);
+                } else if let Some(data) = &self.desk.home_live {
                     draw_home_live(screen, &self.desk.home_state(), data);
                 } else {
                     route!(
@@ -336,8 +385,16 @@ impl App {
                 }
             }
             Tab::Watchlist => {
-                let state = self.desk.watch_state();
-                if narrow && !self.desk.watch_detail_open {
+                let mut state = self.desk.watch_state();
+                if let Some(query) = &self.watch_filter {
+                    let needle = query.to_lowercase();
+                    state.entries.retain(|entry| {
+                        entry.symbol.to_lowercase().contains(&needle)
+                            || entry.asset_class.to_lowercase().contains(&needle)
+                    });
+                    state.selected = state.selected.min(state.entries.len().saturating_sub(1));
+                    draw_watchlist_filter(screen, &state, query);
+                } else if narrow && !self.desk.watch_detail_open {
                     draw_watchlist_narrow_list(screen, &state);
                 } else {
                     route!(
@@ -405,29 +462,13 @@ impl App {
             Some(Overlay::Help(help)) => help.draw_screen(screen),
             Some(Overlay::Palette(palette)) => palette.draw_screen(screen),
             Some(Overlay::AddTarget(query)) => {
-                let left = screen.w.saturating_sub(62) / 2;
-                let top = screen.h.saturating_sub(12) / 2;
-                screen.pane(
-                    left,
-                    top,
-                    left + 61,
-                    top + 11,
-                    true,
-                    &[("add to watchlist", Style::fg(color::BLUE).bold())],
-                    &[],
-                );
-                screen.text(left + 3, top + 2, "Instrument", Style::fg(color::MUTED));
-                screen.text(
-                    left + 3,
-                    top + 3,
-                    &format!("> {query}_"),
-                    Style::fg(color::FG),
-                );
-                screen.text(
-                    left + 3,
-                    top + 6,
-                    "Enter US:AAPL or ASX:BHP",
-                    Style::fg(color::MUTED),
+                draw_watchlist_add_results(
+                    screen,
+                    &self.desk.watch_state(),
+                    query,
+                    self.add_search,
+                    &self.add_results,
+                    self.add_selected,
                 );
             }
             Some(Overlay::SettingsForm(modal)) => {
@@ -764,6 +805,40 @@ impl App {
             .position(|row| row.instrument.symbol == symbol)
             .unwrap_or(0);
         self.status = format!("{market}:{symbol} added");
+        Ok(())
+    }
+
+    fn add_search_result_at(&mut self, config: &Path, hit: &SearchResult) -> Result<(), String> {
+        let symbol = delta_plugins::yahoo::canonical_symbol(
+            &hit.symbol,
+            &hit.market,
+            &delta_plugins::yahoo::default_suffixes(),
+        );
+        let name = if hit.name.trim().is_empty() {
+            hit.symbol.as_str()
+        } else {
+            hit.name.as_str()
+        };
+        delta_services::config_ops::add_target(
+            config,
+            name,
+            "company",
+            &hit.market,
+            std::slice::from_ref(&symbol),
+            &[],
+            "",
+            None,
+            &hit.asset_class,
+        )
+        .map_err(|error| error.to_string())?;
+        self.desk.reload_targets_from(config)?;
+        self.desk.selected = self
+            .desk
+            .instruments
+            .iter()
+            .position(|row| row.instrument.symbol == symbol)
+            .unwrap_or(0);
+        self.status = format!("{} added", name);
         Ok(())
     }
 
@@ -1964,16 +2039,56 @@ impl Component for App {
             return None;
         }
         // Modals take the key first (a Textual modal stops propagation).
-        if let Some(Overlay::AddTarget(query)) = &mut self.overlay {
+        if matches!(self.overlay, Some(Overlay::AddTarget(_))) {
+            let Some(Overlay::AddTarget(mut query)) = self.overlay.take() else {
+                unreachable!()
+            };
+            let mut request = None;
+            let mut keep_open = true;
+            let mut changed = false;
             match key.code {
-                KeyCode::Esc => self.overlay = None,
+                KeyCode::Esc if !self.add_results.is_empty() => {
+                    self.add_results.clear();
+                    self.add_search = AddSearchState::Ready;
+                    self.add_generation += 1;
+                    if let Some(worker) = self.add_search_worker.take() {
+                        worker.abort();
+                    }
+                }
+                KeyCode::Esc => keep_open = false,
                 KeyCode::Backspace => {
                     query.pop();
+                    changed = true;
+                }
+                KeyCode::Up => self.add_selected = self.add_selected.saturating_sub(1),
+                KeyCode::Down => {
+                    self.add_selected =
+                        (self.add_selected + 1).min(self.add_results.len().saturating_sub(1))
+                }
+                KeyCode::Enter if !self.add_results.is_empty() && !self.add_picked => {
+                    if let Some(hit) = self.add_results.get(self.add_selected) {
+                        query = if hit.name.trim().is_empty() {
+                            hit.symbol.clone()
+                        } else {
+                            hit.name.clone()
+                        };
+                        self.add_picked_result = Some(hit.clone());
+                        self.add_results.clear();
+                        self.add_search = AddSearchState::Ready;
+                        self.add_picked = true;
+                        self.add_generation += 1;
+                        if let Some(worker) = self.add_search_worker.take() {
+                            worker.abort();
+                        }
+                    }
                 }
                 KeyCode::Enter => {
-                    let input = query.clone();
-                    match self.add_instrument_at(Path::new("config.toml"), &input) {
-                        Ok(()) => self.overlay = None,
+                    let result = match self.add_picked_result.clone() {
+                        Some(hit) => self.add_search_result_at(Path::new("config.toml"), &hit),
+                        None => self.add_instrument_at(Path::new("config.toml"), &query),
+                    };
+                    match result {
+                        Ok(()) => keep_open = false,
                         Err(error) => self.status = error,
                     }
                 }
@@ -1982,11 +2097,44 @@ impl Component for App {
                         .modifiers
                         .contains(crossterm::event::KeyModifiers::CONTROL) =>
                 {
-                    query.push(ch)
+                    query.push(ch);
+                    changed = true;
                 }
                 _ => {}
             }
-            return Some(Action::Noop);
+            if changed {
+                self.add_picked = false;
+                self.add_picked_result = None;
+                self.add_selected = 0;
+                self.add_generation += 1;
+                if query.trim().chars().count() >= 2 {
+                    self.add_results = local_target_search(&self.desk, &query);
+                    self.add_search = AddSearchState::Pending;
+                    request = Some(Action::TargetSearch {
+                        generation: self.add_generation,
+                        query: query.clone(),
+                    });
+                } else {
+                    self.add_results.clear();
+                    self.add_search = if query.is_empty() {
+                        AddSearchState::Ready
+                    } else {
+                        AddSearchState::Short
+                    };
+                    if let Some(worker) = self.add_search_worker.take() {
+                        worker.abort();
+                    }
+                }
+            }
+            if keep_open {
+                self.overlay = Some(Overlay::AddTarget(query));
+            } else {
+                self.add_results.clear();
+                if let Some(worker) = self.add_search_worker.take() {
+                    worker.abort();
+                }
+            }
+            return Some(request.unwrap_or(Action::Noop));
         }
         if let Some(overlay) = &mut self.overlay {
             let action = match overlay {
@@ -2015,7 +2163,29 @@ impl Component for App {
             return None;
         }
         if self.tab == Tab::Watchlist {
+            if let Some(query) = &mut self.watch_filter {
+                match key.code {
+                    KeyCode::Esc => self.watch_filter = None,
+                    KeyCode::Backspace => {
+                        query.pop();
+                    }
+                    KeyCode::Char(ch)
+                        if !key
+                            .modifiers
+                            .contains(crossterm::event::KeyModifiers::CONTROL) =>
+                    {
+                        query.push(ch)
+                    }
+                    _ => {}
+                }
+                return Some(Action::Noop);
+            }
             match key.code {
+                KeyCode::Char('/') => {
+                    self.desk.watch_detail_open = false;
+                    self.watch_filter = Some(String::new());
+                    return Some(Action::Noop);
+                }
                 KeyCode::Enter => {
                     self.desk.watch_detail_open = true;
                     return Some(Action::Noop);
@@ -2026,6 +2196,11 @@ impl Component for App {
                 }
                 KeyCode::Char('a') => {
                     self.overlay = Some(Overlay::AddTarget(String::new()));
+                    self.add_search = AddSearchState::Ready;
+                    self.add_results.clear();
+                    self.add_selected = 0;
+                    self.add_picked = false;
+                    self.add_picked_result = None;
                     return Some(Action::Noop);
                 }
                 KeyCode::Char('d') => {
@@ -2109,6 +2284,28 @@ impl Component for App {
                     self.desk
                         .asset_metrics
                         .insert((data.instrument_id.clone(), range), *data);
+                }
+            }
+            Action::TargetSearch { .. } => {}
+            Action::TargetSearchResult { generation, result } => {
+                if generation == self.add_generation {
+                    if let Some(Overlay::AddTarget(query)) = &self.overlay {
+                        let local = local_target_search(&self.desk, query);
+                        match result {
+                            Ok(remote) => {
+                                self.add_results =
+                                    delta_services::merge_target_search(local, remote);
+                                self.add_search = AddSearchState::Online;
+                            }
+                            Err(_) => {
+                                self.add_results = local;
+                                self.add_search = AddSearchState::Offline;
+                            }
+                        }
+                        self.add_selected = self
+                            .add_selected
+                            .min(self.add_results.len().saturating_sub(1));
+                    }
                 }
             }
             Action::Ingested(counts) => {
@@ -2267,6 +2464,14 @@ pub(crate) async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> st
         desk,
         tab: Tab::Watchlist,
         glossary: false,
+        watch_filter: None,
+        add_search: AddSearchState::Ready,
+        add_results: Vec::new(),
+        add_generation: 0,
+        add_selected: 0,
+        add_picked: false,
+        add_picked_result: None,
+        add_search_worker: None,
         status: String::new(),
         frame_stats: FrameStats::default(),
         quit: false,
@@ -2310,6 +2515,16 @@ pub(crate) async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> st
                             match action {
                                 Action::Gather => { let _ = active_workers.gather_tx.send(None); }
                                 Action::GatherCompany(id) => { let _ = active_workers.gather_tx.send(Some(id)); }
+                                Action::TargetSearch { generation, query } => {
+                                    if let Some(worker) = app.add_search_worker.take() { worker.abort(); }
+                                    let tx = bus_tx.clone();
+                                    app.add_search_worker = Some(tokio::spawn(async move {
+                                        tokio::time::sleep(Duration::from_millis(300)).await;
+                                        let client = delta_plugins::YahooClient::default();
+                                        let result = delta_services::search_targets(&client, &query).await.map_err(|error| error.to_string());
+                                        let _ = tx.send(Action::TargetSearchResult { generation, result });
+                                    }));
+                                }
                                 Action::AskQuestion { generation, history, targets } => {
                                     let tx = bus_tx.clone();
                                     let config_path = app.desk.config_path.clone();
@@ -2549,6 +2764,14 @@ mod tests {
             desk: Desk::offline(),
             tab: Tab::Watchlist,
             glossary: false,
+            watch_filter: None,
+            add_search: AddSearchState::Ready,
+            add_results: Vec::new(),
+            add_generation: 0,
+            add_selected: 0,
+            add_picked: false,
+            add_picked_result: None,
+            add_search_worker: None,
             status: String::new(),
             frame_stats: FrameStats::default(),
             quit: false,
@@ -2875,6 +3098,77 @@ mod tests {
     }
 
     #[test]
+    fn add_search_keeps_local_hits_and_ignores_stale_provider_results() {
+        let mut app = app();
+        app.handle_key(key(KeyCode::Char('a')));
+        app.handle_key(key(KeyCode::Char('a')));
+        let request = app.handle_key(key(KeyCode::Char('p')));
+        assert!(matches!(request, Some(Action::TargetSearch { query, .. }) if query == "ap"));
+        assert_eq!(app.add_search, AddSearchState::Pending);
+        assert_eq!(app.add_results[0].symbol, "AAPL");
+        let remote = SearchResult {
+            symbol: "APLE".into(),
+            name: "Apple Hospitality".into(),
+            market: "us".into(),
+            currency: "USD".into(),
+            exchange: String::new(),
+            asset_class: "equity".into(),
+        };
+        app.update(Action::TargetSearchResult {
+            generation: app.add_generation - 1,
+            result: Ok(vec![remote.clone()]),
+        });
+        assert_eq!(app.add_results.len(), 1);
+        app.update(Action::TargetSearchResult {
+            generation: app.add_generation,
+            result: Ok(vec![remote]),
+        });
+        assert_eq!(app.add_search, AddSearchState::Online);
+        assert_eq!(
+            app.add_results
+                .iter()
+                .map(|hit| hit.symbol.as_str())
+                .collect::<Vec<_>>(),
+            vec!["AAPL", "APLE"]
+        );
+        app.handle_key(key(KeyCode::Down));
+        app.handle_key(key(KeyCode::Enter));
+        assert!(
+            matches!(&app.overlay, Some(Overlay::AddTarget(query)) if query == "Apple Hospitality")
+        );
+        assert_eq!(
+            app.add_picked_result
+                .as_ref()
+                .map(|hit| hit.symbol.as_str()),
+            Some("APLE")
+        );
+        app.handle_key(key(KeyCode::Esc));
+        assert!(app.overlay.is_none());
+    }
+
+    #[test]
+    fn watchlist_filter_hides_nonmatching_entries_until_escape() {
+        let mut app = app();
+        app.handle_key(key(KeyCode::Char('/')));
+        app.handle_key(key(KeyCode::Char('z')));
+        let mut screen = Screen::new(80, 24);
+        app.paint(&mut screen);
+        let row: String = screen.cells[4 * 80..5 * 80]
+            .iter()
+            .map(|cell| cell.ch)
+            .collect();
+        assert!(!row.contains("AAPL"));
+        app.handle_key(key(KeyCode::Esc));
+        let mut screen = Screen::new(80, 24);
+        app.paint(&mut screen);
+        let row: String = screen.cells[3 * 80..4 * 80]
+            .iter()
+            .map(|cell| cell.ch)
+            .collect();
+        assert!(row.contains("AAPL"));
+    }
+
+    #[test]
     fn watchlist_add_and_remove_persist_through_services() {
         let dir = std::env::temp_dir().join(format!(
             "delta-watchlist-{}-{}",
@@ -2901,6 +3195,20 @@ mod tests {
             .unwrap()
             .is_empty());
         assert!(a.desk.watch_state().entries.is_empty());
+        a.add_search_result_at(
+            &config,
+            &SearchResult {
+                symbol: "BHP.AX".into(),
+                name: "BHP Group".into(),
+                market: "asx".into(),
+                currency: "AUD".into(),
+                exchange: "ASX".into(),
+                asset_class: "equity".into(),
+            },
+        )
+        .unwrap();
+        let specs = delta_services::config_ops::target_specs(&config).unwrap();
+        assert_eq!(specs["BHP Group"].tickers, vec!["BHP"]);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

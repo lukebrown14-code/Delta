@@ -89,6 +89,97 @@ pub struct HomeLiveData {
     pub theses: Vec<(String, String, String)>,
 }
 
+pub struct HomeSetupData {
+    pub provider: String,
+    pub provider_connected: bool,
+    pub config_exists: bool,
+    pub database_reachable: bool,
+    pub sec_contact: bool,
+    pub price_history: bool,
+}
+
+/// The first-run checklist takes the whole overview when no targets exist.
+pub fn draw_home_setup(screen: &mut Screen, home: &HomeState, setup: &HomeSetupData) {
+    if screen.w < 100 {
+        draw_home_narrow(screen, home);
+    } else if screen.w >= 160 {
+        draw_home_wide(screen, home);
+    } else {
+        draw_home(screen, home);
+    }
+    screen.fill(
+        0,
+        1,
+        screen.w,
+        screen.h - 1,
+        Style::DEFAULT.bg(color::BLACK),
+    );
+    let muted = Style::fg(color::MUTED).bg(color::BLACK);
+    screen.text(2, 2, "setup", Style::fg(color::FG).bg(color::BLACK).bold());
+    screen.text(
+        2,
+        3,
+        "a few things before Delta can gather anything — each jumps to its fix",
+        muted,
+    );
+    let env_var = match setup.provider.as_str() {
+        "openai" => "OPENAI_API_KEY",
+        "anthropic" => "ANTHROPIC_API_KEY",
+        "custom" => "CUSTOM_API_KEY",
+        _ => "OPENROUTER_API_KEY",
+    };
+    let checks = [
+        (
+            "p",
+            format!("LLM provider ({})", setup.provider),
+            format!("Set {env_var} in .env or press p on the Config screen"),
+            setup.provider_connected,
+        ),
+        (
+            "c",
+            "Config file".into(),
+            "Create config.toml".into(),
+            setup.config_exists,
+        ),
+        (
+            "c",
+            "Database".into(),
+            "Check db_path in config.toml".into(),
+            setup.database_reachable,
+        ),
+        (
+            "c",
+            "SEC EDGAR contact".into(),
+            "Set [plugins.sec_edgar].contact".into(),
+            setup.sec_contact,
+        ),
+        (
+            "2",
+            "Price history".into(),
+            "Gather evidence".into(),
+            setup.price_history,
+        ),
+    ];
+    for (index, (key, label, fix, ok)) in checks.into_iter().enumerate() {
+        let y = index + 5;
+        screen.text(2, y, "▸", Style::fg(color::BLUE).bg(color::BLACK));
+        screen.text(4, y, key, Style::fg(color::BLUE).bg(color::BLACK).bold());
+        let message = format!("{label} — {fix}");
+        let limit = screen.w.saturating_sub(11);
+        let clipped = message.chars().take(limit).collect::<String>();
+        screen.text(7, y, &clipped, muted);
+        if message.chars().count() <= limit {
+            screen.text(7 + message.chars().count(), y, "  ", muted);
+            screen.text(
+                7 + message.chars().count() + 2,
+                y,
+                if ok { "✓" } else { "✗" },
+                Style::fg(if ok { color::GREEN } else { color::RED }).bg(color::BLACK),
+            );
+        }
+    }
+}
+
 /// Paint the populated Home panels over the base geometry. The base painter
 /// continues to handle the empty/offline screen while these rows come from
 /// analytics, decisions, calendar events and accepted thesis evidence.

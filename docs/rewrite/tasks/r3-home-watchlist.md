@@ -52,4 +52,6 @@ full cutover validation (#35); the Python oracle has no scrub state yet.
 
 - [x] Populated Home and Watchlist list/inspector/range states match the Python oracle at 80×24, 120×40, and 200×50 (12 Tier A fixtures).
 - [x] Home reads pulse, headline, events, thesis health, decision reviews, and bar freshness through Rust services; narrow Watchlist opens the inspector with Enter and returns to the list with Esc.
-- [ ] Add the Home first-run/empty oracles and Watchlist add/search/filter, glossary, and scrub scenarios. The Python app has no chart scrub key, so the Rust scrub behavior needs a separate acceptance oracle.
+- [x] First-run Home and Watchlist add ready/pending/online/offline, filter, and glossary match deterministic Python oracle frames at all three sizes (21 additional frames).
+- [x] Watchlist add debounces Yahoo lookup through a service, shows local matches immediately, merges distinct provider hits, discards stale responses, and lets Enter pick before saving. The search service's offline merge and the app key path have focused tests.
+- [ ] Python has no chart scrub binding; the Rust scrub behavior needs a separate acceptance oracle. The existing Rust `[`/`]` scrub path is covered by its own tests.

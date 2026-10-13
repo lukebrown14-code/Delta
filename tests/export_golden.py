@@ -155,11 +155,28 @@ def export_scenario(scenario: Scenario, tmp_path: Path, out_dir: Path) -> Path:
         self.on_state("offline test")
         await asyncio.Event().wait()
 
+    async def search_online(query: str):
+        return []
+
+    async def search_offline(query: str):
+        raise ConnectionError("pinned offline search")
+
     populated = scenario.name.startswith("live-")
     seed_block: dict | None = None
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(YahooQuotes, "run", offline)
         mp.setattr(tui.screens.targets, "fetch_asset_metrics", lambda *a, **k: _metric())
+        if scenario.name.startswith("live-watchlist-add"):
+            mp.setattr(
+                tui.screens.targets.TargetAddModal,
+                "SEARCH_DEBOUNCE",
+                999 if scenario.name.endswith("pending") else 0.01,
+            )
+            mp.setattr(
+                tui.screens.targets,
+                "yahoo_search",
+                search_offline if scenario.name.endswith("offline") else search_online,
+            )
         mp.setattr(
             "delta.tui.screens.config.read_env_value", lambda name: "test-key" if name else ""
         )
@@ -167,7 +184,8 @@ def export_scenario(scenario: Scenario, tmp_path: Path, out_dir: Path) -> Path:
         if populated:
             # The populated world: the shared seed DB is the store, and the
             # config carries every section the Settings screen renders.
-            config = POPULATED_CONFIG
+            first_run = scenario.name == "live-home-first-run"
+            config = {**POPULATED_CONFIG, "targets": {}} if first_run else POPULATED_CONFIG
             tmp_path.joinpath("config.toml").write_text(tomli_w.dumps(config), "utf-8")
             shutil.copy2(Path(__file__).resolve().parent.parent / SEED, tmp_path / "delta.db")
             engine = init_engine(tmp_path / "delta.db")
@@ -175,7 +193,7 @@ def export_scenario(scenario: Scenario, tmp_path: Path, out_dir: Path) -> Path:
                 with engine.begin() as connection:
                     connection.exec_driver_sql("DELETE FROM decision_review")
                     connection.exec_driver_sql("DELETE FROM decision")
-            rig = FakeRig(engine, [AAPL.model_copy(update={"watchlists": ("apple",)})])
+            rig = FakeRig(engine, [] if first_run else [AAPL.model_copy(update={"watchlists": ("apple",)})])
             rig.cfg = build_config(config)
             rig.plugins = {"sec_edgar": SECEdgar()}
             if scenario.name.startswith("live-research") and scenario.name != "live-research-no-report":
@@ -212,7 +230,19 @@ def export_scenario(scenario: Scenario, tmp_path: Path, out_dir: Path) -> Path:
 
                 async def run() -> list[list[dict]]:
                     async with app.run_test(size=scenario.size) as pilot:
-                        await pilot.press(*scenario.keys)
+                        if scenario.name.startswith("live-watchlist-add"):
+                            await pilot.press("2")
+                            await pilot.pause()
+                            await pilot.press("a")
+                            await pilot.pause()
+                            from textual.widgets import Input
+
+                            app.screen.query_one("#tg-name", Input).focus()
+                            await pilot.pause()
+                            if len(scenario.keys) > 2:
+                                await pilot.press(*scenario.keys[2:])
+                        else:
+                            await pilot.press(*scenario.keys)
                         if scenario.name == "live-research-citation":
                             await app.screen.inspect_evidence("news:news-aapl-chip")
                         if scenario.name == "live-research-generating":

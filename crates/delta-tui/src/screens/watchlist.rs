@@ -185,6 +185,266 @@ pub fn draw_watchlist(screen: &mut Screen, state: &WatchlistState) {
     draw_status_bar(screen, screen.h - 1, w, false);
 }
 
+/// The slash filter reserves a line above the options; the inspector stays put.
+pub fn draw_watchlist_filter(screen: &mut Screen, state: &WatchlistState, query: &str) {
+    if screen.w < 100 {
+        draw_watchlist_narrow_list(screen, state);
+    } else if screen.w >= 160 {
+        draw_watchlist_wide(screen, state);
+    } else {
+        draw_watchlist(screen, state);
+    }
+    let end = if screen.w < 100 { screen.w - 2 } else { 46 };
+    let bottom = screen.h - 3;
+    for y in (2..bottom).rev() {
+        for x in 2..end {
+            screen.cells[y * screen.w + x] = screen.cells[(y - 1) * screen.w + x].clone();
+        }
+    }
+    for x in 3..end {
+        let cell = &mut screen.cells[4 * screen.w + x];
+        if cell.bg == Some(color::BLUE_BG) {
+            cell.bg = Some("#242424");
+            if cell.fg == Some(color::WHITE) {
+                cell.fg = Some(color::FG);
+            }
+            cell.bold = false;
+        }
+    }
+    let input = Style::fg(color::FG).bg("#161616");
+    screen.fill(2, 1, end, 2, input);
+    screen.put(2, 1, '█', Style::fg(color::BLUE).bg("#161616"));
+    screen.put(3, 1, ' ', Style::DEFAULT.bg("#161616"));
+    screen.text(4, 1, query, input);
+    screen.put(
+        4 + query.chars().count(),
+        1,
+        ' ',
+        Style::fg(color::BLACK).bg(color::FG),
+    );
+    screen.put(end - 1, 1, ' ', Style::DEFAULT.bg("#161616"));
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AddSearchState {
+    Ready,
+    Short,
+    Pending,
+    Online,
+    Offline,
+}
+
+/// Search-first Add dialog over the dimmed watchlist.
+pub fn draw_watchlist_add(
+    screen: &mut Screen,
+    state: &WatchlistState,
+    query: &str,
+    search: AddSearchState,
+) {
+    draw_watchlist_add_results(screen, state, query, search, &[], 0);
+}
+
+/// Live Add dialog with merged local and provider suggestions.
+pub fn draw_watchlist_add_results(
+    screen: &mut Screen,
+    state: &WatchlistState,
+    query: &str,
+    search: AddSearchState,
+    results: &[delta_plugins::yahoo::SearchResult],
+    selected: usize,
+) {
+    if screen.w < 100 {
+        draw_watchlist_narrow_list(screen, state);
+    } else if screen.w >= 160 {
+        draw_watchlist_wide(screen, state);
+    } else {
+        draw_watchlist(screen, state);
+    }
+    screen.dim();
+    let x0 = (screen.w - 64) / 2;
+    let y0 = (screen.h - 19) / 2;
+    let x1 = x0 + 63;
+    let y1 = y0 + 18;
+    let surface = Style::DEFAULT.bg(color::SURFACE);
+    let border = Style::fg(color::BORDER_BLURRED).bg(color::SURFACE);
+    screen.fill(x0, y0, x1 + 1, y1 + 1, surface);
+    for x in x0 + 1..x1 {
+        screen.put(x, y0, '─', border);
+        screen.put(x, y1, '─', border);
+    }
+    screen.put(x0, y0, '┌', border);
+    screen.put(x1, y0, '┐', border);
+    screen.put(x0, y1, '└', border);
+    screen.put(x1, y1, '┘', border);
+    for y in y0 + 1..y1 {
+        screen.put(x0, y, '│', border);
+        screen.put(x1, y, '│', border);
+    }
+    let title = Style::fg(color::BLUE).bg(color::SURFACE).bold();
+    let muted = Style::fg(color::MUTED).bg(color::SURFACE);
+    screen.text(
+        x0 + 3,
+        y0 + 2,
+        &format!("{:^58}", "add to watchlist"),
+        title,
+    );
+    let (network, network_color) = match search {
+        AddSearchState::Ready => ("◌ Yahoo lookup ready".to_string(), color::MUTED),
+        AddSearchState::Short => ("◌ type 2+ characters".to_string(), color::MUTED),
+        AddSearchState::Pending => ("◌ searching Yahoo…".to_string(), color::MUTED),
+        AddSearchState::Online => (
+            format!("● online · Yahoo · {} matches", results.len()),
+            color::GREEN,
+        ),
+        AddSearchState::Offline => ("○ offline · local search".to_string(), color::AMBER),
+    };
+    screen.text(
+        x0 + 3,
+        y0 + 4,
+        &format!("{network:^58}"),
+        Style::fg(network_color).bg(color::SURFACE),
+    );
+    let input = Style::fg(color::FG).bg("#161616");
+    screen.fill(x0 + 13, y0 + 5, x0 + 61, y0 + 6, input);
+    screen.put(x0 + 13, y0 + 5, '█', Style::fg(color::BLUE).bg("#161616"));
+    screen.put(x0 + 14, y0 + 5, ' ', Style::DEFAULT.bg("#161616"));
+    if query.is_empty() {
+        screen.text(
+            x0 + 15,
+            y0 + 5,
+            "company or ticker — type to search",
+            Style::fg(color::DISABLED).bg("#161616"),
+        );
+        screen.put(x0 + 15, y0 + 5, 'c', Style::fg(color::BLACK).bg(color::FG));
+    } else {
+        screen.text(x0 + 15, y0 + 5, query, input);
+        screen.put(
+            x0 + 15 + query.chars().count(),
+            y0 + 5,
+            ' ',
+            Style::fg(color::BLACK).bg(color::FG),
+        );
+    }
+    screen.put(x0 + 60, y0 + 5, ' ', Style::DEFAULT.bg("#161616"));
+    screen.text(x0 + 3, y0 + 6, "Name", muted);
+    for dy in 8..=11 {
+        screen.put(x0 + 13, y0 + dy, ' ', Style::DEFAULT.bg(color::PANEL));
+        screen.fill(
+            x0 + 14,
+            y0 + dy,
+            x0 + 60,
+            y0 + dy + 1,
+            Style::fg(color::FG).bg(color::PANEL),
+        );
+        screen.put(x0 + 60, y0 + dy, ' ', Style::DEFAULT.bg(color::PANEL));
+    }
+    if !results.is_empty() {
+        for (index, hit) in results.iter().take(4).enumerate() {
+            let row = y0 + 8 + index;
+            let active = index == selected;
+            let background = if active { "#313131" } else { color::PANEL };
+            screen.fill(
+                x0 + 14,
+                row,
+                x0 + 60,
+                row + 1,
+                Style::fg(color::FG).bg(background),
+            );
+            let prompt = format!(
+                "{} — {} · {}",
+                hit.symbol,
+                hit.name,
+                hit.market.to_uppercase()
+            );
+            let prompt = prompt.chars().take(46).collect::<String>();
+            screen.text(x0 + 14, row, &prompt, Style::fg(color::FG).bg(background));
+            if prompt.chars().count() + 11 <= 46
+                && state
+                    .entries
+                    .iter()
+                    .any(|entry| entry.symbol.eq_ignore_ascii_case(&hit.symbol))
+            {
+                screen.text(
+                    x0 + 14 + prompt.chars().count(),
+                    row,
+                    "  ✓ watched",
+                    Style::fg(color::GREEN).bg(background),
+                );
+            }
+        }
+    } else if query.len() >= 2 {
+        if let Some(entry) = state
+            .entries
+            .iter()
+            .find(|entry| entry.symbol.to_lowercase().contains(&query.to_lowercase()))
+        {
+            let row = y0 + 8;
+            let symbol = &entry.symbol;
+            let market = state.metric.as_ref().map_or("US", |metric| {
+                if metric.market == "asx" {
+                    "ASX"
+                } else {
+                    "US"
+                }
+            });
+            screen.fill(
+                x0 + 14,
+                row,
+                x0 + 60,
+                row + 1,
+                Style::fg(color::FG).bg("#313131"),
+            );
+            let prompt = format!("{symbol} — {symbol} · {market}");
+            screen.text(x0 + 14, row, &prompt, Style::fg(color::FG).bg("#313131"));
+            screen.text(
+                x0 + 14 + prompt.chars().count(),
+                row,
+                "  ✓ watched",
+                Style::fg(color::GREEN).bg("#313131"),
+            );
+        }
+    }
+    screen.text(
+        x0 + 13,
+        y0 + 12,
+        "→ untitled · company · US:— · equity",
+        muted,
+    );
+    screen.fill(
+        x0 + 3,
+        y0 + 14,
+        x0 + 11,
+        y0 + 15,
+        Style::DEFAULT.bg(color::BLUE_BG),
+    );
+    screen.text(
+        x0 + 4,
+        y0 + 14,
+        " Save ",
+        Style::fg(color::WHITE).bg(color::BLUE_BG).bold(),
+    );
+    screen.text(
+        x0 + 13,
+        y0 + 14,
+        " Cancel ",
+        Style::fg(color::FG).bg(color::SURFACE).bold(),
+    );
+    let mut x = x0 + 3;
+    for (part, highlight) in [
+        ("  ", false),
+        ("↑↓", true),
+        (" choose  ", false),
+        ("enter", true),
+        (" pick · save  ", false),
+        ("ctrl+t", true),
+        (" more  ", false),
+        ("esc", true),
+        (" cancel   ", false),
+    ] {
+        x = screen.text(x, y0 + 16, part, if highlight { title } else { muted });
+    }
+}
+
 fn draw_list_pane(screen: &mut Screen, content_bottom: usize, state: &WatchlistState) {
     // Blank OptionList rows carry the foreground style (cols 3..44).
     screen.fill(3, 2, 45, content_bottom, Style::fg(color::FG));
