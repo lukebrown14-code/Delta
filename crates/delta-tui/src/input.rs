@@ -41,6 +41,10 @@ impl DeltaInput {
         self.inner.lines().first().map(String::as_str).unwrap_or("")
     }
 
+    pub fn placeholder(&self) -> &str {
+        &self.placeholder
+    }
+
     pub fn set_value(&mut self, value: &str) {
         self.inner = Inner::new(vec![value.to_string()]);
         self.inner.set_cursor_line_style(RStyle::default());

@@ -19,7 +19,7 @@ use crate::screens::settings::{
     draw_settings, draw_settings_narrow, draw_settings_wide, SettingsData, SettingsState,
     SettingsView,
 };
-use crate::screens::theses::{draw_theses_live, ThesesState};
+use crate::screens::theses::{draw_theses_live, draw_thesis_form_live, ThesesState};
 use crate::screens::watchlist::{
     draw_watchlist, draw_watchlist_narrow, draw_watchlist_narrow_list, draw_watchlist_wide,
     grouped, MetricsData, WatchEntry, WatchlistState,
@@ -49,7 +49,15 @@ pub fn render_live(state: &str, fixture: &serde_json::Value, db_path: &Path) -> 
         "live-watchlist" | "live-watchlist-inspector" | "live-watchlist-range" => {
             Some(live_watchlist(state, db_path, w, h))
         }
-        "live-theses" => Some(live_theses(fixture, db_path, w, h)),
+        "live-theses"
+        | "live-theses-empty"
+        | "live-theses-detail"
+        | "live-theses-evidence"
+        | "live-theses-new"
+        | "live-theses-edit"
+        | "live-theses-validation"
+        | "live-theses-filter"
+        | "live-theses-summary" => Some(live_theses(state, fixture, db_path, w, h)),
         "live-research"
         | "live-research-search"
         | "live-research-citation"
@@ -286,7 +294,13 @@ fn paint_spend(screen: &mut Screen, spend: f64) {
     }
 }
 
-fn live_theses(fixture: &serde_json::Value, db_path: &Path, w: usize, h: usize) -> Screen {
+fn live_theses(
+    state_name: &str,
+    fixture: &serde_json::Value,
+    db_path: &Path,
+    w: usize,
+    h: usize,
+) -> Screen {
     let db = delta_core::db::Db::open(db_path).expect("live theses seed db");
     let now =
         chrono::DateTime::parse_from_rfc3339(fixture["seed"]["now"].as_str().expect("fixture now"))
@@ -294,8 +308,43 @@ fn live_theses(fixture: &serde_json::Value, db_path: &Path, w: usize, h: usize) 
             .naive_utc();
     let mut state = ThesesState::default();
     state.load_at(&db, Some(now)).expect("load live theses");
+    state.focus_active = state_name != "live-theses";
+    match state_name {
+        "live-theses-empty" => {
+            state.fleet.clear();
+            state.links.clear();
+            state.pending.clear();
+        }
+        "live-theses-detail" => state.view = crate::screens::theses::ThesesPane::Detail,
+        "live-theses-evidence" => state.view = crate::screens::theses::ThesesPane::Evidence,
+        "live-theses-filter" => {
+            state.filtering = true;
+            state.filter = "a".into();
+        }
+        "live-theses-summary" => {
+            let row = &state.fleet[state.selected];
+            state.summary = Some(delta_services::ThesisSummary {
+                thesis_id: row.thesis.id.clone(),
+                claim: row.thesis.claim.clone(),
+                state: row.state(),
+                summary: "Accepted capex guidance supports margin pressure.".into(),
+                strongest_support: "Guidance implies margin pressure.".into(),
+                strongest_counter: String::new(),
+                unknowns: vec!["Pricing response remains unknown.".into()],
+                citations: vec!["news:news-msft-capex".into()],
+                as_of: now,
+            });
+        }
+        _ => {}
+    }
     let mut screen = Screen::new(w, h);
     draw_theses_live(&mut screen, &state);
+    if matches!(
+        state_name,
+        "live-theses-new" | "live-theses-edit" | "live-theses-validation"
+    ) {
+        draw_thesis_form_live(&mut screen, &state, state_name == "live-theses-edit");
+    }
     screen
 }
 
@@ -604,7 +653,7 @@ pub fn paint_settings_dialog(
         };
         cell.bg = match cell.bg {
             Some("#0f1e3c") => Some("#1d1d1d"),
-            Some("#13254b") => Some("#0e0e0e"),
+            Some("#070e1e" | "#13254b") => Some("#0e0e0e"),
             other => other,
         };
     }

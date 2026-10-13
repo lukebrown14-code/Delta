@@ -24,10 +24,10 @@ use delta_tui::screens::{
     draw_ask, draw_ask_narrow, draw_ask_wide, draw_decisions, draw_decisions_narrow,
     draw_decisions_wide, draw_glossary_overlay, draw_home, draw_home_live, draw_home_narrow,
     draw_home_wide, draw_research, draw_research_live, draw_research_narrow, draw_research_wide,
-    draw_settings, draw_settings_narrow, draw_settings_wide, draw_theses_live, draw_watchlist,
-    draw_watchlist_narrow, draw_watchlist_narrow_list, draw_watchlist_wide, paint_ask_state,
-    AskState, ResearchData, ResearchState, ResearchView, SettingsFocus, SettingsState,
-    SettingsView, ThesesPane, ThesesState,
+    draw_settings, draw_settings_narrow, draw_settings_wide, draw_theses_live,
+    draw_thesis_form_runtime, draw_watchlist, draw_watchlist_narrow, draw_watchlist_narrow_list,
+    draw_watchlist_wide, paint_ask_state, AskState, ResearchData, ResearchState, ResearchView,
+    SettingsFocus, SettingsState, SettingsView, ThesesPane, ThesesState,
 };
 use delta_tui::theme::Palette;
 use delta_tui::{is_quit_key, workers, Action, Breakpoint, Component};
@@ -435,7 +435,7 @@ impl App {
                     modal.mode,
                     FormMode::AddThesis | FormMode::AddThesisFromAsk(_) | FormMode::EditThesis(_)
                 ) {
-                    draw_thesis_modal(screen, &modal.form);
+                    draw_thesis_form_runtime(screen, &modal.form);
                 } else if self.tab == Tab::Settings {
                     let state = match &modal.mode {
                         FormMode::AddMarket => Some("live-settings-market"),
@@ -960,6 +960,7 @@ impl App {
             }
             KeyCode::Char('4') => {
                 self.tab = Tab::Theses;
+                self.theses.focus_active = true;
                 self.reload_theses();
             }
             KeyCode::Char('5') => self.tab = Tab::Ask,
@@ -1031,6 +1032,7 @@ impl App {
 
     fn handle_theses_key(&mut self, key: KeyEvent) -> Option<Action> {
         use delta_services::{remove_evidence, set_accepted};
+        self.theses.focus_active = true;
         if self.theses.filtering {
             match key.code {
                 KeyCode::Esc | KeyCode::Enter => self.theses.filtering = false,
@@ -1098,11 +1100,12 @@ impl App {
                 .selected_id()
                 .map(|id| Action::ThesisFind(id.to_string()))
                 .or_else(|| Some(Action::Status("select a thesis first".to_string()))),
-            KeyCode::Char('s') => self
-                .theses
-                .selected_id()
-                .map(|id| Action::ThesisSummarize(id.to_string()))
-                .or_else(|| Some(Action::Status("select a thesis first".to_string()))),
+            KeyCode::Char('s') => {
+                let id = self.theses.selected_id().map(str::to_string);
+                self.theses.view = ThesesPane::Detail;
+                id.map(Action::ThesisSummarize)
+                    .or_else(|| Some(Action::Status("select a thesis first".to_string())))
+            }
             KeyCode::Char('a' | 'x' | 'u') => {
                 if self.viewport_width() < 100 && self.theses.view != ThesesPane::Evidence {
                     return Some(Action::Status(
@@ -1659,62 +1662,6 @@ fn thesis_claim_required(value: &str) -> Result<(), String> {
     } else {
         Ok(())
     }
-}
-
-fn draw_thesis_modal(screen: &mut Screen, form: &Form) {
-    let width = 68.min(screen.w.saturating_sub(4));
-    let height = (form.fields.len() * 2 + 6).min(screen.h.saturating_sub(2));
-    let (x, y, w, _) = delta_tui::dialog::dialog_frame(screen, width, height);
-    screen.text(x, y, &form.title, Style::fg(color::BLUE).bold());
-    for (index, field) in form.fields.iter().enumerate() {
-        let row = y + 2 + index * 2;
-        let focused = index == form.focus;
-        screen.text(
-            x,
-            row,
-            &field.label,
-            Style::fg(if focused { color::BLUE } else { color::MUTED }).bold(),
-        );
-        screen.fill(
-            x,
-            row + 1,
-            x + w,
-            row + 2,
-            Style::fg(color::FG).bg(color::PANEL),
-        );
-        screen.put(
-            x,
-            row + 1,
-            '▌',
-            Style::fg(if focused { color::BLUE } else { color::PANEL }),
-        );
-        let value = field.value();
-        screen.text(
-            x + 2,
-            row + 1,
-            &value.chars().take(w.saturating_sub(3)).collect::<String>(),
-            Style::fg(if field.value().is_empty() {
-                color::MUTED
-            } else {
-                color::FG
-            })
-            .bg(color::PANEL),
-        );
-        if let Some(error) = &field.error {
-            screen.text(
-                x + w.saturating_sub(error.len()),
-                row,
-                error,
-                Style::fg(color::RED),
-            );
-        }
-    }
-    screen.text(
-        x,
-        y + 2 + form.fields.len() * 2,
-        "tab next · enter save · esc cancel",
-        Style::fg(color::MUTED),
-    );
 }
 
 fn thesis_form(current: Option<&delta_services::Thesis>) -> FormModal {
@@ -3679,16 +3626,41 @@ mod settings_tests {
         a.desk.source = delta_tui::desk::Source::Real(dir.path().join("delta.db"));
         a.handle_key(key(KeyCode::Char('4')));
         a.handle_key(key(KeyCode::Char('n')));
+        assert!(screen_text(&mut a, 80, 24).contains("new thesis"));
         a.handle_key(key(KeyCode::Enter));
         assert_eq!(a.status, "claim is required");
         assert!(a.overlay.is_some());
         for ch in "Apple grows".chars() {
             a.handle_key(key(KeyCode::Char(ch)));
         }
+        let draft = screen_text(&mut a, 120, 40);
+        assert!(draft.contains("new thesis"));
+        assert!(draft.contains("Apple grows"), "{draft}");
         a.handle_key(key(KeyCode::Enter));
         assert!(a.overlay.is_none());
         assert_eq!(a.theses.fleet.len(), 1);
         assert!(screen_text(&mut a, 120, 40).contains("Apple grows"));
+        a.handle_key(key(KeyCode::Char('d')));
+        let editing = screen_text(&mut a, 120, 40);
+        assert!(editing.contains("edit thesis"));
+        assert!(editing.contains("Apple grows"));
+        a.handle_key(key(KeyCode::Esc));
+        a.handle_key(key(KeyCode::Char('t')));
+        assert_eq!(a.theses.view, ThesesPane::Detail);
+        a.handle_key(key(KeyCode::Char('e')));
+        assert_eq!(a.theses.view, ThesesPane::Evidence);
+        a.handle_key(key(KeyCode::Esc));
+        a.handle_key(key(KeyCode::Char('/')));
+        assert!(a.theses.filtering);
+        a.handle_key(key(KeyCode::Char('A')));
+        assert_eq!(a.theses.filter, "A");
+        a.handle_key(key(KeyCode::Enter));
+        assert!(!a.theses.filtering);
+        assert!(matches!(
+            a.handle_key(key(KeyCode::Char('s'))),
+            Some(Action::ThesisSummarize(_))
+        ));
+        assert_eq!(a.theses.view, ThesesPane::Detail);
     }
 
     #[test]
