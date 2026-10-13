@@ -130,6 +130,12 @@ pub enum Action {
         history: Vec<delta_services::chat::ChatMessage>,
         targets: Vec<String>,
     },
+    /// Ask requests app-owned worker cancellation after clearing or escape.
+    AskAbortWorker,
+    /// Ask requests a service-backed evidence lookup for the chosen citation.
+    AskOpenCitation(String),
+    /// Ask requests the app-owned thesis form for its latest answer.
+    AskSaveAnswer,
     AskAnswered {
         generation: u64,
         result: Result<delta_services::chat::ChatMessage, String>,

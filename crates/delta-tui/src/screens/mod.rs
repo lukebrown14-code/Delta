@@ -14,7 +14,7 @@ mod status_bar;
 mod theses;
 mod watchlist;
 
-pub use ask::{draw_ask, draw_ask_narrow, draw_ask_wide, paint_ask_state, AskState};
+pub use ask::{draw_ask, draw_ask_live, draw_ask_narrow, draw_ask_wide, paint_ask_state, AskState};
 pub use decisions::{
     draw_decisions, draw_decisions_live, draw_decisions_narrow, draw_decisions_wide, DecisionsData,
 };
