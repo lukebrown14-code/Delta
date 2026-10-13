@@ -436,6 +436,32 @@ impl App {
                     FormMode::AddThesis | FormMode::AddThesisFromAsk(_) | FormMode::EditThesis(_)
                 ) {
                     draw_thesis_modal(screen, &modal.form);
+                } else if self.tab == Tab::Settings {
+                    let state = match &modal.mode {
+                        FormMode::AddMarket => Some("live-settings-market"),
+                        FormMode::EditMarket(_) => Some("live-settings-market-edit"),
+                        FormMode::Source(_) => Some("live-settings-source"),
+                        FormMode::Provider(name) if name == "custom" => {
+                            Some("live-settings-custom")
+                        }
+                        FormMode::Provider(_) => Some("live-settings-key"),
+                        FormMode::Model => Some("live-settings-model"),
+                        _ => None,
+                    };
+                    if let Some(state) = state {
+                        delta_tui::screens::live::paint_settings_dialog(
+                            screen,
+                            state,
+                            Some(&modal.form),
+                            0,
+                        );
+                    } else {
+                        let width = delta_tui::dialog::MODAL_WIDTH.min(screen.w.saturating_sub(4));
+                        let height = (modal.form.height(width) + 5).min(screen.h.saturating_sub(2));
+                        let (x, y, w, _) = delta_tui::dialog::dialog_frame(screen, width, height);
+                        screen.text(x, y, &modal.form.title, Style::fg(color::BLUE).bold());
+                        modal.form.draw_screen(screen, x, y + 2, w);
+                    }
                 } else {
                     let width = delta_tui::dialog::MODAL_WIDTH.min(screen.w.saturating_sub(4));
                     let height = (modal.form.height(width) + 5).min(screen.h.saturating_sub(2));
@@ -472,23 +498,11 @@ impl App {
                 let _ = w;
             }
             Some(Overlay::ProviderPicker(selected)) => {
-                let (x, y, w, _) = delta_tui::dialog::dialog_frame(screen, 58, 11);
-                screen.text(x, y, "select a provider", Style::fg(color::BLUE).bold());
-                screen.text(x, y + 2, "Provider", Style::fg(color::MUTED).bold());
-                for (index, name) in PROVIDER_CHOICES.iter().enumerate() {
-                    let style = if index == *selected {
-                        Style::fg(color::WHITE).bg(color::BLUE_BG).bold()
-                    } else {
-                        Style::fg(color::FG)
-                    };
-                    screen.fill(x, y + 3 + index, x + w, y + 4 + index, style);
-                    screen.text(x + 1, y + 3 + index, name, style);
-                }
-                screen.text(
-                    x,
-                    y + 8,
-                    "enter connect · esc cancel",
-                    Style::fg(color::MUTED),
+                delta_tui::screens::live::paint_settings_dialog(
+                    screen,
+                    "live-settings-provider",
+                    None,
+                    *selected,
                 );
             }
             Some(Overlay::TargetPicker(targets, selected)) => {
@@ -1352,13 +1366,20 @@ impl App {
                 if let Some(value) = values.get("Contact email") {
                     fields.insert("contact".to_string(), value.clone());
                 }
+                let markets: Vec<String> = values
+                    .get("Markets")
+                    .into_iter()
+                    .flat_map(|value| value.split(','))
+                    .map(|market| market.trim().to_ascii_lowercase())
+                    .filter(|market| !market.is_empty())
+                    .collect();
                 delta_services::setup::configure_data_provider(
                     &config,
                     &self.env_path(),
                     &delta_plugins::provider_specs(),
                     id,
                     &fields,
-                    None,
+                    Some(&markets),
                 )
             }
             FormMode::Provider(name) => delta_services::setup::save_provider_choice(
@@ -1572,7 +1593,10 @@ fn provider_form(name: &str) -> FormModal {
             delta_tui::form::Field::new("API key", "optional for local servers", None).secret(),
         ]
     } else {
-        vec![delta_tui::form::Field::new("API key", "leave blank to use existing", None).secret()]
+        vec![
+            delta_tui::form::Field::new("API key", "api key", Some(delta_tui::form::required))
+                .secret(),
+        ]
     };
     FormModal {
         form: Form::new(&format!("connect {name}"), fields),
@@ -1772,6 +1796,7 @@ fn market_form(current: Option<&delta_tui::screens::SettingsMarket>) -> FormModa
     let mut mode = FormMode::AddMarket;
     if let Some(market) = current {
         mode = FormMode::EditMarket(market.id.clone());
+        form.focus = 1;
         let prefill = [
             ("ID", market.id.as_str()),
             ("Name", market.label.as_str()),
@@ -1792,11 +1817,14 @@ fn market_form(current: Option<&delta_tui::screens::SettingsMarket>) -> FormModa
 fn source_form(id: &str, current: Option<String>) -> FormModal {
     let mut form = Form::new(
         "configure source",
-        vec![delta_tui::form::Field::new(
-            "Contact email",
-            "you@example.com",
-            Some(delta_tui::form::required),
-        )],
+        vec![
+            delta_tui::form::Field::new(
+                "Contact email",
+                "you@example.com",
+                Some(delta_tui::form::required),
+            ),
+            delta_tui::form::Field::new("Markets", "lse,asx (optional)", None),
+        ],
     );
     if let Some(current) = current {
         form.fields[0].input.set_value(&current);
@@ -3491,6 +3519,51 @@ mod settings_tests {
         assert_eq!(a.status, "source saved");
         let raw = delta_core::config::load_toml(&dir.path().join("config.toml")).unwrap();
         assert_eq!(raw["plugins"]["sec_edgar"]["contact"], "next@example.test");
+    }
+
+    #[test]
+    fn provider_key_opens_masks_saves_and_cancels() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut a = real_desk_app(dir.path());
+        a.update(Action::ShowProviderPicker);
+        assert!(matches!(a.overlay, Some(Overlay::ProviderPicker(_))));
+        a.handle_key(key(KeyCode::Enter));
+        assert!(matches!(a.overlay, Some(Overlay::SettingsForm(_))));
+        a.handle_key(key(KeyCode::Enter));
+        assert!(matches!(a.overlay, Some(Overlay::SettingsForm(_))));
+        assert_eq!(a.status, "required");
+        for ch in "test-secret".chars() {
+            a.handle_key(key(KeyCode::Char(ch)));
+        }
+        let text = screen_text(&mut a, 120, 40);
+        assert!(
+            !text.contains("test-secret"),
+            "secret appeared in the frame"
+        );
+        a.handle_key(key(KeyCode::Enter));
+        assert!(a.overlay.is_none());
+        assert_eq!(a.status, "openrouter selected");
+        assert!(std::fs::read_to_string(dir.path().join(".env"))
+            .unwrap()
+            .contains("OPENROUTER_API_KEY"));
+
+        a.update(Action::ShowProviderPicker);
+        a.handle_key(key(KeyCode::Enter));
+        a.handle_key(key(KeyCode::Esc));
+        assert!(a.overlay.is_none());
+    }
+
+    #[test]
+    fn source_validation_keeps_the_modal_open() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut a = real_desk_app(dir.path());
+        a.handle_key(key(KeyCode::Char('s')));
+        for _ in "oracle@example.test".chars() {
+            a.handle_key(key(KeyCode::Backspace));
+        }
+        a.handle_key(key(KeyCode::Enter));
+        assert!(matches!(a.overlay, Some(Overlay::SettingsForm(_))));
+        assert_eq!(a.status, "required");
     }
 
     #[test]

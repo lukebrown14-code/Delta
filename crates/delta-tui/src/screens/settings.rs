@@ -457,12 +457,17 @@ fn paint(screen: &mut Screen, view: &SettingsView) {
     let expanded = view.state.diagnostics_expanded(w);
     if narrow && expanded {
         // `-diag-full`: diagnostics takes the whole screen; setup is hidden.
-        diagnostics_pane(screen, (1, 0, w - 1, bottom), view, true);
+        diagnostics_pane(screen, (1, 0, w - 2, bottom), view, true);
     } else {
         let pane_right = if narrow { w - 2 } else { 62 };
         let end = setup_column(screen, view, pane_right, narrow);
         if !narrow {
-            diagnostics_pane(screen, (63, 0, w - 2, bottom), view, expanded);
+            diagnostics_pane(
+                screen,
+                (63, 0, w - 2, if expanded { bottom } else { 2 }),
+                view,
+                expanded,
+            );
         } else {
             let y = end.min(bottom.saturating_sub(3));
             diagnostics_pane(screen, (1, y, pane_right, y + 2), view, false);
@@ -475,6 +480,22 @@ fn paint(screen: &mut Screen, view: &SettingsView) {
         status_bar_narrow_with_footer(screen, NarrowTab::Settings, view.footer);
     } else {
         settings_status_bar(screen, view.footer);
+    }
+    if view.state.diagnostics_open.is_some() {
+        for cell in &mut screen.cells {
+            if cell.fg == Some(color::BLUE) {
+                cell.fg = Some("#898989");
+            } else if cell.fg == Some(color::AMBER) {
+                cell.fg = Some("#a6a6a6");
+            }
+            if cell.bg == Some(color::BLUE_BG) {
+                cell.bg = Some("#494949");
+            } else if cell.bg == Some("#13254b") {
+                cell.bg = Some("#242424");
+            } else if cell.bg == Some("#0f1e3c") {
+                cell.bg = Some("#1d1d1d");
+            }
+        }
     }
 }
 
@@ -888,7 +909,7 @@ fn diagnostics_pane(
         y0,
         x1,
         y1,
-        view.state.focus == SettingsFocus::Diagnostics,
+        expanded && view.state.focus == SettingsFocus::Diagnostics,
         &title_refs,
         &pane_hints(&hints),
     );
@@ -909,7 +930,10 @@ fn diagnostics_pane(
             screen.text(
                 x0 + 3,
                 y0 + 1,
-                &format!(" {}", diag.summary()),
+                &format!(" {}", diag.summary())
+                    .chars()
+                    .take(x1.saturating_sub(x0 + 8))
+                    .collect::<String>(),
                 Style::fg(color::FG),
             );
         }

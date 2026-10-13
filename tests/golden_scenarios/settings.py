@@ -12,3 +12,8 @@ SCENARIOS = matrix("settings", ("c",), "A")
 #: ``crates/delta-tui/tests/live_golden.rs``). Each fixture embeds the seed
 #: block (config, frozen clock, pinned sizes) the DB cannot hold.
 POPULATED_SCENARIOS = matrix("live-settings", ("c",), "A")
+for _state in (
+    "diagnostics", "provider", "model", "market", "key", "custom", "source",
+    "market-edit", "key-invalid", "source-invalid", "market-invalid",
+):
+    POPULATED_SCENARIOS += matrix(f"live-settings-{_state}", ("c",), "A")

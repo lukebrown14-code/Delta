@@ -215,6 +215,51 @@ def export_scenario(scenario: Scenario, tmp_path: Path, out_dir: Path) -> Path:
                         await pilot.press(*scenario.keys)
                         if scenario.name == "live-research-citation":
                             await app.screen.inspect_evidence("news:news-aapl-chip")
+                        if scenario.name.startswith("live-settings-"):
+                            from delta.llm.providers import PROVIDERS
+                            from delta.tui.screens.market_setup import MarketSetupModal
+                            from delta.tui.screens.provider_picker import (
+                                CustomFormModal,
+                                KeyEntryModal,
+                                ProviderPicker,
+                            )
+                            from delta.tui.screens.source_setup import SourceSetupModal
+
+                            name = scenario.name.removeprefix("live-settings-")
+                            settings_screen = app.screen
+                            if name == "diagnostics":
+                                settings_screen.action_toggle_diagnostics()
+                            elif name == "provider":
+                                app.push_screen(ProviderPicker(lambda _name: None, key_status={}))
+                            elif name == "model":
+                                from delta.tui.screens.model_picker import ModelPicker
+
+                                app.push_screen(ModelPicker(lambda _model: None, provider_name="openrouter"))
+                            elif name in ("key", "key-invalid"):
+                                modal = KeyEntryModal(PROVIDERS["openrouter"])
+                                app.push_screen(modal)
+                            elif name == "custom":
+                                app.push_screen(CustomFormModal())
+                            elif name in ("source", "source-invalid"):
+                                spec = rig.plugins["sec_edgar"].provider_spec
+                                modal = SourceSetupModal(spec, {"contact": "oracle@example.test"})
+                                app.push_screen(modal)
+                            elif name in ("market", "market-invalid"):
+                                modal = MarketSetupModal()
+                                app.push_screen(modal)
+                            elif name == "market-edit":
+                                app.push_screen(MarketSetupModal({"id": "asx", "label": "Australian Securities Exchange", "currency": "AUD", "yahoo_suffix": ".AX"}, editable_id=False))
+                            if name.endswith("-invalid"):
+                                await pilot.pause(0.1)
+                                if name == "key-invalid":
+                                    modal._save("")
+                                elif name == "source-invalid":
+                                    from textual.widgets import Input
+
+                                    modal.query_one("#source-contact", Input).value = ""
+                                    modal._save()
+                                else:
+                                    modal._save()
                         if scenario.name == "live-research-generating":
                             from delta.tui.screens.research import Research
 
