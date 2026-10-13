@@ -297,7 +297,7 @@ fn mark(state: &str) -> &'static str {
 }
 
 /// Textual's compact thesis dialog, seeded with the selected thesis for edit.
-pub fn draw_thesis_form_live(screen: &mut Screen, state: &ThesesState, editing: bool) {
+pub fn draw_thesis_form_live(screen: &mut impl PaintCanvas, state: &ThesesState, editing: bool) {
     let thesis = editing.then(|| &state.fleet[state.selected].thesis);
     let values = [
         thesis.map_or("Claim".to_string(), |t| t.claim.clone()),
@@ -319,7 +319,7 @@ pub fn draw_thesis_form_live(screen: &mut Screen, state: &ThesesState, editing: 
 }
 
 /// Render the compact dialog for the interactive form using its current values.
-pub fn draw_thesis_form_runtime(screen: &mut Screen, form: &crate::form::Form) {
+pub fn draw_thesis_form_runtime(screen: &mut impl PaintCanvas, form: &crate::form::Form) {
     let editing = form.title == "edit thesis";
     let values: [String; 6] = std::array::from_fn(|index| {
         let field = &form.fields[index];
@@ -336,7 +336,7 @@ pub fn draw_thesis_form_runtime(screen: &mut Screen, form: &crate::form::Form) {
 }
 
 fn draw_thesis_form_values(
-    screen: &mut Screen,
+    screen: &mut impl PaintCanvas,
     values: &[String; 6],
     editing: bool,
     focus: usize,
@@ -357,13 +357,15 @@ fn draw_thesis_form_values(
         cx = screen.text(cx, y, &part, style.bg(color::SURFACE));
     }
 
-    let input = |screen: &mut Screen,
-                 x: usize,
-                 y: usize,
-                 width: usize,
-                 value: &str,
-                 focused: bool,
-                 placeholder: bool| {
+    fn input(
+        screen: &mut impl PaintCanvas,
+        x: usize,
+        y: usize,
+        width: usize,
+        value: &str,
+        focused: bool,
+        placeholder: bool,
+    ) {
         let bg = if focused { "#161616" } else { color::SURFACE };
         screen.fill(x, y, x + width, y + 1, Style::fg(color::FG).bg(bg));
         screen.put(
@@ -398,7 +400,7 @@ fn draw_thesis_form_values(
                 screen.put(x + 2, y, ch, Style::fg(color::BLACK).bg(color::FG));
             }
         }
-    };
+    }
     input(
         screen,
         x,
@@ -410,7 +412,7 @@ fn draw_thesis_form_values(
     );
     if editing && focus == 0 {
         screen.text(x + 2, y + 2, &values[0], Style::fg(color::FG).bg("#263251"));
-        if screen.w != 120 {
+        if screen.width() != 120 {
             screen.put(
                 x + 2 + values[0].chars().count(),
                 y + 2,

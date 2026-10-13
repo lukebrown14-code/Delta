@@ -9,8 +9,10 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
 
-use crate::screen::{color, PaintCanvas, Screen, Style as CellStyle};
-use crate::theme::Theme;
+#[cfg(test)]
+use crate::screen::Screen;
+use crate::screen::{color, FrameCanvas, PaintCanvas, Style as CellStyle};
+use crate::theme::{Palette, Theme};
 use crate::{is_quit_key, Action, Component};
 
 /// The empty state: a muted `✓`/`!` glyph line plus a hint
@@ -441,9 +443,8 @@ impl Component for CommandPalette {
     fn update(&mut self, _action: Action) {}
 
     fn draw(&mut self, frame: &mut Frame, area: Rect) {
-        let mut screen = Screen::new(area.width as usize, area.height as usize);
-        self.draw_screen(&mut screen);
-        crate::screen::blit(frame, &screen, area);
+        let mut canvas = FrameCanvas::new(frame, area, Palette::Dark);
+        self.draw_screen(&mut canvas);
     }
 }
 

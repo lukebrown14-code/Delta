@@ -610,6 +610,7 @@ impl Screen {
 /// bridge: the golden painters target the cell model, the terminal takes
 /// the buffer). Colour/attr parity matches what the exporter records:
 /// fg, bg and bold.
+#[cfg(test)]
 pub fn blit(frame: &mut ratatui::Frame, screen: &Screen, area: ratatui::layout::Rect) {
     use ratatui::style::{Modifier, Style as RStyle};
     for y in 0..screen.h.min(area.height as usize) {

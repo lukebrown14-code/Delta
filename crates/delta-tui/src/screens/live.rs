@@ -11,7 +11,7 @@ use std::path::Path;
 
 use delta_core::config::AppConfig;
 
-use crate::screen::Screen;
+use crate::screen::{PaintCanvas, Screen};
 use crate::screens::decisions::{draw_decision_review_form, draw_decisions_live, DecisionsData};
 use crate::screens::home::{
     draw_home_live, draw_home_setup, HomeFeed, HomeLiveData, HomeSetupData, HomeState,
@@ -700,7 +700,7 @@ fn live_settings(
 /// Runtime forms supply their current values; oracle captures use the seeded
 /// values established by the Python exporter.
 pub fn paint_settings_dialog(
-    screen: &mut Screen,
+    screen: &mut impl PaintCanvas,
     state: &str,
     form: Option<&crate::form::Form>,
     selected: usize,
@@ -712,18 +712,20 @@ pub fn paint_settings_dialog(
         return;
     }
     screen.dim();
-    for cell in &mut screen.cells {
-        cell.fg = match cell.fg {
-            Some("#24385f") => Some("#363636"),
-            Some("#623f04") => Some("#424242"),
-            Some("#3a3a3a") => Some("#171717"),
-            other => other,
-        };
-        cell.bg = match cell.bg {
-            Some("#0f1e3c") => Some("#1d1d1d"),
-            Some("#070e1e" | "#13254b") => Some("#0e0e0e"),
-            other => other,
-        };
+    for index in 0..screen.width() * screen.height() {
+        screen.edit(index, |cell| {
+            cell.fg = match cell.fg {
+                Some("#24385f") => Some("#363636"),
+                Some("#623f04") => Some("#424242"),
+                Some("#3a3a3a") => Some("#171717"),
+                other => other,
+            };
+            cell.bg = match cell.bg {
+                Some("#0f1e3c") => Some("#1d1d1d"),
+                Some("#070e1e" | "#13254b") => Some("#0e0e0e"),
+                other => other,
+            };
+        });
     }
     let (width, height) = match state {
         "live-settings-model" => (72, 13),
@@ -733,7 +735,7 @@ pub fn paint_settings_dialog(
         _ => (64, 15),
     };
     let max_height = screen
-        .h
+        .height()
         .saturating_sub(if state.contains("market") { 3 } else { 2 });
     let (x, y, w, _) = dialog_frame(screen, width, height.min(max_height));
 
@@ -836,7 +838,7 @@ pub fn paint_settings_dialog(
             true,
             true,
         );
-        if screen.w >= 200 && form.is_none() && state == "live-settings-key" {
+        if screen.width() >= 200 && form.is_none() && state == "live-settings-key" {
             screen.put(x + 2, y + 5, 'a', Style::fg(color::DISABLED).bg("#161616"));
         }
         modal_hint(
@@ -891,7 +893,7 @@ pub fn paint_settings_dialog(
                 true,
                 false,
             );
-            if screen.w == 120 && state == "live-settings-source" && form.is_none() {
+            if screen.width() == 120 && state == "live-settings-source" && form.is_none() {
                 screen.put(
                     x + 14 + 2 + oracle_contact.len(),
                     y + 4,
@@ -925,7 +927,7 @@ pub fn paint_settings_dialog(
                     form.map_or(index == 0, |f| f.focus == index),
                     index == 2,
                 );
-                if index == 0 && screen.w == 120 && form.is_none() {
+                if index == 0 && screen.width() == 120 && form.is_none() {
                     screen.put(
                         x + 2,
                         y + offset,
@@ -1004,7 +1006,7 @@ pub fn paint_settings_dialog(
             if row >= bottom {
                 continue;
             }
-            if row + 1 < bottom && !(screen.h <= 24 && !edit && label == "Yahoo") {
+            if row + 1 < bottom && !(screen.height() <= 24 && !edit && label == "Yahoo") {
                 screen.text(x, row + 1, label, Style::fg(color::MUTED));
             }
             let field = form.and_then(|f| f.fields.get(index));
@@ -1014,7 +1016,7 @@ pub fn paint_settings_dialog(
                 .filter(|v| !v.is_empty())
                 .unwrap_or(placeholder);
             modal_input(screen, (x + 10, row, w - 10), value, field, focused, false);
-            if edit && index == 1 && screen.w == 200 && form.is_none() {
+            if edit && index == 1 && screen.width() == 200 && form.is_none() {
                 screen.put(
                     x + 12 + value.len(),
                     row,
@@ -1024,8 +1026,8 @@ pub fn paint_settings_dialog(
             }
             if disabled {
                 screen.put(x + 10, row, '█', Style::fg("#1f1f1f"));
-                for cell in &mut screen.cells[row * screen.w + x + 12..row * screen.w + x + w - 1] {
-                    cell.fg = Some("#989898");
+                for index in row * screen.width() + x + 12..row * screen.width() + x + w - 1 {
+                    screen.edit(index, |cell| cell.fg = Some("#989898"));
                 }
             }
         }
@@ -1034,7 +1036,7 @@ pub fn paint_settings_dialog(
             modal_buttons(screen, x, button_y);
         }
         let hint_y = y + if edit { 17 } else { 22 };
-        if hint_y < bottom && screen.h > 24 {
+        if hint_y < bottom && screen.height() > 24 {
             if edit {
                 modal_hint(
                     screen,
@@ -1058,7 +1060,7 @@ pub fn paint_settings_dialog(
     }
 }
 
-fn modal_title(screen: &mut Screen, x: usize, y: usize, w: usize, title: &str) {
+fn modal_title(screen: &mut impl PaintCanvas, x: usize, y: usize, w: usize, title: &str) {
     use crate::screen::Style;
     let style = Style::fg("#898989").bold();
     screen.fill(x, y, x + w, y + 1, style);
@@ -1066,7 +1068,7 @@ fn modal_title(screen: &mut Screen, x: usize, y: usize, w: usize, title: &str) {
 }
 
 fn modal_hint(
-    screen: &mut Screen,
+    screen: &mut impl PaintCanvas,
     x: usize,
     y: usize,
     w: usize,
@@ -1078,15 +1080,16 @@ fn modal_hint(
     let hx = x + (w - hint.chars().count()) / 2;
     screen.text(hx, y, hint, Style::fg(color::MUTED));
     for &(offset, len) in keys {
-        for cell in &mut screen.cells[y * screen.w + hx + offset..y * screen.w + hx + offset + len]
-        {
-            cell.fg = Some("#898989");
-            cell.bold = true;
+        for index in y * screen.width() + hx + offset..y * screen.width() + hx + offset + len {
+            screen.edit(index, |cell| {
+                cell.fg = Some("#898989");
+                cell.bold = true;
+            });
         }
     }
 }
 
-fn modal_buttons(screen: &mut Screen, x: usize, y: usize) {
+fn modal_buttons(screen: &mut impl PaintCanvas, x: usize, y: usize) {
     use crate::screen::{color, Style};
     screen.fill(x, y, x + 8, y + 1, Style::DEFAULT.bg("#494949"));
     screen.text(
@@ -1099,7 +1102,7 @@ fn modal_buttons(screen: &mut Screen, x: usize, y: usize) {
 }
 
 fn modal_input(
-    screen: &mut Screen,
+    screen: &mut impl PaintCanvas,
     (x, y, w): (usize, usize, usize),
     placeholder: &str,
     field: Option<&crate::form::Field>,

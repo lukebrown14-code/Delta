@@ -162,9 +162,8 @@ pub trait Component {
 /// its own state, painted data-driven into a rect, keys first answering
 /// `Option<Action>` up to the app.
 ///
-/// The golden `crate::screen::Screen` cell grid stays the painter's model:
-/// screens paint into a `Screen` and blit (see `screen::blit`), which keeps
-/// every frame cell-for-cell what the goldens capture.
+/// Screens paint into a Ratatui frame. The owned golden surface remains an
+/// oracle for parity checks through `paint_into`.
 pub trait Screen {
     /// The registry name (`home`, `targets`, ...); drives Go, the palette
     /// and the status-bar highlight.
@@ -181,17 +180,11 @@ pub trait Screen {
         let _ = action;
     }
 
-    /// Paint into the compatibility surface used for modal composition and
-    /// golden parity. Each screen owns its data and pane layout here.
+    /// Paint into the owned oracle surface for golden parity.
     fn paint_into(&self, screen: &mut crate::screen::Screen);
 
-    /// Paint into a Ratatui frame. The cell surface is retained as the
-    /// compatibility adapter for modal composition and oracle goldens.
-    fn draw(&mut self, frame: &mut Frame, area: Rect) {
-        let mut screen = crate::screen::Screen::new(area.width as usize, area.height as usize);
-        self.paint_into(&mut screen);
-        crate::screen::blit(frame, &screen, area);
-    }
+    /// Paint directly into the Ratatui frame.
+    fn draw(&mut self, frame: &mut Frame, area: Rect);
 }
 
 /// Global quit keys, shared by every pane (matches the Python bindings).
