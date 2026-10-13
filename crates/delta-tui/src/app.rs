@@ -23,10 +23,12 @@ use delta_tui::screen::{color, Screen, Style};
 use delta_tui::screens::decisions::{DecisionCommand, DecisionsData, DecisionsScreen};
 #[cfg(test)]
 use delta_tui::screens::SettingsFocus;
+#[cfg(test)]
+use delta_tui::screens::ThesesPane;
 use delta_tui::screens::{
-    draw_theses_live, draw_thesis_form_runtime, paint_watchlist_add_overlay, AddSearchState,
-    AskState, HomeCommand, HomeComponent, ResearchComponent, ResearchData, ResearchView,
-    SettingsCommand, SettingsComponent, ThesesPane, ThesesState, WatchlistCommand,
+    draw_thesis_form_runtime, paint_watchlist_add_overlay, AddSearchState, AskState,
+    EvidenceDecision, HomeCommand, HomeComponent, ResearchComponent, ResearchData, ResearchView,
+    SettingsCommand, SettingsComponent, ThesesCommand, ThesesComponent, WatchlistCommand,
     WatchlistComponent,
 };
 use delta_tui::theme::Palette;
@@ -167,7 +169,7 @@ pub(crate) struct App {
     overlay: Option<Overlay>,
     /// The Settings screen's interaction state.
     settings: SettingsComponent,
-    theses: ThesesState,
+    theses: ThesesComponent,
     research: ResearchComponent,
     ask: AskState,
     ask_worker: Option<tokio::task::JoinHandle<()>>,
@@ -251,7 +253,7 @@ impl App {
             Tab::Research => {
                 self.research.paint_into(screen);
             }
-            Tab::Theses => draw_theses_live(screen, &self.theses),
+            Tab::Theses => self.theses.paint_into(screen),
             Tab::Ask => delta_tui::screens::draw_ask_live(screen, &self.ask),
             Tab::Decisions => self.decisions.paint(screen),
             Tab::Settings => {
@@ -785,7 +787,7 @@ impl App {
             }
             KeyCode::Char('4') => {
                 self.tab = Tab::Theses;
-                self.theses.focus_active = true;
+                self.theses.state.focus_active = true;
                 self.reload_theses();
             }
             KeyCode::Char('5') => self.tab = Tab::Ask,
@@ -843,125 +845,68 @@ impl App {
 
     fn reload_theses(&mut self) {
         if let Some(db) = self.thesis_db() {
-            if let Err(err) = self.theses.load(&db) {
+            if let Err(err) = self.theses.state.load(&db) {
                 self.status = err.to_string();
             }
         }
     }
 
     fn handle_theses_key(&mut self, key: KeyEvent) -> Option<Action> {
+        self.theses.set_viewport_width(self.viewport_width());
+        let action = Component::handle_key(&mut self.theses, key)?;
+        Some(match action {
+            Action::Theses(command) => self.execute_theses_command(command),
+            other => other,
+        })
+    }
+
+    fn execute_theses_command(&mut self, command: ThesesCommand) -> Action {
         use delta_services::{remove_evidence, set_accepted};
-        self.theses.focus_active = true;
-        if self.theses.filtering {
-            match key.code {
-                KeyCode::Esc | KeyCode::Enter => self.theses.filtering = false,
-                KeyCode::Backspace => {
-                    self.theses.filter.pop();
-                }
-                KeyCode::Char(ch) => self.theses.filter.push(ch),
-                _ => {}
-            }
-            return Some(Action::Noop);
-        }
-        match key.code {
-            KeyCode::Esc if self.theses.view != ThesesPane::Claims => {
-                self.theses.view = ThesesPane::Claims;
-                Some(Action::Noop)
-            }
-            KeyCode::Char('/') => {
-                self.theses.filtering = true;
-                self.theses.view = ThesesPane::Claims;
-                Some(Action::Noop)
-            }
-            KeyCode::Char('t') | KeyCode::Enter => {
-                self.theses.view = ThesesPane::Detail;
-                Some(Action::Noop)
-            }
-            KeyCode::Char('e') => {
-                self.theses.view = ThesesPane::Evidence;
-                Some(Action::Noop)
-            }
-            KeyCode::Char('n') => {
+        match command {
+            ThesesCommand::New => {
                 self.overlay = Some(Overlay::SettingsForm(thesis_form(None)));
-                Some(Action::Noop)
+                Action::Noop
             }
-            KeyCode::Char('d') => {
-                let row = self.theses.fleet.get(self.theses.selected)?;
+            ThesesCommand::Edit => {
+                let Some(row) = self.theses.state.fleet.get(self.theses.state.selected) else {
+                    return Action::Noop;
+                };
                 self.overlay = Some(Overlay::SettingsForm(thesis_form(Some(&row.thesis))));
-                Some(Action::Noop)
+                Action::Noop
             }
-            KeyCode::Up => {
-                if self.theses.view == ThesesPane::Evidence {
-                    self.theses.evidence_selected = self.theses.evidence_selected.saturating_sub(1);
-                    return Some(Action::Noop);
-                }
-                self.theses.selected = self.theses.selected.saturating_sub(1);
+            ThesesCommand::Select => {
                 if let Some(db) = self.thesis_db() {
-                    let _ = self.theses.select(&db);
+                    let _ = self.theses.state.select(&db);
                 }
-                Some(Action::Noop)
+                Action::Noop
             }
-            KeyCode::Down => {
-                if self.theses.view == ThesesPane::Evidence {
-                    self.theses.evidence_selected = (self.theses.evidence_selected + 1)
-                        .min(self.theses.links.len().saturating_sub(1));
-                    return Some(Action::Noop);
-                }
-                self.theses.selected =
-                    (self.theses.selected + 1).min(self.theses.fleet.len().saturating_sub(1));
-                if let Some(db) = self.thesis_db() {
-                    let _ = self.theses.select(&db);
-                }
-                Some(Action::Noop)
-            }
-            KeyCode::Char('f') => self
-                .theses
-                .selected_id()
-                .map(|id| Action::ThesisFind(id.to_string()))
-                .or_else(|| Some(Action::Status("select a thesis first".to_string()))),
-            KeyCode::Char('s') => {
-                let id = self.theses.selected_id().map(str::to_string);
-                self.theses.view = ThesesPane::Detail;
-                id.map(Action::ThesisSummarize)
-                    .or_else(|| Some(Action::Status("select a thesis first".to_string())))
-            }
-            KeyCode::Char('a' | 'x' | 'u') => {
-                if self.viewport_width() < 100 && self.theses.view != ThesesPane::Evidence {
-                    return Some(Action::Status(
-                        "press e to review evidence first".to_string(),
-                    ));
-                }
-                let Some(link) = self.theses.selected_link().cloned() else {
-                    return Some(Action::Status("no evidence to review".to_string()));
-                };
+            ThesesCommand::Find(id) => Action::ThesisFind(id),
+            ThesesCommand::Summarize(id) => Action::ThesisSummarize(id),
+            ThesesCommand::Review {
+                thesis_id,
+                evidence_id,
+                decision,
+            } => {
                 let Some(db) = self.thesis_db() else {
-                    return Some(Action::Status("offline: no database".to_string()));
+                    return Action::Status("offline: no database".to_string());
                 };
-                let result = match key.code {
-                    KeyCode::Char('a') if !link.accepted => {
-                        set_accepted(&db, &link.thesis_id, &link.evidence_id, true).map(|_| ())
+                let result = match decision {
+                    EvidenceDecision::Accept => {
+                        set_accepted(&db, &thesis_id, &evidence_id, true).map(|_| ())
                     }
-                    KeyCode::Char('u') if link.accepted => {
-                        set_accepted(&db, &link.thesis_id, &link.evidence_id, false).map(|_| ())
+                    EvidenceDecision::Unaccept => {
+                        set_accepted(&db, &thesis_id, &evidence_id, false).map(|_| ())
                     }
-                    KeyCode::Char('x') if !link.accepted => {
-                        remove_evidence(&db, &link.thesis_id, &link.evidence_id)
-                    }
-                    _ => {
-                        return Some(Action::Status(
-                            "review that item's current state first".to_string(),
-                        ))
-                    }
+                    EvidenceDecision::Reject => remove_evidence(&db, &thesis_id, &evidence_id),
                 };
                 match result {
                     Ok(()) => {
                         self.reload_theses();
-                        Some(Action::Noop)
+                        Action::Noop
                     }
-                    Err(err) => Some(Action::Status(err.to_string())),
+                    Err(err) => Action::Status(err.to_string()),
                 }
             }
-            _ => None,
         }
     }
 }
@@ -1292,13 +1237,14 @@ impl App {
                             }
                         }
                         self.reload_theses();
-                        self.theses.selected = self
+                        self.theses.state.selected = self
                             .theses
+                            .state
                             .fleet
                             .iter()
                             .position(|row| row.thesis.id == thesis.id)
                             .unwrap_or(0);
-                        let _ = self.theses.select(&db);
+                        let _ = self.theses.state.select(&db);
                         Ok(())
                     }
                     Err(err) => Err(err),
@@ -1969,8 +1915,9 @@ impl Component for App {
                 );
             }
             Action::ThesisSummary(summary) => {
-                if self.theses.selected_id() == Some(summary.thesis_id.as_str()) {
-                    self.theses.summary = Some(*summary);
+                let selected = self.theses.state.selected_id() == Some(summary.thesis_id.as_str());
+                delta_tui::Screen::update(&mut self.theses, Action::ThesisSummary(summary));
+                if selected {
                     self.status = "thesis summarised".to_string();
                 }
             }
@@ -2053,6 +2000,7 @@ impl Component for App {
             | Action::Goto(_)
             | Action::ThesisFind(_)
             | Action::ThesisSummarize(_)
+            | Action::Theses(_)
             | Action::Gather
             | Action::GatherCompany(_)
             | Action::GenerateReport => {}
@@ -2121,7 +2069,7 @@ pub(crate) async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> st
         palette: Palette::Dark,
         overlay: None,
         settings,
-        theses: ThesesState::default(),
+        theses: ThesesComponent::default(),
         research: ResearchComponent::new(research),
         ask,
         ask_worker: None,
@@ -2421,7 +2369,7 @@ mod tests {
             palette: Palette::Dark,
             overlay: None,
             settings,
-            theses: ThesesState::default(),
+            theses: ThesesComponent::default(),
             research: ResearchComponent::default(),
             ask: AskState::default(),
             ask_worker: None,
@@ -3614,7 +3562,7 @@ mod settings_tests {
         assert!(draft.contains("Apple grows"), "{draft}");
         a.handle_key(key(KeyCode::Enter));
         assert!(a.overlay.is_none());
-        assert_eq!(a.theses.fleet.len(), 1);
+        assert_eq!(a.theses.state.fleet.len(), 1);
         assert!(screen_text(&mut a, 120, 40).contains("Apple grows"));
         a.handle_key(key(KeyCode::Char('d')));
         let editing = screen_text(&mut a, 120, 40);
@@ -3622,21 +3570,21 @@ mod settings_tests {
         assert!(editing.contains("Apple grows"));
         a.handle_key(key(KeyCode::Esc));
         a.handle_key(key(KeyCode::Char('t')));
-        assert_eq!(a.theses.view, ThesesPane::Detail);
+        assert_eq!(a.theses.state.view, ThesesPane::Detail);
         a.handle_key(key(KeyCode::Char('e')));
-        assert_eq!(a.theses.view, ThesesPane::Evidence);
+        assert_eq!(a.theses.state.view, ThesesPane::Evidence);
         a.handle_key(key(KeyCode::Esc));
         a.handle_key(key(KeyCode::Char('/')));
-        assert!(a.theses.filtering);
+        assert!(a.theses.state.filtering);
         a.handle_key(key(KeyCode::Char('A')));
-        assert_eq!(a.theses.filter, "A");
+        assert_eq!(a.theses.state.filter, "A");
         a.handle_key(key(KeyCode::Enter));
-        assert!(!a.theses.filtering);
+        assert!(!a.theses.state.filtering);
         assert!(matches!(
             a.handle_key(key(KeyCode::Char('s'))),
             Some(Action::ThesisSummarize(_))
         ));
-        assert_eq!(a.theses.view, ThesesPane::Detail);
+        assert_eq!(a.theses.state.view, ThesesPane::Detail);
     }
 
     #[test]
@@ -3672,19 +3620,19 @@ mod settings_tests {
         delta_services::add_evidence(&db, &thesis.id, "news:n1", "support", "growth", None)
             .unwrap();
         a.handle_key(key(KeyCode::Char('4')));
-        assert!(a.theses.fleet[0].result.is_none());
+        assert!(a.theses.state.fleet[0].result.is_none());
         a.handle_key(key(KeyCode::Char('e')));
         a.handle_key(key(KeyCode::Char('a')));
-        assert_eq!(a.theses.fleet[0].result.as_ref().unwrap().support, 1);
-        assert!(a.theses.selected_link().unwrap().accepted);
+        assert_eq!(a.theses.state.fleet[0].result.as_ref().unwrap().support, 1);
+        assert!(a.theses.state.selected_link().unwrap().accepted);
         assert!(matches!(
             a.handle_key(key(KeyCode::Char('x'))),
             Some(Action::Status(_))
         ));
         a.handle_key(key(KeyCode::Char('u')));
-        assert!(a.theses.fleet[0].result.is_none());
+        assert!(a.theses.state.fleet[0].result.is_none());
         a.handle_key(key(KeyCode::Char('x')));
-        assert!(a.theses.links.is_empty());
+        assert!(a.theses.state.links.is_empty());
     }
 
     #[test]

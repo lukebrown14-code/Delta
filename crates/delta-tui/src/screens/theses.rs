@@ -1,7 +1,10 @@
+use super::pane_layout;
 use super::status_bar::{
     draw_status_bar_wide, pane_hints, status_bar_narrow, status_bar_tabs, NarrowTab,
 };
 use crate::screen::{color, Screen, Style};
+use crate::{Action, Component};
+use crossterm::event::{KeyCode, KeyEvent};
 use delta_core::db::Db;
 use delta_services::theses::{evidence_for, ThesisEvidence};
 use delta_services::thesis_health::ThesisHealth;
@@ -33,6 +36,174 @@ pub enum ThesesPane {
     Claims,
     Detail,
     Evidence,
+}
+
+/// Service and modal requests produced by the Theses screen.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ThesesCommand {
+    New,
+    Edit,
+    Select,
+    Find(String),
+    Summarize(String),
+    Review {
+        thesis_id: String,
+        evidence_id: String,
+        decision: EvidenceDecision,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EvidenceDecision {
+    Accept,
+    Reject,
+    Unaccept,
+}
+
+/// Owns the fleet read model and its interaction state. The app supplies DB
+/// refreshes and executes the typed service requests returned by keys.
+#[derive(Default)]
+pub struct ThesesComponent {
+    pub state: ThesesState,
+    viewport_width: usize,
+}
+
+impl ThesesComponent {
+    pub fn set_viewport_width(&mut self, width: usize) {
+        self.viewport_width = width;
+    }
+
+    pub fn paint_into(&self, screen: &mut Screen) {
+        draw_theses_live(screen, &self.state);
+    }
+}
+
+impl crate::Screen for ThesesComponent {
+    fn name(&self) -> &'static str {
+        "theses"
+    }
+
+    fn handle_key(&mut self, key: KeyEvent) -> Option<Action> {
+        let state = &mut self.state;
+        state.focus_active = true;
+        if state.filtering {
+            match key.code {
+                KeyCode::Esc | KeyCode::Enter => state.filtering = false,
+                KeyCode::Backspace => {
+                    state.filter.pop();
+                }
+                KeyCode::Char(ch) => state.filter.push(ch),
+                _ => {}
+            }
+            return Some(Action::Noop);
+        }
+        match key.code {
+            KeyCode::Esc if state.view != ThesesPane::Claims => {
+                state.view = ThesesPane::Claims;
+                Some(Action::Noop)
+            }
+            KeyCode::Char('/') => {
+                state.filtering = true;
+                state.view = ThesesPane::Claims;
+                Some(Action::Noop)
+            }
+            KeyCode::Char('t') | KeyCode::Enter => {
+                state.view = ThesesPane::Detail;
+                Some(Action::Noop)
+            }
+            KeyCode::Char('e') => {
+                state.view = ThesesPane::Evidence;
+                Some(Action::Noop)
+            }
+            KeyCode::Char('n') => Some(Action::Theses(ThesesCommand::New)),
+            KeyCode::Char('d') if !state.fleet.is_empty() => {
+                Some(Action::Theses(ThesesCommand::Edit))
+            }
+            KeyCode::Up | KeyCode::Down => {
+                let delta = if key.code == KeyCode::Up { -1 } else { 1 };
+                if state.view == ThesesPane::Evidence {
+                    state.evidence_selected = state
+                        .evidence_selected
+                        .saturating_add_signed(delta)
+                        .min(state.links.len().saturating_sub(1));
+                    Some(Action::Noop)
+                } else {
+                    state.selected = state
+                        .selected
+                        .saturating_add_signed(delta)
+                        .min(state.fleet.len().saturating_sub(1));
+                    Some(Action::Theses(ThesesCommand::Select))
+                }
+            }
+            KeyCode::Char('f') => Some(state.selected_id().map_or_else(
+                || Action::Status("select a thesis first".to_string()),
+                |id| Action::Theses(ThesesCommand::Find(id.to_string())),
+            )),
+            KeyCode::Char('s') => {
+                let id = state.selected_id().map(str::to_string);
+                state.view = ThesesPane::Detail;
+                Some(id.map_or_else(
+                    || Action::Status("select a thesis first".to_string()),
+                    |id| Action::Theses(ThesesCommand::Summarize(id)),
+                ))
+            }
+            KeyCode::Char('a' | 'x' | 'u') => {
+                if self.viewport_width < 100 && state.view != ThesesPane::Evidence {
+                    return Some(Action::Status(
+                        "press e to review evidence first".to_string(),
+                    ));
+                }
+                let Some(link) = state.selected_link() else {
+                    return Some(Action::Status("no evidence to review".to_string()));
+                };
+                let decision = match key.code {
+                    KeyCode::Char('a') if !link.accepted => EvidenceDecision::Accept,
+                    KeyCode::Char('u') if link.accepted => EvidenceDecision::Unaccept,
+                    KeyCode::Char('x') if !link.accepted => EvidenceDecision::Reject,
+                    _ => {
+                        return Some(Action::Status(
+                            "review that item's current state first".to_string(),
+                        ))
+                    }
+                };
+                Some(Action::Theses(ThesesCommand::Review {
+                    thesis_id: link.thesis_id.clone(),
+                    evidence_id: link.evidence_id.clone(),
+                    decision,
+                }))
+            }
+            _ => None,
+        }
+    }
+
+    fn update(&mut self, action: Action) {
+        if let Action::ThesisSummary(summary) = action {
+            if self.state.selected_id() == Some(summary.thesis_id.as_str()) {
+                self.state.summary = Some(*summary);
+            }
+        }
+    }
+
+    fn draw(&mut self, frame: &mut ratatui::Frame, area: ratatui::layout::Rect) {
+        self.viewport_width = area.width as usize;
+        let mut screen = Screen::new(area.width as usize, area.height as usize);
+        self.paint_into(&mut screen);
+        crate::screen::blit(frame, &screen, area);
+    }
+}
+
+impl Component for ThesesComponent {
+    fn handle_key(&mut self, key: KeyEvent) -> Option<Action> {
+        crate::Screen::handle_key(self, key)
+    }
+
+    fn update(&mut self, action: Action) {
+        crate::Screen::update(self, action)
+    }
+
+    fn draw(&mut self, frame: &mut ratatui::Frame, area: ratatui::layout::Rect) {
+        crate::Screen::draw(self, frame, area)
+    }
 }
 
 impl ThesesState {
@@ -358,8 +529,164 @@ fn draw_thesis_form_values(
     }
 }
 
-/// Overlay real thesis rows on the three golden-layout painters. Empty states
-/// retain the exact existing golden output.
+/// Paint the live Theses base from the pane grammar at each breakpoint. The
+/// populated read model draws into these same panes below.
+fn paint_theses_base(screen: &mut Screen) {
+    let bottom = screen.h - 3;
+    let narrow = screen.w < 100;
+    let wide = screen.w >= 160;
+    let columns = if narrow {
+        pane_layout(
+            1,
+            0,
+            screen.w - 1,
+            bottom + 1,
+            &[bottom + 1],
+            &[screen.w - 2],
+        )
+    } else {
+        pane_layout(
+            1,
+            0,
+            screen.w - 1,
+            bottom + 1,
+            &[bottom + 1],
+            &[36, screen.w - 78, 40],
+        )
+    };
+    let claims = columns[0][0];
+    screen.pane(
+        claims.0,
+        claims.1,
+        claims.2 - 1,
+        claims.3 - 1,
+        true,
+        &[
+            ("theses ", Style::fg(color::BLUE).bold()),
+            ("· 0", Style::fg(color::MUTED).bold()),
+        ],
+        &pane_hints(if narrow {
+            &[
+                ("n", "new"),
+                ("d", "edit"),
+                ("/", "filter"),
+                ("enter", "thesis"),
+                ("e", "evidence"),
+            ]
+        } else {
+            &[("n", "new"), ("d", "edit"), ("/", "filter")]
+        }),
+    );
+    if narrow {
+        paint_narrow_header(screen, 1, "#232323");
+        screen.fill(2, 2, claims.2 - 1, bottom - 1, Style::fg(color::FG));
+        screen.text(
+            3,
+            bottom - 1,
+            "no theses yet — press n to create one",
+            Style::fg(color::MUTED),
+        );
+        status_bar_narrow(screen, NarrowTab::Theses);
+        return;
+    }
+    let detail = columns[0][1];
+    let evidence = columns[0][2];
+    let wide_title = [("t thesis", Style::fg(color::BLUE).bold())];
+    let compact_title = [
+        ("t ", Style::fg(color::BLUE).bold()),
+        ("thesis", Style::fg(color::BLUE).bold()),
+    ];
+    screen.pane(
+        detail.0,
+        detail.1,
+        detail.2 - 1,
+        detail.3 - 1,
+        false,
+        if wide { &wide_title } else { &compact_title },
+        &pane_hints(&[("s", "summarise"), ("d", "edit"), ("↑↓", "scroll")]),
+    );
+    screen.pane(
+        evidence.0,
+        evidence.1,
+        evidence.2 - 1,
+        evidence.3 - 1,
+        false,
+        &[
+            ("e ", Style::fg(color::BLUE).bold()),
+            ("evidence ", Style::fg(color::BLUE).bold()),
+            ("· 0", Style::fg(color::MUTED).bold()),
+        ],
+        &pane_hints(&[("f", "find")]),
+    );
+    screen.fill(2, 1, claims.2 - 1, bottom - 1, Style::fg(color::FG));
+    screen.text(
+        detail.0 + 2,
+        1,
+        "no theses yet — press n to create one",
+        Style::fg(color::FG),
+    );
+    screen.text(evidence.0 + 2, 1, "no evidence yet", Style::fg(color::FG));
+    let header_style = Style::fg(color::FG).bold().bg(color::PANEL);
+    screen.fill(evidence.0 + 1, 2, evidence.2 - 1, 3, header_style);
+    screen.fill(
+        evidence.0 + 1,
+        3,
+        evidence.2 - 1,
+        if wide { screen.h - 10 } else { 29 },
+        Style::fg(color::FG),
+    );
+    screen.text(
+        evidence.0 + if wide { 1 } else { 2 },
+        2,
+        if wide {
+            "    ±  age   note"
+        } else {
+            "   ±  age   note"
+        },
+        header_style,
+    );
+    let separator = if wide { screen.h - 11 } else { 29 };
+    for x in evidence.0 + 1..evidence.2 - 1 {
+        screen.put(
+            x,
+            separator,
+            '─',
+            Style::fg(if wide {
+                "#333333"
+            } else {
+                color::BORDER_BLURRED
+            }),
+        );
+    }
+    screen.text(
+        evidence.0 + 2,
+        separator + 1,
+        "no evidence yet — press f to find",
+        Style::fg(color::FG),
+    );
+    screen.text(
+        evidence.0 + 2,
+        separator + 2,
+        "candidates",
+        Style::fg(color::FG),
+    );
+    if wide {
+        draw_status_bar_wide(screen, screen.h - 1, screen.w, "4 Theses");
+    } else {
+        draw_status_bar_theses(screen, screen.h - 1, screen.w);
+    }
+}
+
+fn paint_narrow_header(screen: &mut Screen, y: usize, background: &'static str) {
+    let style = Style::fg(color::FG).bold().bg(background);
+    screen.fill(2, y, screen.w - 2, y + 1, style);
+    screen.text(2, y, "   Claim", style);
+    screen.text(49, y, "Health", style);
+    screen.text(62, y, "Tilt", style);
+    screen.text(72, y, "Queue", style);
+}
+
+/// Overlay real thesis rows on the layout-driven base.
 pub fn draw_theses_live(screen: &mut Screen, state: &ThesesState) {
     if screen.w < 100 && state.view != ThesesPane::Claims {
         draw_theses_narrow_detail(screen, state);
@@ -367,13 +694,7 @@ pub fn draw_theses_live(screen: &mut Screen, state: &ThesesState) {
         paint_spend(screen, &state.spend);
         return;
     }
-    if screen.w < 100 {
-        draw_theses_narrow(screen);
-    } else if screen.w >= 160 {
-        draw_theses_wide(screen);
-    } else {
-        draw_theses(screen);
-    }
+    paint_theses_base(screen);
     if state.fleet.is_empty() {
         paint_spend(screen, &state.spend);
         return;
@@ -396,11 +717,31 @@ pub fn draw_theses_live(screen: &mut Screen, state: &ThesesState) {
     let detail_focused = state.focus_active && state.view == ThesesPane::Detail && screen.w >= 160;
     let evidence_focused = state.focus_active && state.view == ThesesPane::Evidence;
     let evidence_toned = state.focus_active;
+    let columns = if narrow {
+        pane_layout(
+            1,
+            0,
+            screen.w - 1,
+            bottom + 1,
+            &[bottom + 1],
+            &[screen.w - 2],
+        )
+    } else {
+        pane_layout(
+            1,
+            0,
+            screen.w - 1,
+            bottom + 1,
+            &[bottom + 1],
+            &[36, screen.w - 78, 40],
+        )
+    };
+    let claims = columns[0][0];
     screen.pane(
-        1,
-        0,
-        if narrow { screen.w - 2 } else { 36 },
-        bottom,
+        claims.0,
+        claims.1,
+        claims.2 - 1,
+        claims.3 - 1,
         claims_focused,
         &[
             ("theses ", Style::fg(color::BLUE).bold()),
@@ -419,13 +760,14 @@ pub fn draw_theses_live(screen: &mut Screen, state: &ThesesState) {
         }),
     );
     if !narrow {
-        let x = screen.w - 42;
+        let detail = columns[0][1];
+        let evidence = columns[0][2];
         let health = state.fleet[state.selected].state().as_str();
         screen.pane(
-            37,
-            0,
-            x,
-            bottom,
+            detail.0,
+            detail.1,
+            detail.2 - 1,
+            detail.3 - 1,
             detail_focused,
             &[
                 ("t thesis ", Style::fg(color::BLUE).bold()),
@@ -438,10 +780,10 @@ pub fn draw_theses_live(screen: &mut Screen, state: &ThesesState) {
         );
         let pending = state.links.iter().filter(|link| !link.accepted).count();
         screen.pane(
-            x + 1,
-            0,
-            screen.w - 2,
-            bottom,
+            evidence.0,
+            evidence.1,
+            evidence.2 - 1,
+            evidence.3 - 1,
             evidence_focused,
             &[
                 ("e evidence ", Style::fg(color::BLUE).bold()),
@@ -459,12 +801,9 @@ pub fn draw_theses_live(screen: &mut Screen, state: &ThesesState) {
     }
     let list_top = if state.filtering {
         if narrow {
-            for x in 2..screen.w - 2 {
-                screen.cells[2 * screen.w + x] = screen.cells[screen.w + x].clone();
-                screen.cells[2 * screen.w + x].bg = Some(color::PANEL);
-            }
+            paint_narrow_header(screen, 2, color::PANEL);
         }
-        let right = if narrow { screen.w - 2 } else { 36 };
+        let right = claims.2 - 1;
         screen.fill(2, 1, right, 2, Style::fg(color::FG).bg("#161616"));
         screen.put(2, 1, '█', Style::fg(color::BLUE).bg("#161616"));
         screen.put(3, 1, ' ', Style::DEFAULT.bg("#161616"));
@@ -487,11 +826,23 @@ pub fn draw_theses_live(screen: &mut Screen, state: &ThesesState) {
         1
     };
     if narrow {
-        screen.fill(2, list_top, screen.w - 2, bottom, Style::fg(color::FG));
+        screen.fill(2, list_top, claims.2 - 1, bottom, Style::fg(color::FG));
     } else {
-        screen.fill(2, list_top, 36, bottom, Style::fg(color::FG));
-        screen.fill(38, 1, screen.w - 42, bottom, Style::DEFAULT);
-        screen.fill(screen.w - 40, 1, screen.w - 2, bottom, Style::DEFAULT);
+        screen.fill(2, list_top, claims.2 - 1, bottom, Style::fg(color::FG));
+        screen.fill(
+            columns[0][1].0 + 1,
+            1,
+            columns[0][1].2 - 1,
+            bottom,
+            Style::DEFAULT,
+        );
+        screen.fill(
+            columns[0][2].0 + 1,
+            1,
+            columns[0][2].2 - 1,
+            bottom,
+            Style::DEFAULT,
+        );
     }
     let rows = state.fleet.iter().filter(|row| {
         row.thesis
@@ -984,6 +1335,14 @@ fn recolor_live_pane_chrome(screen: &mut Screen, bottom: usize) {
 
 fn draw_theses_narrow_detail(screen: &mut Screen, state: &ThesesState) {
     let bottom = screen.h - 3;
+    let pane = pane_layout(
+        1,
+        0,
+        screen.w - 1,
+        bottom + 1,
+        &[bottom + 1],
+        &[screen.w - 2],
+    )[0][0];
     let Some(row) = state.fleet.get(state.selected) else {
         return;
     };
@@ -1009,10 +1368,10 @@ fn draw_theses_narrow_detail(screen: &mut Screen, state: &ThesesState) {
         ])
     };
     screen.pane(
-        1,
-        0,
-        screen.w - 2,
-        bottom,
+        pane.0,
+        pane.1,
+        pane.2 - 1,
+        pane.3 - 1,
         true,
         &[
             (title, Style::fg(color::BLUE).bold()),
@@ -1497,4 +1856,43 @@ pub fn draw_theses_narrow(screen: &mut Screen) {
         Style::fg(color::MUTED),
     );
     status_bar_narrow(screen, NarrowTab::Theses);
+}
+
+#[cfg(test)]
+mod component_tests {
+    use super::*;
+    use crossterm::event::KeyModifiers;
+
+    fn press(component: &mut ThesesComponent, code: KeyCode) -> Option<Action> {
+        crate::Screen::handle_key(component, KeyEvent::new(code, KeyModifiers::NONE))
+    }
+
+    #[test]
+    fn owns_navigation_filter_and_service_requests() {
+        let mut component = ThesesComponent::default();
+        component.set_viewport_width(80);
+        assert_eq!(
+            press(&mut component, KeyCode::Char('n')),
+            Some(Action::Theses(ThesesCommand::New))
+        );
+        assert_eq!(
+            press(&mut component, KeyCode::Char('e')),
+            Some(Action::Noop)
+        );
+        assert_eq!(component.state.view, ThesesPane::Evidence);
+        assert_eq!(press(&mut component, KeyCode::Esc), Some(Action::Noop));
+        assert_eq!(component.state.view, ThesesPane::Claims);
+        assert_eq!(
+            press(&mut component, KeyCode::Char('a')),
+            Some(Action::Status(
+                "press e to review evidence first".to_string()
+            ))
+        );
+        press(&mut component, KeyCode::Char('/'));
+        press(&mut component, KeyCode::Char('A'));
+        assert_eq!(component.state.filter, "A");
+        press(&mut component, KeyCode::Enter);
+        assert!(!component.state.filtering);
+        assert_eq!(component.state.view, ThesesPane::Claims);
+    }
 }
