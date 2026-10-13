@@ -32,7 +32,7 @@ use delta_tui::screens::{
     WatchlistComponent,
 };
 use delta_tui::theme::Palette;
-use delta_tui::{is_quit_key, workers, Action, Component};
+use delta_tui::{is_quit_key, workers, Action, Component, Screen as ScreenComponent};
 
 /// The shell modals the app can float over a pane.
 enum Overlay {
@@ -244,23 +244,23 @@ impl App {
                     self.desk.selected,
                     self.desk.instruments.len(),
                 );
-                self.home.paint_into(screen);
+                ScreenComponent::paint_into(&self.home, screen);
             }
             Tab::Watchlist => {
                 self.watchlist.set_snapshot(self.desk.watch_state());
-                self.watchlist.paint_into(screen);
+                ScreenComponent::paint_into(&self.watchlist, screen);
             }
             Tab::Research => {
-                self.research.paint_into(screen);
+                ScreenComponent::paint_into(&self.research, screen);
             }
-            Tab::Theses => self.theses.paint_into(screen),
-            Tab::Ask => delta_tui::screens::draw_ask_live(screen, &self.ask),
-            Tab::Decisions => self.decisions.paint(screen),
+            Tab::Theses => ScreenComponent::paint_into(&self.theses, screen),
+            Tab::Ask => ScreenComponent::paint_into(&self.ask, screen),
+            Tab::Decisions => ScreenComponent::paint_into(&self.decisions, screen),
             Tab::Settings => {
                 self.settings
                     .sync_data(&self.desk.settings, &self.desk.settings_footer);
                 self.settings.set_palette(self.palette);
-                self.settings.paint_into(screen);
+                ScreenComponent::paint_into(&self.settings, screen);
             }
         }
         match &mut self.overlay {

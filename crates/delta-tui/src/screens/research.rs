@@ -132,6 +132,10 @@ impl crate::Screen for ResearchComponent {
         "reports"
     }
 
+    fn paint_into(&self, screen: &mut Screen) {
+        ResearchComponent::paint_into(self, screen);
+    }
+
     fn handle_key(&mut self, key: KeyEvent) -> Option<Action> {
         let state = &mut self.state;
         if state.search_active {

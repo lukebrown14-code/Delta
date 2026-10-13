@@ -2,7 +2,6 @@ use super::status_bar::{draw_status_bar_wide, pane_hints, status_bar_narrow, Nar
 use crate::screen::{color, Screen, Style};
 use crate::Action;
 use crossterm::event::{KeyCode, KeyEvent};
-use ratatui::{layout::Rect, Frame};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HomeCommand {
@@ -56,6 +55,10 @@ impl crate::Screen for HomeComponent {
         "home"
     }
 
+    fn paint_into(&self, screen: &mut Screen) {
+        HomeComponent::paint_into(self, screen);
+    }
+
     fn handle_key(&mut self, key: KeyEvent) -> Option<Action> {
         match key.code {
             KeyCode::Up if self.rows > 0 => {
@@ -69,12 +72,6 @@ impl crate::Screen for HomeComponent {
             KeyCode::Enter if self.rows > 0 => Some(Action::Home(HomeCommand::OpenSelected)),
             _ => None,
         }
-    }
-
-    fn draw(&mut self, frame: &mut Frame, area: Rect) {
-        let mut screen = Screen::new(area.width as usize, area.height as usize);
-        self.paint_into(&mut screen);
-        crate::screen::blit(frame, &screen, area);
     }
 }
 

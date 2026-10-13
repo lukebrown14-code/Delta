@@ -83,6 +83,10 @@ impl crate::Screen for ThesesComponent {
         "theses"
     }
 
+    fn paint_into(&self, screen: &mut Screen) {
+        ThesesComponent::paint_into(self, screen);
+    }
+
     fn handle_key(&mut self, key: KeyEvent) -> Option<Action> {
         let state = &mut self.state;
         state.focus_active = true;

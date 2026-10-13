@@ -588,6 +588,10 @@ impl crate::Screen for SettingsComponent {
         "config"
     }
 
+    fn paint_into(&self, screen: &mut Screen) {
+        SettingsComponent::paint_into(self, screen);
+    }
+
     fn handle_key(&mut self, key: KeyEvent) -> Option<Action> {
         <Self as Component>::handle_key(self, key)
     }

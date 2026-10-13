@@ -5,7 +5,6 @@ use crate::screen::{color, Screen, Style};
 use crate::Action;
 use crossterm::event::{KeyCode, KeyEvent};
 use delta_services::{Decision, DecisionReview};
-use ratatui::{layout::Rect, Frame};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DecisionCommand {
@@ -77,6 +76,10 @@ impl crate::Screen for DecisionsScreen {
         "decisions"
     }
 
+    fn paint_into(&self, screen: &mut Screen) {
+        self.paint(screen);
+    }
+
     fn handle_key(&mut self, key: KeyEvent) -> Option<Action> {
         let command = match key.code {
             KeyCode::Up | KeyCode::Down => {
@@ -118,12 +121,6 @@ impl crate::Screen for DecisionsScreen {
             _ => return None,
         };
         Some(Action::Decision(command))
-    }
-
-    fn draw(&mut self, frame: &mut Frame, area: Rect) {
-        let mut screen = Screen::new(area.width as usize, area.height as usize);
-        self.paint(&mut screen);
-        crate::screen::blit(frame, &screen, area);
     }
 }
 

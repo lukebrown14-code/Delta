@@ -181,8 +181,17 @@ pub trait Screen {
         let _ = action;
     }
 
-    /// Paint the screen into `area`.
-    fn draw(&mut self, frame: &mut Frame, area: Rect);
+    /// Paint into the compatibility surface used for modal composition and
+    /// golden parity. Each screen owns its data and pane layout here.
+    fn paint_into(&self, screen: &mut crate::screen::Screen);
+
+    /// Paint into a Ratatui frame. The cell surface is retained as the
+    /// compatibility adapter for modal composition and oracle goldens.
+    fn draw(&mut self, frame: &mut Frame, area: Rect) {
+        let mut screen = crate::screen::Screen::new(area.width as usize, area.height as usize);
+        self.paint_into(&mut screen);
+        crate::screen::blit(frame, &screen, area);
+    }
 }
 
 /// Global quit keys, shared by every pane (matches the Python bindings).

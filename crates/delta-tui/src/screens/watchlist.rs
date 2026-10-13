@@ -11,7 +11,6 @@ use crate::screen::{color, Screen, Style};
 use crate::Action;
 use chrono::Datelike;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use ratatui::{layout::Rect, Frame};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WatchlistCommand {
@@ -84,6 +83,10 @@ impl crate::Screen for WatchlistComponent {
         "targets"
     }
 
+    fn paint_into(&self, screen: &mut Screen) {
+        WatchlistComponent::paint_into(self, screen);
+    }
+
     fn handle_key(&mut self, key: KeyEvent) -> Option<Action> {
         if let Some(query) = &mut self.filter {
             match key.code {
@@ -137,12 +140,6 @@ impl crate::Screen for WatchlistComponent {
             }
             _ => None,
         }
-    }
-
-    fn draw(&mut self, frame: &mut Frame, area: Rect) {
-        let mut screen = Screen::new(area.width as usize, area.height as usize);
-        self.paint_into(&mut screen);
-        crate::screen::blit(frame, &screen, area);
     }
 }
 

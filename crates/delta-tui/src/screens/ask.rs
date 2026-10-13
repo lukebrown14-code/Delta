@@ -156,6 +156,10 @@ impl crate::Screen for AskState {
         "chat"
     }
 
+    fn paint_into(&self, screen: &mut Screen) {
+        draw_ask_live(screen, self);
+    }
+
     fn handle_key(&mut self, key: KeyEvent) -> Option<Action> {
         if self.editing {
             match key.code {
@@ -270,12 +274,6 @@ impl crate::Screen for AskState {
                 self.sidebar_labels = sidebar_labels;
             }
         }
-    }
-
-    fn draw(&mut self, frame: &mut ratatui::Frame, area: ratatui::layout::Rect) {
-        let mut screen = Screen::new(area.width as usize, area.height as usize);
-        draw_ask_live(&mut screen, self);
-        crate::screen::blit(frame, &screen, area);
     }
 }
 
