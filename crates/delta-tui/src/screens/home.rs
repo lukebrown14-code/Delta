@@ -1,5 +1,6 @@
 use super::status_bar::{draw_status_bar_wide, pane_hints, status_bar_narrow, NarrowTab};
-use crate::screen::{color, Screen, Style};
+use crate::screen::{color, FrameCanvas, PaintCanvas, Screen, Style};
+use crate::theme::Palette;
 use crate::Action;
 use crossterm::event::{KeyCode, KeyEvent};
 
@@ -34,15 +35,15 @@ impl HomeComponent {
         self.selected = selected.min(rows.saturating_sub(1));
     }
 
-    pub fn paint_into(&self, screen: &mut Screen) {
+    pub fn paint_into(&self, screen: &mut impl PaintCanvas) {
         let Some(home) = &self.snapshot else { return };
         if let Some(setup) = &self.setup {
             render_home_setup(screen, home, setup);
         } else if let Some(live) = &self.live {
             render_home_live(screen, home, live);
-        } else if screen.w < 100 {
+        } else if screen.width() < 100 {
             render_home_empty_narrow(screen, home);
-        } else if screen.w >= 160 {
+        } else if screen.width() >= 160 {
             render_home_empty_wide(screen, home);
         } else {
             render_home_empty_normal(screen, home);
@@ -57,6 +58,11 @@ impl crate::Screen for HomeComponent {
 
     fn paint_into(&self, screen: &mut Screen) {
         HomeComponent::paint_into(self, screen);
+    }
+
+    fn draw(&mut self, frame: &mut ratatui::Frame, area: ratatui::layout::Rect) {
+        let mut canvas = FrameCanvas::new(frame, area, Palette::Dark);
+        HomeComponent::paint_into(self, &mut canvas);
     }
 
     fn handle_key(&mut self, key: KeyEvent) -> Option<Action> {
@@ -75,21 +81,21 @@ impl crate::Screen for HomeComponent {
     }
 }
 
-fn home_panes(screen: &Screen) -> Vec<Vec<super::PaneRect>> {
-    let bottom = screen.h.saturating_sub(3);
-    if screen.w < 100 {
+fn home_panes(screen: &impl PaintCanvas) -> Vec<Vec<super::PaneRect>> {
+    let bottom = screen.height().saturating_sub(3);
+    if screen.width() < 100 {
         let top = 14.min(bottom);
         super::pane_layout(
             1,
             1,
-            screen.w.saturating_sub(1),
+            screen.width().saturating_sub(1),
             bottom + 1,
             &[top, bottom - top],
-            &[screen.w.saturating_sub(2)],
+            &[screen.width().saturating_sub(2)],
         )
     } else {
         let upper = bottom.saturating_sub(7);
-        let top = if screen.w >= 160 {
+        let top = if screen.width() >= 160 {
             upper / 2
         } else {
             upper.saturating_sub(15)
@@ -97,41 +103,44 @@ fn home_panes(screen: &Screen) -> Vec<Vec<super::PaneRect>> {
         let mut panes = super::pane_layout(
             1,
             1,
-            screen.w - 1,
+            screen.width() - 1,
             bottom + 1,
             &[top, upper - top, 7],
-            &[screen.w / 2 - 1, screen.w - screen.w / 2 - 1],
+            &[
+                screen.width() / 2 - 1,
+                screen.width() - screen.width() / 2 - 1,
+            ],
         );
-        panes[2][0].2 = screen.w - 1;
+        panes[2][0].2 = screen.width() - 1;
         panes
     }
 }
 
-fn paint_home_header(screen: &mut Screen, home: &HomeState) {
+fn paint_home_header(screen: &mut impl PaintCanvas, home: &HomeState) {
     screen.put(0, 0, ' ', Style::DEFAULT);
     let chip = Style::fg(color::WHITE).bg(color::BLUE_BG).bold();
     screen.put(1, 0, ' ', chip);
     screen.text(2, 0, "DELTA", chip);
     screen.put(7, 0, ' ', chip);
     screen.text(10, 0, "overview", Style::fg(color::MUTED));
-    let clock_x = screen.w - 1 - home.clock.chars().count();
+    let clock_x = screen.width() - 1 - home.clock.chars().count();
     screen.text(clock_x, 0, &home.clock, Style::fg(color::MUTED));
 }
 
-fn paint_home_status(screen: &mut Screen) {
-    let y = screen.h - 1;
-    if screen.w < 100 {
+fn paint_home_status(screen: &mut impl PaintCanvas) {
+    let y = screen.height() - 1;
+    if screen.width() < 100 {
         status_bar_narrow(screen, NarrowTab::Home);
-    } else if screen.w >= 160 {
-        draw_status_bar_wide(screen, y, screen.w, "1 Home");
+    } else if screen.width() >= 160 {
+        draw_status_bar_wide(screen, y, screen.width(), "1 Home");
     } else {
-        draw_status_bar_home(screen, y, screen.w);
+        draw_status_bar_home(screen, y, screen.width());
     }
 }
 
 /// The populated view keeps the same selected watch row but paints each
 /// remaining pane directly from the live read model below.
-fn paint_home_live_watchlist(screen: &mut Screen, home: &HomeState) {
+fn paint_home_live_watchlist(screen: &mut impl PaintCanvas, home: &HomeState) {
     let pane = home_panes(screen)[0][0];
     screen.pane(
         pane.0,
@@ -162,13 +171,13 @@ fn paint_home_live_watchlist(screen: &mut Screen, home: &HomeState) {
     screen.put(x, pane.1 + 2, ' ', blue);
     x = screen.text(x + 1, pane.1 + 2, "▲ ", white);
     screen.text(x, pane.1 + 2, &home.chg_label, white);
-    let spark = if screen.w < 100 || screen.w >= 160 {
+    let spark = if screen.width() < 100 || screen.width() >= 160 {
         crate::braille::BrailleGraph::filled(home.closes.clone()).rows(end - 42, 1)[0].clone()
     } else {
         home.spark.clone()
     };
     screen.text(pane.0 + 40, pane.1 + 2, &spark, white);
-    if screen.w >= 100 {
+    if screen.width() >= 100 {
         screen.text(
             pane.0 + 2,
             pane.1 + 4,
@@ -278,19 +287,25 @@ pub struct HomeSetupData {
 }
 
 /// The first-run checklist takes the whole overview when no targets exist.
-fn render_home_setup(screen: &mut Screen, home: &HomeState, setup: &HomeSetupData) {
+fn render_home_setup(screen: &mut impl PaintCanvas, home: &HomeState, setup: &HomeSetupData) {
     paint_home_header(screen, home);
     paint_home_status(screen);
     screen.fill(
         0,
         1,
-        screen.w,
-        screen.h - 1,
+        screen.width(),
+        screen.height() - 1,
         Style::DEFAULT.bg(color::BLACK),
     );
     let muted = Style::fg(color::MUTED).bg(color::BLACK);
-    let content =
-        super::pane_layout(0, 1, screen.w, screen.h - 1, &[screen.h - 2], &[screen.w])[0][0];
+    let content = super::pane_layout(
+        0,
+        1,
+        screen.width(),
+        screen.height() - 1,
+        &[screen.height() - 2],
+        &[screen.width()],
+    )[0][0];
     screen.text(
         content.0 + 2,
         content.1 + 1,
@@ -356,7 +371,7 @@ fn render_home_setup(screen: &mut Screen, home: &HomeState, setup: &HomeSetupDat
             Style::fg(color::BLUE).bg(color::BLACK).bold(),
         );
         let message = format!("{label} — {fix}");
-        let limit = screen.w.saturating_sub(11);
+        let limit = screen.width().saturating_sub(11);
         let clipped = message.chars().take(limit).collect::<String>();
         screen.text(content.0 + 7, y, &clipped, muted);
         if message.chars().count() <= limit {
@@ -373,7 +388,7 @@ fn render_home_setup(screen: &mut Screen, home: &HomeState, setup: &HomeSetupDat
 
 /// Paint the populated Home frame once from the screen snapshot and the
 /// service-backed analytics, decisions, calendar and thesis rows.
-fn render_home_live(screen: &mut Screen, home: &HomeState, data: &HomeLiveData) {
+fn render_home_live(screen: &mut impl PaintCanvas, home: &HomeState, data: &HomeLiveData) {
     paint_home_header(screen, home);
     paint_home_live_watchlist(screen, home);
     paint_home_status(screen);
@@ -389,7 +404,7 @@ fn render_home_live(screen: &mut Screen, home: &HomeState, data: &HomeLiveData) 
     .filter(|(n, _)| *n > 0)
     .map(|(n, noun)| format!("{n} {noun}{}", if n == 1 { "" } else { "s" }))
     .collect::<Vec<_>>();
-    if screen.w < 100 {
+    if screen.width() < 100 {
         let panes = home_panes(screen);
         let watch = panes[0][0];
         let agenda = panes[1][0];
@@ -781,11 +796,17 @@ fn render_home_live(screen: &mut Screen, home: &HomeState, data: &HomeLiveData) 
     screen.put(middle_pane.0 + 1, mid_bottom - 1, ' ', Style::DEFAULT);
     if !data.theses.is_empty() {
         for x in inner..inner + 12 {
-            screen.cells[(mid_top + 1) * screen.w + x].fg = Some(color::MUTED);
+            screen.edit((mid_top + 1) * screen.width() + x, |cell| {
+                cell.fg = Some(color::MUTED)
+            });
         }
-        screen.cells[(mid_top + 5) * screen.w + inner].fg = Some(color::MUTED);
+        screen.edit((mid_top + 5) * screen.width() + inner, |cell| {
+            cell.fg = Some(color::MUTED)
+        });
         for x in rx1 - 12..rx1 - 1 {
-            screen.cells[(mid_top + 5) * screen.w + x].fg = Some(color::MUTED);
+            screen.edit((mid_top + 5) * screen.width() + x, |cell| {
+                cell.fg = Some(color::MUTED)
+            });
         }
     }
 
@@ -810,7 +831,7 @@ fn render_home_live(screen: &mut Screen, home: &HomeState, data: &HomeLiveData) 
 }
 
 fn style_table_row(
-    screen: &mut Screen,
+    screen: &mut impl PaintCanvas,
     x0: usize,
     x1: usize,
     y: usize,
@@ -818,14 +839,15 @@ fn style_table_row(
     bold: bool,
 ) {
     for x in x0..x1 {
-        let cell = &mut screen.cells[y * screen.w + x];
-        cell.fg = Some(color::FG);
-        cell.bg = Some(bg);
-        cell.bold = bold || cell.bold;
+        screen.edit(y * screen.width() + x, |cell| {
+            cell.fg = Some(color::FG);
+            cell.bg = Some(bg);
+            cell.bold |= bold;
+        });
     }
 }
 
-fn paint_home_agenda_rows(screen: &mut Screen, pane: super::PaneRect, first_row: usize) {
+fn paint_home_agenda_rows(screen: &mut impl PaintCanvas, pane: super::PaneRect, first_row: usize) {
     for (offset, key) in ["6", "4", "3", "2"].into_iter().enumerate() {
         let y = first_row + offset;
         screen.text(pane.0 + 2, y, "▸", Style::fg(color::BLUE));
@@ -841,7 +863,7 @@ fn paint_home_agenda_rows(screen: &mut Screen, pane: super::PaneRect, first_row:
     }
 }
 
-fn paint_due_row(screen: &mut Screen, pane: super::PaneRect, y: usize, due: usize) {
+fn paint_due_row(screen: &mut impl PaintCanvas, pane: super::PaneRect, y: usize, due: usize) {
     screen.fill(pane.0 + 7, y, pane.2 - 3, y + 1, Style::DEFAULT);
     if due > 0 {
         screen.text(
@@ -860,7 +882,7 @@ fn paint_due_row(screen: &mut Screen, pane: super::PaneRect, y: usize, due: usiz
     }
 }
 
-fn paint_stale_row(screen: &mut Screen, pane: super::PaneRect, y: usize, stale: usize) {
+fn paint_stale_row(screen: &mut impl PaintCanvas, pane: super::PaneRect, y: usize, stale: usize) {
     screen.fill(pane.0 + 7, y, pane.2 - 3, y + 1, Style::DEFAULT);
     if stale > 0 {
         screen.text(
@@ -897,8 +919,8 @@ fn truncate_home(text: &str, width: usize) -> String {
 /// The Home screen: header chip + clock, watchlist / since-you-last-looked,
 /// upcoming / theses, the agenda, and the status bar with `1 Home` active
 /// (port of `delta/tui/screens/home.py` at the captured 120x40 layout).
-fn render_home_empty_normal(screen: &mut Screen, home: &HomeState) {
-    let w = screen.w;
+fn render_home_empty_normal(screen: &mut impl PaintCanvas, home: &HomeState) {
+    let w = screen.width();
     let panes = home_panes(screen);
     let top_left = panes[0][0];
     let top_right = panes[0][1];
@@ -1092,11 +1114,11 @@ fn render_home_empty_normal(screen: &mut Screen, home: &HomeState) {
         screen.text(x, y, message, style);
     }
 
-    draw_status_bar_home(screen, screen.h - 1, w);
+    draw_status_bar_home(screen, screen.height() - 1, w);
 }
 
 /// Status bar with the Home tab active (`1 Home`).
-fn draw_status_bar_home(screen: &mut Screen, y: usize, w: usize) {
+fn draw_status_bar_home(screen: &mut impl PaintCanvas, y: usize, w: usize) {
     let panel = Style::DEFAULT.bg(color::PANEL);
     let muted = Style::fg(color::MUTED).bold().bg(color::PANEL);
     let active_fg = Style::fg(color::WHITE).bold().bg(color::BLUE_BG);
@@ -1136,8 +1158,8 @@ fn draw_status_bar_home(screen: &mut Screen, y: usize, w: usize) {
 }
 
 /// Home at 200x50: the 120 layout with the split at half width.
-fn render_home_empty_wide(screen: &mut Screen, home: &HomeState) {
-    let w = screen.w;
+fn render_home_empty_wide(screen: &mut impl PaintCanvas, home: &HomeState) {
+    let w = screen.width();
     let panes = home_panes(screen);
     let top_left = panes[0][0];
     let top_right = panes[0][1];
@@ -1315,12 +1337,12 @@ fn render_home_empty_wide(screen: &mut Screen, home: &HomeState) {
         screen.text(agenda.0 + 8, y, message, style);
     }
 
-    draw_status_bar_wide(screen, screen.h - 1, w, "1 Home");
+    draw_status_bar_wide(screen, screen.height() - 1, w, "1 Home");
 }
 
 /// Home at 80x24: one watchlist pane (table + since-you-last-looked lines),
 /// the agenda pane, narrow header/status bar.
-fn render_home_empty_narrow(screen: &mut Screen, home: &HomeState) {
+fn render_home_empty_narrow(screen: &mut impl PaintCanvas, home: &HomeState) {
     let panes = home_panes(screen);
     let watch = panes[0][0];
     let agenda = panes[1][0];
@@ -1426,23 +1448,23 @@ fn render_home_empty_narrow(screen: &mut Screen, home: &HomeState) {
 }
 
 /// Oracle compatibility entry points. The running component uses the renderers directly.
-pub fn draw_home(screen: &mut Screen, home: &HomeState) {
+pub fn draw_home(screen: &mut impl PaintCanvas, home: &HomeState) {
     render_home_empty_normal(screen, home);
 }
 
-pub fn draw_home_wide(screen: &mut Screen, home: &HomeState) {
+pub fn draw_home_wide(screen: &mut impl PaintCanvas, home: &HomeState) {
     render_home_empty_wide(screen, home);
 }
 
-pub fn draw_home_narrow(screen: &mut Screen, home: &HomeState) {
+pub fn draw_home_narrow(screen: &mut impl PaintCanvas, home: &HomeState) {
     render_home_empty_narrow(screen, home);
 }
 
-pub fn draw_home_live(screen: &mut Screen, home: &HomeState, data: &HomeLiveData) {
+pub fn draw_home_live(screen: &mut impl PaintCanvas, home: &HomeState, data: &HomeLiveData) {
     render_home_live(screen, home, data);
 }
 
-pub fn draw_home_setup(screen: &mut Screen, home: &HomeState, setup: &HomeSetupData) {
+pub fn draw_home_setup(screen: &mut impl PaintCanvas, home: &HomeState, setup: &HomeSetupData) {
     render_home_setup(screen, home, setup);
 }
 
@@ -1451,6 +1473,46 @@ mod component_tests {
     use super::*;
     use crate::Screen as _;
     use crossterm::event::KeyModifiers;
+    use ratatui::{backend::TestBackend, layout::Rect, Terminal};
+
+    #[test]
+    fn direct_frame_matches_oracle_at_each_layout_size() {
+        for (width, height) in [(80, 24), (120, 40), (200, 50)] {
+            let mut home = HomeComponent::default();
+            home.set_snapshot(
+                HomeState {
+                    clock: "10:00".into(),
+                    symbol: "AAPL".into(),
+                    last: String::new(),
+                    chg_label: String::new(),
+                    spark: String::new(),
+                    since_stamp: String::new(),
+                    closes: Vec::new(),
+                    feed: HomeFeed::default(),
+                },
+                None,
+                None,
+                0,
+                0,
+            );
+            let area = Rect::new(1, 1, width, height);
+            let mut oracle = Screen::new(width as usize, height as usize);
+            home.paint_into(&mut oracle);
+            let mut expected = Terminal::new(TestBackend::new(width + 2, height + 2)).unwrap();
+            expected
+                .draw(|frame| crate::screen::blit(frame, &oracle, area))
+                .unwrap();
+            let mut actual = Terminal::new(TestBackend::new(width + 2, height + 2)).unwrap();
+            actual
+                .draw(|frame| crate::Screen::draw(&mut home, frame, area))
+                .unwrap();
+            assert_eq!(
+                actual.backend().buffer(),
+                expected.backend().buffer(),
+                "{width}x{height}"
+            );
+        }
+    }
 
     #[test]
     fn home_selection_and_open_are_screen_owned() {
