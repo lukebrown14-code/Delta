@@ -578,11 +578,17 @@ fn paint_theses_base(screen: &mut Screen) {
         }),
     );
     if narrow {
-        paint_narrow_header(screen, 1, "#232323");
-        screen.fill(2, 2, claims.2 - 1, bottom - 1, Style::fg(color::FG));
+        paint_narrow_header(screen, claims.1 + 1, "#232323");
+        screen.fill(
+            claims.0 + 1,
+            claims.1 + 2,
+            claims.2 - 1,
+            claims.3 - 2,
+            Style::fg(color::FG),
+        );
         screen.text(
-            3,
-            bottom - 1,
+            claims.0 + 2,
+            claims.3 - 2,
             "no theses yet — press n to create one",
             Style::fg(color::MUTED),
         );
@@ -618,26 +624,47 @@ fn paint_theses_base(screen: &mut Screen) {
         ],
         &pane_hints(&[("f", "find")]),
     );
-    screen.fill(2, 1, claims.2 - 1, bottom - 1, Style::fg(color::FG));
+    screen.fill(
+        claims.0 + 1,
+        claims.1 + 1,
+        claims.2 - 1,
+        claims.3 - 2,
+        Style::fg(color::FG),
+    );
     screen.text(
         detail.0 + 2,
-        1,
+        detail.1 + 1,
         "no theses yet — press n to create one",
         Style::fg(color::FG),
     );
-    screen.text(evidence.0 + 2, 1, "no evidence yet", Style::fg(color::FG));
+    screen.text(
+        evidence.0 + 2,
+        evidence.1 + 1,
+        "no evidence yet",
+        Style::fg(color::FG),
+    );
     let header_style = Style::fg(color::FG).bold().bg(color::PANEL);
-    screen.fill(evidence.0 + 1, 2, evidence.2 - 1, 3, header_style);
     screen.fill(
         evidence.0 + 1,
-        3,
+        evidence.1 + 2,
         evidence.2 - 1,
-        if wide { screen.h - 10 } else { 29 },
+        evidence.1 + 3,
+        header_style,
+    );
+    screen.fill(
+        evidence.0 + 1,
+        evidence.1 + 3,
+        evidence.2 - 1,
+        if wide {
+            evidence.3 - 8
+        } else {
+            evidence.1 + 29
+        },
         Style::fg(color::FG),
     );
     screen.text(
         evidence.0 + if wide { 1 } else { 2 },
-        2,
+        evidence.1 + 2,
         if wide {
             "    ±  age   note"
         } else {
@@ -645,7 +672,11 @@ fn paint_theses_base(screen: &mut Screen) {
         },
         header_style,
     );
-    let separator = if wide { screen.h - 11 } else { 29 };
+    let separator = if wide {
+        evidence.3 - 9
+    } else {
+        evidence.1 + 29
+    };
     for x in evidence.0 + 1..evidence.2 - 1 {
         screen.put(
             x,

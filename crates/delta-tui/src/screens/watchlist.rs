@@ -289,7 +289,6 @@ pub fn grouped(value: f64) -> String {
 /// Paint the full 120x40 Watchlist screen (`draw` = the composed frame).
 fn render_watchlist_normal(screen: &mut Screen, state: &WatchlistState, filter: Option<&str>) {
     let w = screen.w;
-    let content_bottom = screen.h - 3; // last content row (37 at h=40)
     let panes = watchlist_panes(screen);
     let list = panes[0][0];
     let inspector = panes[0][1];
@@ -329,9 +328,9 @@ fn render_watchlist_normal(screen: &mut Screen, state: &WatchlistState, filter: 
         ]),
     );
 
-    draw_list_pane(screen, content_bottom, state, filter.is_some());
+    draw_list_pane(screen, list, state, filter.is_some());
     if let Some(metric) = &state.metric {
-        draw_inspector(screen, state, metric);
+        draw_inspector(screen, inspector, state, metric);
     }
     draw_status_bar(screen, screen.h - 1, w, false);
     if let Some(query) = filter {
@@ -600,34 +599,42 @@ pub fn paint_watchlist_add_overlay(
 
 fn draw_list_pane(
     screen: &mut Screen,
-    content_bottom: usize,
+    pane: super::PaneRect,
     state: &WatchlistState,
     filter: bool,
 ) {
     let offset = usize::from(filter);
+    let (x0, y0, x1, y1) = pane;
+    let content_bottom = y1 - 1;
     // Blank OptionList rows carry the foreground style (cols 3..44).
-    screen.fill(3, 2 + offset, 45, content_bottom, Style::fg(color::FG));
+    screen.fill(
+        x0 + 2,
+        y0 + 2 + offset,
+        x1 - 2,
+        content_bottom,
+        Style::fg(color::FG),
+    );
     // Column header (a disabled option): muted, prompt + python row string.
     let header = format!(
         "  {:<12}{:>10}  {:>8}  {:>4}",
         "Name", "Last", "Chg%", "Age"
     );
     screen.text(
-        3,
-        1 + offset,
+        x0 + 2,
+        y0 + 1 + offset,
         &format!(" {header} "),
         Style::fg(color::MUTED),
     );
     if state.entries.is_empty() {
         screen.text(
-            4,
-            3 + offset,
+            x0 + 3,
+            y0 + 3 + offset,
             "No instruments yet · press a to add",
             Style::fg(color::MUTED),
         );
         return;
     }
-    let mut y = 2 + offset;
+    let mut y = y0 + 2 + offset;
     let mut class = "";
     for (index, entry) in state.entries.iter().enumerate() {
         if entry.asset_class != class {
@@ -637,7 +644,12 @@ fn draw_list_pane(
                 .iter()
                 .filter(|item| item.asset_class == class)
                 .count();
-            let mut x = screen.text(4, y, &format!("▾ {class} "), Style::fg(color::BLUE).bold());
+            let mut x = screen.text(
+                x0 + 3,
+                y,
+                &format!("▾ {class} "),
+                Style::fg(color::BLUE).bold(),
+            );
             x = screen.text(x, y, &format!("({count})"), Style::fg(color::MUTED).bold());
             let _ = x;
             y += 1;
@@ -658,10 +670,10 @@ fn draw_list_pane(
         };
         let row = format!("  {:<12}{:>10}  {:>8}  {:>4}", entry.symbol, "—", "—", "");
         if selected {
-            screen.put(3, y, ' ', white);
+            screen.put(x0 + 2, y, ' ', white);
         }
         screen.text(
-            4,
+            x0 + 3,
             y,
             &row[..14],
             if selected {
@@ -671,7 +683,7 @@ fn draw_list_pane(
             },
         );
         screen.text(
-            18,
+            x0 + 17,
             y,
             &row[14..],
             if selected {
@@ -681,7 +693,7 @@ fn draw_list_pane(
             },
         );
         if selected {
-            screen.put(44, y, ' ', white);
+            screen.put(x1 - 3, y, ' ', white);
         }
         y += 1;
     }
@@ -725,39 +737,44 @@ fn paint_scrub(
     );
 }
 
-fn draw_inspector(screen: &mut Screen, state: &WatchlistState, metric: &MetricsData) {
-    let cx = 48usize; // right pane inner left edge
-    let right_edge = screen.w - 3; // 117 at w=120
+fn draw_inspector(
+    screen: &mut Screen,
+    pane: super::PaneRect,
+    state: &WatchlistState,
+    metric: &MetricsData,
+) {
+    let cx = pane.0 + 1;
+    let right_edge = pane.2 - 2;
 
     // Row 1: name (bold) + "US · equity · USD" (muted bold).
     let mut x = cx + 1;
-    x = screen.text(x, 1, &metric.symbol, Style::fg(color::FG).bold());
+    x = screen.text(x, pane.1 + 1, &metric.symbol, Style::fg(color::FG).bold());
     let meta = format!(
         "  {} · {} · {}",
         metric.market.to_uppercase(),
         metric.asset_class,
         metric.currency
     );
-    screen.text(x, 1, &meta, Style::fg(color::MUTED).bold());
+    screen.text(x, pane.1 + 1, &meta, Style::fg(color::MUTED).bold());
 
     // Row 2: hero — current price, currency, closed/last date.
     let mut x = cx + 1;
-    x = screen.text(x, 2, &metric.current, Style::fg(color::FG).bold());
+    x = screen.text(x, pane.1 + 2, &metric.current, Style::fg(color::FG).bold());
     x = screen.text(
         x,
-        2,
+        pane.1 + 2,
         &format!(" {}", metric.currency),
         Style::fg(color::MUTED),
     );
-    x = screen.text(x, 2, "   ", Style::fg(color::FG));
+    x = screen.text(x, pane.1 + 2, "   ", Style::fg(color::FG));
     let closed = metric
         .history_end
         .as_deref()
         .map(friendly_date)
         .map(|d| format!("closed · last {d}"))
         .unwrap_or_else(|| "— today".to_string());
-    x = screen.text(x, 2, &closed, Style::fg(color::MUTED));
-    screen.text(x, 2, "   ", Style::fg(color::FG));
+    x = screen.text(x, pane.1 + 2, &closed, Style::fg(color::MUTED));
+    screen.text(x, pane.1 + 2, "   ", Style::fg(color::FG));
 
     // Row 3: range tabs (active bold blue) + the range's change and hi/lo.
     let mut x = cx + 1;
@@ -765,7 +782,7 @@ fn draw_inspector(screen: &mut Screen, state: &WatchlistState, metric: &MetricsD
         let active = label == state.range;
         x = screen.text(
             x,
-            3,
+            pane.1 + 3,
             range_label(label),
             if active {
                 Style::fg(color::BLUE).bold()
@@ -773,9 +790,9 @@ fn draw_inspector(screen: &mut Screen, state: &WatchlistState, metric: &MetricsD
                 Style::fg(color::MUTED)
             },
         );
-        x = screen.text(x, 3, "  ", Style::fg(color::MUTED));
+        x = screen.text(x, pane.1 + 3, "  ", Style::fg(color::MUTED));
     }
-    x = screen.text(x, 3, "       ", Style::fg(color::MUTED)); // summary lead-in
+    x = screen.text(x, pane.1 + 3, "       ", Style::fg(color::MUTED)); // summary lead-in
     if let Some(label) = &metric.change_label {
         let (arrow, style) = if label.starts_with('+') {
             ("▲", Style::fg(color::GREEN))
@@ -784,19 +801,19 @@ fn draw_inspector(screen: &mut Screen, state: &WatchlistState, metric: &MetricsD
         } else {
             ("─", Style::fg(color::MUTED))
         };
-        x = screen.text(x, 3, &format!("{arrow} {label}"), style);
+        x = screen.text(x, pane.1 + 3, &format!("{arrow} {label}"), style);
         if let (Some(hi), Some(lo)) = (metric.period_high, metric.period_low) {
-            x = screen.text(x, 3, "   ", Style::fg(color::MUTED));
+            x = screen.text(x, pane.1 + 3, "   ", Style::fg(color::MUTED));
             x = screen.text(
                 x,
-                3,
+                pane.1 + 3,
                 &format!("hi {}", grouped(hi)),
                 Style::fg(color::MUTED),
             );
-            x = screen.text(x, 3, "   ", Style::fg(color::MUTED));
+            x = screen.text(x, pane.1 + 3, "   ", Style::fg(color::MUTED));
             screen.text(
                 x,
-                3,
+                pane.1 + 3,
                 &format!("lo {}", grouped(lo)),
                 Style::fg(color::MUTED),
             );
@@ -816,24 +833,61 @@ fn draw_inspector(screen: &mut Screen, state: &WatchlistState, metric: &MetricsD
         l if l.starts_with('+') => color::GREEN,
         _ => color::BLUE,
     };
-    screen.price_chart(50, 4, &chart, 66, 16, line);
-    paint_scrub(screen, state, &chart, 50, 4, 66, 16);
+    screen.price_chart(
+        pane.0 + 3,
+        pane.1 + 4,
+        &chart,
+        pane.2 - pane.0 - 6,
+        16,
+        line,
+    );
+    paint_scrub(
+        screen,
+        state,
+        &chart,
+        pane.0 + 3,
+        pane.1 + 4,
+        pane.2 - pane.0 - 6,
+        16,
+    );
 
     // Metric grid: muted-bold heading, then label/value pairs (J8). The Rich
     // table paints its full row width in the foreground style.
-    screen.text(49, 20, "Available Metrics", Style::fg(color::MUTED).bold());
-    screen.text(66, 20, "           ", Style::fg(color::MUTED).bold());
-    screen.fill(77, 20, right_edge, 21, Style::fg(color::FG));
-    screen.fill(49, 21, right_edge, 23, Style::fg(color::FG));
-    let mut gy = 21usize;
+    screen.text(
+        pane.0 + 2,
+        pane.1 + 20,
+        "Available Metrics",
+        Style::fg(color::MUTED).bold(),
+    );
+    screen.text(
+        pane.0 + 19,
+        pane.1 + 20,
+        "           ",
+        Style::fg(color::MUTED).bold(),
+    );
+    screen.fill(
+        pane.0 + 30,
+        pane.1 + 20,
+        right_edge,
+        pane.1 + 21,
+        Style::fg(color::FG),
+    );
+    screen.fill(
+        pane.0 + 2,
+        pane.1 + 21,
+        right_edge,
+        pane.1 + 23,
+        Style::fg(color::FG),
+    );
+    let mut gy = pane.1 + 21;
     let mut index = 0usize;
     while index < metric.values.len() {
         let (label, value) = &metric.values[index];
-        screen.text(49, gy, label, Style::fg(color::FG));
-        screen.text_right(84, gy, value, Style::fg(color::FG));
+        screen.text(pane.0 + 2, gy, label, Style::fg(color::FG));
+        screen.text_right(pane.0 + 37, gy, value, Style::fg(color::FG));
         if index + 1 < metric.values.len() {
             let (rlabel, rvalue) = &metric.values[index + 1];
-            screen.text(85, gy, rlabel, Style::fg(color::FG));
+            screen.text(pane.0 + 38, gy, rlabel, Style::fg(color::FG));
             screen.text_right(right_edge, gy, rvalue, Style::fg(color::FG));
         }
         index += 2;
@@ -844,7 +898,7 @@ fn draw_inspector(screen: &mut Screen, state: &WatchlistState, metric: &MetricsD
     let source_y = gy + 1;
     let history = friendly_date_range(metric.history_start.as_ref(), metric.history_end.as_ref());
     screen.text(
-        49,
+        pane.0 + 2,
         source_y,
         &format!("{} · live — · history {}", metric.source, history),
         Style::fg(color::MUTED),
@@ -1390,7 +1444,6 @@ fn paint_glossary_overlay(screen: &mut Screen, _state: &WatchlistState) {
 /// positions, and the wide status bar with full tab labels.
 fn render_watchlist_wide(screen: &mut Screen, state: &WatchlistState, filter: Option<&str>) {
     let w = screen.w;
-    let content_bottom = screen.h - 3; // 47 at h=50
     let panes = watchlist_panes(screen);
     let list = panes[0][0];
     let inspector = panes[0][1];
@@ -1433,11 +1486,11 @@ fn render_watchlist_wide(screen: &mut Screen, state: &WatchlistState, filter: Op
     );
 
     // Left pane: identical rows to the 120 layout.
-    draw_list_pane(screen, content_bottom, state, filter.is_some());
+    draw_list_pane(screen, list, state, filter.is_some());
 
     // Inspector.
-    let cx = 48usize;
-    let right_edge = screen.w - 4; // 196 at w=200
+    let cx = inspector.0 + 1;
+    let right_edge = inspector.2 - 3;
     let Some(metric) = &state.metric else {
         screen.text(cx + 1, 2, "No instrument selected", Style::fg(color::MUTED));
         draw_status_bar_wide(screen, screen.h - 1, w, "2 Watchlist");
