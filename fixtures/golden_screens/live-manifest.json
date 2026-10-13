@@ -566,6 +566,237 @@
       "size": "200x50",
       "state": "live-decisions-empty",
       "tier": "A"
+    },
+    {
+      "file": "live-settings-diagnostics-120x40.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "120x40",
+      "state": "live-settings-diagnostics",
+      "tier": "A"
+    },
+    {
+      "file": "live-settings-diagnostics-200x50.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "200x50",
+      "state": "live-settings-diagnostics",
+      "tier": "A"
+    },
+    {
+      "file": "live-settings-diagnostics-80x24.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "80x24",
+      "state": "live-settings-diagnostics",
+      "tier": "A"
+    },
+    {
+      "file": "live-settings-provider-120x40.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "120x40",
+      "state": "live-settings-provider",
+      "tier": "A"
+    },
+    {
+      "file": "live-settings-provider-200x50.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "200x50",
+      "state": "live-settings-provider",
+      "tier": "A"
+    },
+    {
+      "file": "live-settings-provider-80x24.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "80x24",
+      "state": "live-settings-provider",
+      "tier": "A"
+    },
+    {
+      "file": "live-settings-model-120x40.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "120x40",
+      "state": "live-settings-model",
+      "tier": "A"
+    },
+    {
+      "file": "live-settings-model-200x50.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "200x50",
+      "state": "live-settings-model",
+      "tier": "A"
+    },
+    {
+      "file": "live-settings-model-80x24.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "80x24",
+      "state": "live-settings-model",
+      "tier": "A"
+    },
+    {
+      "file": "live-settings-market-120x40.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "120x40",
+      "state": "live-settings-market",
+      "tier": "A"
+    },
+    {
+      "file": "live-settings-market-200x50.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "200x50",
+      "state": "live-settings-market",
+      "tier": "A"
+    },
+    {
+      "file": "live-settings-market-80x24.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "80x24",
+      "state": "live-settings-market",
+      "tier": "A"
+    },
+    {
+      "file": "live-settings-key-120x40.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "120x40",
+      "state": "live-settings-key",
+      "tier": "A"
+    },
+    {
+      "file": "live-settings-key-200x50.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "200x50",
+      "state": "live-settings-key",
+      "tier": "A"
+    },
+    {
+      "file": "live-settings-key-80x24.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "80x24",
+      "state": "live-settings-key",
+      "tier": "A"
+    },
+    {
+      "file": "live-settings-custom-120x40.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "120x40",
+      "state": "live-settings-custom",
+      "tier": "A"
+    },
+    {
+      "file": "live-settings-custom-200x50.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "200x50",
+      "state": "live-settings-custom",
+      "tier": "A"
+    },
+    {
+      "file": "live-settings-custom-80x24.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "80x24",
+      "state": "live-settings-custom",
+      "tier": "A"
+    },
+    {
+      "file": "live-settings-source-120x40.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "120x40",
+      "state": "live-settings-source",
+      "tier": "A"
+    },
+    {
+      "file": "live-settings-source-200x50.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "200x50",
+      "state": "live-settings-source",
+      "tier": "A"
+    },
+    {
+      "file": "live-settings-source-80x24.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "80x24",
+      "state": "live-settings-source",
+      "tier": "A"
+    },
+    {
+      "file": "live-settings-market-edit-120x40.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "120x40",
+      "state": "live-settings-market-edit",
+      "tier": "A"
+    },
+    {
+      "file": "live-settings-market-edit-200x50.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "200x50",
+      "state": "live-settings-market-edit",
+      "tier": "A"
+    },
+    {
+      "file": "live-settings-market-edit-80x24.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "80x24",
+      "state": "live-settings-market-edit",
+      "tier": "A"
+    },
+    {
+      "file": "live-settings-key-invalid-120x40.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "120x40",
+      "state": "live-settings-key-invalid",
+      "tier": "A"
+    },
+    {
+      "file": "live-settings-key-invalid-200x50.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "200x50",
+      "state": "live-settings-key-invalid",
+      "tier": "A"
+    },
+    {
+      "file": "live-settings-key-invalid-80x24.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "80x24",
+      "state": "live-settings-key-invalid",
+      "tier": "A"
+    },
+    {
+      "file": "live-settings-source-invalid-120x40.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "120x40",
+      "state": "live-settings-source-invalid",
+      "tier": "A"
+    },
+    {
+      "file": "live-settings-source-invalid-200x50.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "200x50",
+      "state": "live-settings-source-invalid",
+      "tier": "A"
+    },
+    {
+      "file": "live-settings-source-invalid-80x24.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "80x24",
+      "state": "live-settings-source-invalid",
+      "tier": "A"
+    },
+    {
+      "file": "live-settings-market-invalid-120x40.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "120x40",
+      "state": "live-settings-market-invalid",
+      "tier": "A"
+    },
+    {
+      "file": "live-settings-market-invalid-200x50.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "200x50",
+      "state": "live-settings-market-invalid",
+      "tier": "A"
+    },
+    {
+      "file": "live-settings-market-invalid-80x24.json",
+      "seed": "fixtures/golden_seed.db",
+      "size": "80x24",
+      "state": "live-settings-market-invalid",
+      "tier": "A"
     }
   ],
   "seed": "fixtures/golden_seed.db"
