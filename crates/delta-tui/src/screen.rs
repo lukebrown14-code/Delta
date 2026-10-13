@@ -6,6 +6,8 @@
 
 use crate::chart::{PriceChart, RunKind};
 use crate::theme::Palette;
+use ratatui::{buffer::Buffer, layout::Rect, style::Modifier};
+use std::collections::HashMap;
 
 /// Resolved theme hexes (see `theme.rs`); short aliases for the painter.
 /// Painters write these dark hexes; `Screen` remaps them per palette at
@@ -145,6 +147,272 @@ pub struct Screen {
     pub h: usize,
     pub cells: Vec<Cell>,
     pub palette: Palette,
+}
+
+/// The drawing operations shared by the oracle surface and a live Ratatui
+/// buffer. Coordinates are relative to the supplied area.
+pub trait PaintCanvas {
+    fn width(&self) -> usize;
+    fn height(&self) -> usize;
+    fn palette(&self) -> Palette;
+    fn put(&mut self, x: usize, y: usize, ch: char, style: Style);
+    fn read(&self, index: usize) -> Cell;
+    fn write(&mut self, index: usize, cell: Cell);
+
+    fn edit(&mut self, index: usize, edit: impl FnOnce(&mut Cell)) {
+        let mut cell = self.read(index);
+        edit(&mut cell);
+        self.write(index, cell);
+    }
+
+    fn text(&mut self, x: usize, y: usize, text: &str, style: Style) -> usize {
+        let mut x = x;
+        for ch in text.chars() {
+            self.put(x, y, ch, style);
+            x += 1;
+        }
+        x
+    }
+
+    fn text_right(&mut self, end: usize, y: usize, text: &str, style: Style) {
+        self.text(end.saturating_sub(text.chars().count()), y, text, style);
+    }
+
+    fn fill(&mut self, x0: usize, y0: usize, x1: usize, y1: usize, style: Style) {
+        for y in y0..y1 {
+            for x in x0..x1 {
+                self.put(x, y, ' ', style);
+            }
+        }
+    }
+
+    fn resolve_modal_base(&mut self) {
+        let foreground = self.palette().foreground();
+        for index in 0..self.width() * self.height() {
+            self.edit(index, |cell| {
+                if cell.fg.is_none() {
+                    cell.fg = Some(foreground);
+                }
+            });
+        }
+    }
+
+    fn dim(&mut self) {
+        let foreground = self.palette().foreground();
+        for index in 0..self.width() * self.height() {
+            self.edit(index, |cell| {
+                cell.fg = Some(cell.fg.map_or(foreground, dim_hex));
+                cell.bg = cell.bg.map(dim_hex);
+            });
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn pane(
+        &mut self,
+        x0: usize,
+        y0: usize,
+        x1: usize,
+        y1: usize,
+        focused: bool,
+        title_parts: &[(&str, Style)],
+        hint_parts: &[(String, Style)],
+    ) {
+        let edge = if focused {
+            color::BLUE
+        } else {
+            color::BORDER_BLURRED
+        };
+        let border = Style::fg(edge);
+        let (tl, tr, bl, br, horizontal, vertical) = if focused {
+            ('┏', '┓', '┗', '┛', '━', '┃')
+        } else {
+            ('┌', '┐', '└', '┘', '─', '│')
+        };
+        for (x, y, ch) in [(x0, y0, tl), (x1, y0, tr), (x0, y1, bl), (x1, y1, br)] {
+            self.put(x, y, ch, border);
+        }
+        for x in x0 + 1..x1 {
+            self.put(x, y0, horizontal, border);
+            self.put(x, y1, horizontal, border);
+        }
+        for y in y0 + 1..y1 {
+            self.put(x0, y, vertical, border);
+            self.put(x1, y, vertical, border);
+        }
+        let mut x = x0 + 2;
+        self.put(x, y0, ' ', Style::fg(color::BLUE).bold());
+        x += 1;
+        for (label, style) in title_parts {
+            x = self.text(x, y0, label, *style);
+        }
+        self.put(x, y0, ' ', Style::fg(color::BLUE).bold());
+        let mut x = x0 + 1;
+        self.put(x, y1, horizontal, border);
+        x += 1;
+        for (label, style) in hint_parts {
+            x = self.text(x, y1, label, *style);
+        }
+    }
+
+    fn price_chart(
+        &mut self,
+        x: usize,
+        y: usize,
+        chart: &PriceChart,
+        w: usize,
+        h: usize,
+        line: &'static str,
+    ) {
+        for (row_index, row) in chart.runs(w, h).into_iter().enumerate() {
+            let mut cx = x;
+            for run in row {
+                let style = match run.kind {
+                    RunKind::Line | RunKind::Marker => Style::fg(line),
+                    RunKind::Grid => Style::fg(color::DISABLED),
+                    RunKind::Axis => Style::fg(color::MUTED),
+                    RunKind::Blank => Style::fg(color::FG),
+                };
+                cx = self.text(cx, y + row_index, &run.text, style);
+            }
+        }
+    }
+}
+
+impl PaintCanvas for Screen {
+    fn width(&self) -> usize {
+        self.w
+    }
+    fn height(&self) -> usize {
+        self.h
+    }
+    fn palette(&self) -> Palette {
+        self.palette
+    }
+    fn put(&mut self, x: usize, y: usize, ch: char, style: Style) {
+        Screen::put(self, x, y, ch, style);
+    }
+    fn read(&self, index: usize) -> Cell {
+        self.cells[index].clone()
+    }
+    fn write(&mut self, index: usize, cell: Cell) {
+        self.cells[index] = cell;
+    }
+}
+
+/// Paints directly into the frame's Buffer. The owned [`Screen`] remains the
+/// golden oracle; production components can use this surface as they migrate.
+pub struct FrameCanvas<'a> {
+    buffer: &'a mut Buffer,
+    area: Rect,
+    palette: Palette,
+    colors: HashMap<ratatui::style::Color, &'static str>,
+}
+
+impl<'a> FrameCanvas<'a> {
+    pub fn new(frame: &'a mut ratatui::Frame, area: Rect, palette: Palette) -> Self {
+        let buffer = frame.buffer_mut();
+        for y in area.y..area.bottom() {
+            for x in area.x..area.right() {
+                if let Some(cell) = buffer.cell_mut((x, y)) {
+                    *cell = ratatui::buffer::Cell::default();
+                    cell.set_bg(hex_color(palette.remap(color::BLACK)));
+                }
+            }
+        }
+        Self {
+            buffer,
+            area,
+            palette,
+            colors: HashMap::from([(
+                hex_color(palette.remap(color::BLACK)),
+                palette.remap(color::BLACK),
+            )]),
+        }
+    }
+
+    fn position(&self, index: usize) -> (u16, u16) {
+        (
+            self.area.x + (index % self.width()) as u16,
+            self.area.y + (index / self.width()) as u16,
+        )
+    }
+}
+
+impl PaintCanvas for FrameCanvas<'_> {
+    fn width(&self) -> usize {
+        self.area.width as usize
+    }
+    fn height(&self) -> usize {
+        self.area.height as usize
+    }
+    fn palette(&self) -> Palette {
+        self.palette
+    }
+    fn put(&mut self, x: usize, y: usize, ch: char, style: Style) {
+        if x >= self.width() || y >= self.height() {
+            return;
+        }
+        let fg = style.fg.map(|fg| {
+            let token = if self.palette == Palette::Light && fg == color::BLUE {
+                if style.bold || ch == '▸' {
+                    "#095261"
+                } else {
+                    "#0f7d93"
+                }
+            } else {
+                self.palette.remap(fg)
+            };
+            self.colors.insert(hex_color(token), token);
+            hex_color(token)
+        });
+        let bg = style.bg.map(|bg| {
+            let token = self.palette.remap(bg);
+            self.colors.insert(hex_color(token), token);
+            hex_color(token)
+        });
+        if let Some(cell) = self
+            .buffer
+            .cell_mut((self.area.x + x as u16, self.area.y + y as u16))
+        {
+            cell.set_char(ch);
+            if let Some(fg) = fg {
+                cell.set_fg(fg);
+            }
+            if let Some(bg) = bg {
+                cell.set_bg(bg);
+            }
+            cell.modifier.set(Modifier::BOLD, style.bold);
+        }
+    }
+
+    fn read(&self, index: usize) -> Cell {
+        let cell = &self.buffer[self.position(index)];
+        Cell {
+            ch: cell.symbol().chars().next().unwrap_or(' '),
+            fg: self.colors.get(&cell.fg).copied(),
+            bg: self.colors.get(&cell.bg).copied(),
+            bold: cell.modifier.contains(Modifier::BOLD),
+        }
+    }
+
+    fn write(&mut self, index: usize, cell: Cell) {
+        let position = self.position(index);
+        let fg = cell.fg.map(hex_color);
+        let bg = cell.bg.map(hex_color);
+        if let Some(token) = cell.fg {
+            self.colors.insert(hex_color(token), token);
+        }
+        if let Some(token) = cell.bg {
+            self.colors.insert(hex_color(token), token);
+        }
+        if let Some(target) = self.buffer.cell_mut(position) {
+            target.set_char(cell.ch);
+            target.fg = fg.unwrap_or(ratatui::style::Color::Reset);
+            target.bg = bg.unwrap_or(ratatui::style::Color::Reset);
+            target.modifier.set(Modifier::BOLD, cell.bold);
+        }
+    }
 }
 
 impl Screen {
@@ -377,7 +645,8 @@ pub fn hex_color(hex: &str) -> ratatui::style::Color {
 
 #[cfg(test)]
 mod tests {
-    use super::{blit, Screen, Style};
+    use super::{blit, color, FrameCanvas, PaintCanvas, Screen, Style};
+    use crate::theme::Palette;
     use ratatui::{backend::TestBackend, layout::Rect, Terminal};
 
     #[test]
@@ -392,5 +661,55 @@ mod tests {
         assert_eq!(buffer[(2, 1)].symbol(), "H");
         assert_eq!(buffer[(3, 1)].symbol(), "i");
         assert_eq!(buffer[(0, 0)].symbol(), " ");
+    }
+
+    #[test]
+    fn frame_canvas_matches_owned_screen_for_overwrites_and_palette() {
+        let area = Rect::new(2, 1, 4, 2);
+        for palette in [Palette::Dark, Palette::Light] {
+            let mut expected = Terminal::new(TestBackend::new(8, 4)).unwrap();
+            let mut screen = Screen::themed(palette, 4, 2);
+            screen.fill(0, 0, 4, 2, Style::fg(color::FG).bg(color::PANEL));
+            screen.text(0, 0, "Hi", Style::fg(color::BLUE).bold());
+            screen.put(1, 0, '!', Style::fg(color::MUTED));
+            expected.draw(|frame| blit(frame, &screen, area)).unwrap();
+
+            let mut actual = Terminal::new(TestBackend::new(8, 4)).unwrap();
+            actual
+                .draw(|frame| {
+                    let mut canvas = FrameCanvas::new(frame, area, palette);
+                    canvas.fill(0, 0, 4, 2, Style::fg(color::FG).bg(color::PANEL));
+                    canvas.text(0, 0, "Hi", Style::fg(color::BLUE).bold());
+                    canvas.put(1, 0, '!', Style::fg(color::MUTED));
+                    assert_eq!(canvas.read(0).ch, 'H');
+                    assert!(!canvas.read(1).bold);
+                })
+                .unwrap();
+            assert_eq!(actual.backend().buffer(), expected.backend().buffer());
+        }
+    }
+
+    #[test]
+    fn frame_canvas_matches_owned_screen_for_pane_and_modal_dimming() {
+        let area = Rect::new(1, 1, 14, 6);
+        let title = [("title", Style::fg(color::BLUE).bold())];
+        let hints = [("q quit".to_string(), Style::fg(color::MUTED))];
+        let mut expected = Terminal::new(TestBackend::new(17, 9)).unwrap();
+        let mut screen = Screen::new(14, 6);
+        screen.pane(0, 0, 13, 5, true, &title, &hints);
+        screen.resolve_modal_base();
+        screen.dim();
+        expected.draw(|frame| blit(frame, &screen, area)).unwrap();
+
+        let mut actual = Terminal::new(TestBackend::new(17, 9)).unwrap();
+        actual
+            .draw(|frame| {
+                let mut canvas = FrameCanvas::new(frame, area, Palette::Dark);
+                canvas.pane(0, 0, 13, 5, true, &title, &hints);
+                canvas.resolve_modal_base();
+                canvas.dim();
+            })
+            .unwrap();
+        assert_eq!(actual.backend().buffer(), expected.backend().buffer());
     }
 }

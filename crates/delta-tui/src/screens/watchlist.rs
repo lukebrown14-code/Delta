@@ -7,7 +7,8 @@
 //! (docs/rewrite/findings/rust-screens.md).
 use super::status_bar::{draw_status_bar_wide, pane_hints};
 use crate::chart::PriceChart;
-use crate::screen::{color, Screen, Style};
+use crate::screen::{color, FrameCanvas, PaintCanvas, Screen, Style};
+use crate::theme::Palette;
 use crate::Action;
 use chrono::Datelike;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -50,7 +51,7 @@ impl WatchlistComponent {
         self.detail_open = true;
     }
 
-    pub fn paint_into(&self, screen: &mut Screen) {
+    pub fn paint_into(&self, screen: &mut impl PaintCanvas) {
         let Some(snapshot) = &self.snapshot else {
             return;
         };
@@ -63,11 +64,11 @@ impl WatchlistComponent {
             });
             state.selected = state.selected.min(state.entries.len().saturating_sub(1));
             render_watchlist_filter(screen, &state, query);
-        } else if screen.w < 100 && !self.detail_open {
+        } else if screen.width() < 100 && !self.detail_open {
             render_watchlist_narrow_list(screen, &state, false);
-        } else if screen.w < 100 {
+        } else if screen.width() < 100 {
             render_watchlist_narrow(screen, &state);
-        } else if screen.w >= 160 {
+        } else if screen.width() >= 160 {
             render_watchlist_wide(screen, &state, None);
         } else {
             render_watchlist_normal(screen, &state, None);
@@ -85,6 +86,11 @@ impl crate::Screen for WatchlistComponent {
 
     fn paint_into(&self, screen: &mut Screen) {
         WatchlistComponent::paint_into(self, screen);
+    }
+
+    fn draw(&mut self, frame: &mut ratatui::Frame, area: ratatui::layout::Rect) {
+        let mut canvas = FrameCanvas::new(frame, area, Palette::Dark);
+        WatchlistComponent::paint_into(self, &mut canvas);
     }
 
     fn handle_key(&mut self, key: KeyEvent) -> Option<Action> {
@@ -143,14 +149,14 @@ impl crate::Screen for WatchlistComponent {
     }
 }
 
-fn watchlist_panes(screen: &Screen) -> Vec<Vec<super::PaneRect>> {
-    let bottom = screen.h - 3;
-    let widths = if screen.w < 100 {
-        vec![screen.w - 2]
+fn watchlist_panes(screen: &impl PaintCanvas) -> Vec<Vec<super::PaneRect>> {
+    let bottom = screen.height() - 3;
+    let widths = if screen.width() < 100 {
+        vec![screen.width() - 2]
     } else {
-        vec![46, screen.w - 48]
+        vec![46, screen.width() - 48]
     };
-    super::pane_layout(1, 0, screen.w - 1, bottom + 1, &[bottom + 1], &widths)
+    super::pane_layout(1, 0, screen.width() - 1, bottom + 1, &[bottom + 1], &widths)
 }
 
 /// `RANGES` / `RANGE_LABELS` / `RANGE_WINDOW` (targets.py).
@@ -284,8 +290,12 @@ pub fn grouped(value: f64) -> String {
 }
 
 /// Paint the full 120x40 Watchlist screen (`draw` = the composed frame).
-fn render_watchlist_normal(screen: &mut Screen, state: &WatchlistState, filter: Option<&str>) {
-    let w = screen.w;
+fn render_watchlist_normal(
+    screen: &mut impl PaintCanvas,
+    state: &WatchlistState,
+    filter: Option<&str>,
+) {
+    let w = screen.width();
     let panes = watchlist_panes(screen);
     let list = panes[0][0];
     let inspector = panes[0][1];
@@ -329,26 +339,26 @@ fn render_watchlist_normal(screen: &mut Screen, state: &WatchlistState, filter: 
     if let Some(metric) = &state.metric {
         draw_inspector(screen, inspector, state, metric);
     }
-    draw_status_bar(screen, screen.h - 1, w, false);
+    draw_status_bar(screen, screen.height() - 1, w, false);
     if let Some(query) = filter {
         paint_filter_input(screen, query, list);
     }
 }
 
 /// The slash filter reserves a line above the options; the inspector stays put.
-fn render_watchlist_filter(screen: &mut Screen, state: &WatchlistState, query: &str) {
-    if screen.w < 100 {
+fn render_watchlist_filter(screen: &mut impl PaintCanvas, state: &WatchlistState, query: &str) {
+    if screen.width() < 100 {
         render_watchlist_narrow_list(screen, state, true);
         let list = watchlist_panes(screen)[0][0];
         paint_filter_input(screen, query, list);
-    } else if screen.w >= 160 {
+    } else if screen.width() >= 160 {
         render_watchlist_wide(screen, state, Some(query));
     } else {
         render_watchlist_normal(screen, state, Some(query));
     }
 }
 
-fn paint_filter_input(screen: &mut Screen, query: &str, pane: super::PaneRect) {
+fn paint_filter_input(screen: &mut impl PaintCanvas, query: &str, pane: super::PaneRect) {
     let x = pane.0 + 1;
     let y = pane.1 + 1;
     let end = pane.2 - 1;
@@ -377,7 +387,7 @@ pub enum AddSearchState {
 
 /// Search-first Add dialog over the dimmed watchlist.
 pub fn draw_watchlist_add(
-    screen: &mut Screen,
+    screen: &mut impl PaintCanvas,
     state: &WatchlistState,
     query: &str,
     search: AddSearchState,
@@ -387,16 +397,16 @@ pub fn draw_watchlist_add(
 
 /// Live Add dialog with merged local and provider suggestions.
 pub fn draw_watchlist_add_results(
-    screen: &mut Screen,
+    screen: &mut impl PaintCanvas,
     state: &WatchlistState,
     query: &str,
     search: AddSearchState,
     results: &[delta_plugins::yahoo::SearchResult],
     selected: usize,
 ) {
-    if screen.w < 100 {
+    if screen.width() < 100 {
         render_watchlist_narrow_list(screen, state, false);
-    } else if screen.w >= 160 {
+    } else if screen.width() >= 160 {
         render_watchlist_wide(screen, state, None);
     } else {
         render_watchlist_normal(screen, state, None);
@@ -406,7 +416,7 @@ pub fn draw_watchlist_add_results(
 
 /// Add dialog only; the App has already painted the component's base frame.
 pub fn paint_watchlist_add_overlay(
-    screen: &mut Screen,
+    screen: &mut impl PaintCanvas,
     state: &WatchlistState,
     query: &str,
     search: AddSearchState,
@@ -414,8 +424,8 @@ pub fn paint_watchlist_add_overlay(
     selected: usize,
 ) {
     screen.dim();
-    let x0 = (screen.w - 64) / 2;
-    let y0 = (screen.h - 19) / 2;
+    let x0 = (screen.width() - 64) / 2;
+    let y0 = (screen.height() - 19) / 2;
     let x1 = x0 + 63;
     let y1 = y0 + 18;
     let surface = Style::DEFAULT.bg(color::SURFACE);
@@ -599,7 +609,7 @@ pub fn paint_watchlist_add_overlay(
 }
 
 fn draw_list_pane(
-    screen: &mut Screen,
+    screen: &mut impl PaintCanvas,
     pane: super::PaneRect,
     state: &WatchlistState,
     filter: bool,
@@ -703,7 +713,7 @@ fn draw_list_pane(
 /// Overlay the selected point on the displayed series. The position is
 /// indexed in the loaded range, not in a down-sampled plot column.
 fn paint_scrub(
-    screen: &mut Screen,
+    screen: &mut impl PaintCanvas,
     state: &WatchlistState,
     chart: &PriceChart,
     x: usize,
@@ -739,7 +749,7 @@ fn paint_scrub(
 }
 
 fn draw_inspector(
-    screen: &mut Screen,
+    screen: &mut impl PaintCanvas,
     pane: super::PaneRect,
     state: &WatchlistState,
     metric: &MetricsData,
@@ -909,7 +919,7 @@ fn draw_inspector(
 /// The footer: nav keys, data/provider/spend cluster, config/help hints
 /// (`shell.py` status bar; Watchlist is the active tab). The narrow layout
 /// hides the provider name and the help hint.
-fn draw_status_bar(screen: &mut Screen, y: usize, w: usize, narrow: bool) {
+fn draw_status_bar(screen: &mut impl PaintCanvas, y: usize, w: usize, narrow: bool) {
     let panel = Style::DEFAULT.bg(color::PANEL);
     let muted = Style::fg(color::MUTED).bold().bg(color::PANEL);
     let active_fg = Style::fg(color::WHITE).bold().bg(color::BLUE_BG);
@@ -955,8 +965,8 @@ fn draw_status_bar(screen: &mut Screen, y: usize, w: usize, narrow: bool) {
 /// the content area, an `esc back` hint joins the pane hints, the provider
 /// name and help hint drop out of the status bar, and the grid/chart geometry
 /// reflows to the captured 80x24 layout.
-fn render_watchlist_narrow(screen: &mut Screen, state: &WatchlistState) {
-    let w = screen.w;
+fn render_watchlist_narrow(screen: &mut impl PaintCanvas, state: &WatchlistState) {
+    let w = screen.width();
     let pane = watchlist_panes(screen)[0][0];
 
     screen.pane(
@@ -983,7 +993,7 @@ fn render_watchlist_narrow(screen: &mut Screen, state: &WatchlistState) {
             "No instrument selected",
             Style::fg(color::MUTED),
         );
-        draw_status_bar(screen, screen.h - 1, w, true);
+        draw_status_bar(screen, screen.height() - 1, w, true);
         return;
     };
 
@@ -1130,14 +1140,18 @@ fn render_watchlist_narrow(screen: &mut Screen, state: &WatchlistState) {
         Style::fg(color::MUTED),
     );
 
-    draw_status_bar(screen, screen.h - 1, w, true);
+    draw_status_bar(screen, screen.height() - 1, w, true);
 }
 
 /// Narrow Watchlist before the user opens an instrument. Textual keeps the
 /// list pane visible until `enter`; the inspector painter above starts at
 /// that later state.
-fn render_watchlist_narrow_list(screen: &mut Screen, state: &WatchlistState, filter: bool) {
-    let w = screen.w;
+fn render_watchlist_narrow_list(
+    screen: &mut impl PaintCanvas,
+    state: &WatchlistState,
+    filter: bool,
+) {
+    let w = screen.width();
     let offset = usize::from(filter);
     let pane = watchlist_panes(screen)[0][0];
     let bottom = pane.3 - 1;
@@ -1255,7 +1269,7 @@ fn render_watchlist_narrow_list(screen: &mut Screen, state: &WatchlistState, fil
         screen.text(pane.0 + 26, y, "—         —", values_style);
         y += 1;
     }
-    draw_status_bar(screen, screen.h - 1, w, true);
+    draw_status_bar(screen, screen.height() - 1, w, true);
 }
 
 /// The equity glossary help entries: (label, help) per group, from
@@ -1350,10 +1364,10 @@ fn wrap_words(text: &str, width: usize) -> Vec<String> {
 /// The metric glossary modal (`MetricHelpModal`): a blurred-border dialog over
 /// the dimmed base screen. The body is a 22-line scroll window starting at the
 /// top of the content; the footer hint sits under it. Tier B.
-pub fn draw_glossary_overlay(screen: &mut Screen, state: &WatchlistState) {
-    if screen.w < 120 {
+pub fn draw_glossary_overlay(screen: &mut impl PaintCanvas, state: &WatchlistState) {
+    if screen.width() < 120 {
         render_watchlist_narrow(screen, state);
-    } else if screen.w > 120 {
+    } else if screen.width() > 120 {
         render_watchlist_wide(screen, state, None);
     } else {
         render_watchlist_normal(screen, state, None);
@@ -1361,16 +1375,16 @@ pub fn draw_glossary_overlay(screen: &mut Screen, state: &WatchlistState) {
     paint_glossary_overlay(screen, state);
 }
 
-fn paint_glossary_overlay(screen: &mut Screen, _state: &WatchlistState) {
+fn paint_glossary_overlay(screen: &mut impl PaintCanvas, _state: &WatchlistState) {
     screen.dim();
 
     // Modal geometry (matches the exporter at 80x24, 120x40 and 200x50):
     // 72 columns centred; height = 90% of the screen, vertically centred.
     let box_w = 72usize;
-    let x0 = (screen.w - box_w) / 2;
+    let x0 = (screen.width() - box_w) / 2;
     let x1 = x0 + box_w - 1;
-    let box_h = screen.h * 9 / 10;
-    let y0 = (screen.h - box_h) / 2;
+    let box_h = screen.height() * 9 / 10;
+    let y0 = (screen.height() - box_h) / 2;
     let y1 = y0 + box_h - 1;
     let surface = Style::DEFAULT.bg("#0d0d0d");
     screen.fill(x0, y0, x1 + 1, y1 + 1, surface);
@@ -1478,8 +1492,12 @@ fn paint_glossary_overlay(screen: &mut Screen, _state: &WatchlistState) {
 /// The Watchlist screen at the 200x50 matrix size: same content, inspector
 /// pane stretched, chart 146 wide, grid columns at the captured Rich ratio
 /// positions, and the wide status bar with full tab labels.
-fn render_watchlist_wide(screen: &mut Screen, state: &WatchlistState, filter: Option<&str>) {
-    let w = screen.w;
+fn render_watchlist_wide(
+    screen: &mut impl PaintCanvas,
+    state: &WatchlistState,
+    filter: Option<&str>,
+) {
+    let w = screen.width();
     let panes = watchlist_panes(screen);
     let list = panes[0][0];
     let inspector = panes[0][1];
@@ -1534,7 +1552,7 @@ fn render_watchlist_wide(screen: &mut Screen, state: &WatchlistState, filter: Op
             "No instrument selected",
             Style::fg(color::MUTED),
         );
-        draw_status_bar_wide(screen, screen.h - 1, w, "2 Watchlist");
+        draw_status_bar_wide(screen, screen.height() - 1, w, "2 Watchlist");
         if let Some(query) = filter {
             paint_filter_input(screen, query, list);
         }
@@ -1697,30 +1715,30 @@ fn render_watchlist_wide(screen: &mut Screen, state: &WatchlistState, filter: Op
         Style::fg(color::MUTED),
     );
 
-    draw_status_bar_wide(screen, screen.h - 1, w, "2 Watchlist");
+    draw_status_bar_wide(screen, screen.height() - 1, w, "2 Watchlist");
     if let Some(query) = filter {
         paint_filter_input(screen, query, list);
     }
 }
 
 /// Oracle compatibility entry points. The running component uses the renderers directly.
-pub fn draw_watchlist(screen: &mut Screen, state: &WatchlistState) {
+pub fn draw_watchlist(screen: &mut impl PaintCanvas, state: &WatchlistState) {
     render_watchlist_normal(screen, state, None);
 }
 
-pub fn draw_watchlist_wide(screen: &mut Screen, state: &WatchlistState) {
+pub fn draw_watchlist_wide(screen: &mut impl PaintCanvas, state: &WatchlistState) {
     render_watchlist_wide(screen, state, None);
 }
 
-pub fn draw_watchlist_narrow(screen: &mut Screen, state: &WatchlistState) {
+pub fn draw_watchlist_narrow(screen: &mut impl PaintCanvas, state: &WatchlistState) {
     render_watchlist_narrow(screen, state);
 }
 
-pub fn draw_watchlist_narrow_list(screen: &mut Screen, state: &WatchlistState) {
+pub fn draw_watchlist_narrow_list(screen: &mut impl PaintCanvas, state: &WatchlistState) {
     render_watchlist_narrow_list(screen, state, false);
 }
 
-pub fn draw_watchlist_filter(screen: &mut Screen, state: &WatchlistState, query: &str) {
+pub fn draw_watchlist_filter(screen: &mut impl PaintCanvas, state: &WatchlistState, query: &str) {
     render_watchlist_filter(screen, state, query);
 }
 
@@ -1743,6 +1761,40 @@ mod wrap_tests {
 mod component_tests {
     use super::*;
     use crate::Screen as _;
+    use ratatui::{backend::TestBackend, layout::Rect, Terminal};
+
+    #[test]
+    fn direct_frame_matches_oracle_at_each_layout_size() {
+        for (width, height) in [(80, 24), (120, 40), (200, 50)] {
+            let mut watch = WatchlistComponent::default();
+            watch.set_snapshot(WatchlistState {
+                range: "1m",
+                metric: None,
+                scrub: None,
+                entries: vec![WatchEntry {
+                    symbol: "AAPL".into(),
+                    asset_class: "equity".into(),
+                }],
+                selected: 0,
+            });
+            let area = Rect::new(1, 1, width, height);
+            let mut oracle = Screen::new(width as usize, height as usize);
+            watch.paint_into(&mut oracle);
+            let mut expected = Terminal::new(TestBackend::new(width + 2, height + 2)).unwrap();
+            expected
+                .draw(|frame| crate::screen::blit(frame, &oracle, area))
+                .unwrap();
+            let mut actual = Terminal::new(TestBackend::new(width + 2, height + 2)).unwrap();
+            actual
+                .draw(|frame| crate::Screen::draw(&mut watch, frame, area))
+                .unwrap();
+            assert_eq!(
+                actual.backend().buffer(),
+                expected.backend().buffer(),
+                "{width}x{height}"
+            );
+        }
+    }
 
     #[test]
     fn filter_glossary_and_selection_live_in_screen() {
