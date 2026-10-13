@@ -97,6 +97,16 @@ pub enum Action {
         range: String,
         data: Box<delta_services::asset_metrics::AssetMetrics>,
     },
+    /// Watchlist Add query; the event loop debounces and calls the search service.
+    TargetSearch {
+        generation: u64,
+        query: String,
+    },
+    /// Provider search completed; stale generations are ignored by the app.
+    TargetSearchResult {
+        generation: u64,
+        result: Result<Vec<delta_plugins::yahoo::SearchResult>, String>,
+    },
     /// Ingest finished; carries per-source row counts.
     Ingested(BTreeMap<String, usize>),
     /// Refreshed Home overview values (headline, pulse, upcoming, health).

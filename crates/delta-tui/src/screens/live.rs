@@ -13,7 +13,9 @@ use delta_core::config::AppConfig;
 
 use crate::screen::Screen;
 use crate::screens::decisions::{draw_decision_review_form, draw_decisions_live, DecisionsData};
-use crate::screens::home::{draw_home_live, HomeFeed, HomeLiveData, HomeState};
+use crate::screens::home::{
+    draw_home_live, draw_home_setup, HomeFeed, HomeLiveData, HomeSetupData, HomeState,
+};
 use crate::screens::research::{draw_research_live, ResearchData, ResearchState};
 use crate::screens::settings::{
     draw_settings, draw_settings_narrow, draw_settings_wide, SettingsData, SettingsState,
@@ -21,8 +23,9 @@ use crate::screens::settings::{
 };
 use crate::screens::theses::{draw_theses_live, draw_thesis_form_live, ThesesState};
 use crate::screens::watchlist::{
-    draw_watchlist, draw_watchlist_narrow, draw_watchlist_narrow_list, draw_watchlist_wide,
-    grouped, MetricsData, WatchEntry, WatchlistState,
+    draw_glossary_overlay, draw_watchlist, draw_watchlist_add, draw_watchlist_add_results,
+    draw_watchlist_filter, draw_watchlist_narrow, draw_watchlist_narrow_list, draw_watchlist_wide,
+    grouped, AddSearchState, MetricsData, WatchEntry, WatchlistState,
 };
 
 /// Render one live scenario at its manifest size, or `None` when no builder
@@ -46,9 +49,16 @@ pub fn render_live(state: &str, fixture: &serde_json::Value, db_path: &Path) -> 
         | "live-settings-source"
         | "live-settings-source-invalid" => Some(live_settings(state, fixture, db_path, w, h)),
         "live-home" => Some(live_home(db_path, w, h)),
-        "live-watchlist" | "live-watchlist-inspector" | "live-watchlist-range" => {
-            Some(live_watchlist(state, db_path, w, h))
-        }
+        "live-home-first-run" => Some(live_home_first_run(fixture, db_path, w, h)),
+        "live-watchlist"
+        | "live-watchlist-inspector"
+        | "live-watchlist-range"
+        | "live-watchlist-glossary"
+        | "live-watchlist-filter"
+        | "live-watchlist-add"
+        | "live-watchlist-add-pending"
+        | "live-watchlist-add-online"
+        | "live-watchlist-add-offline" => Some(live_watchlist(state, db_path, w, h)),
         "live-theses"
         | "live-theses-empty"
         | "live-theses-detail"
@@ -183,6 +193,43 @@ fn live_home(db_path: &Path, w: usize, h: usize) -> Screen {
     screen
 }
 
+fn live_home_first_run(fixture: &serde_json::Value, db_path: &Path, w: usize, h: usize) -> Screen {
+    let db = delta_core::db::Db::open(db_path).expect("golden seed database");
+    let config = &fixture["seed"]["config"];
+    let home = HomeState {
+        clock: "Monday 21 September 2026 · 09:30:00 UTC".into(),
+        symbol: "—".into(),
+        last: "—".into(),
+        chg_label: "—".into(),
+        spark: String::new(),
+        since_stamp: String::new(),
+        closes: Vec::new(),
+        feed: HomeFeed::seed(),
+    };
+    let setup = HomeSetupData {
+        provider: config["llm"]["provider"]
+            .as_str()
+            .unwrap_or("openrouter")
+            .into(),
+        provider_connected: false,
+        config_exists: true,
+        database_reachable: true,
+        sec_contact: config["plugins"]["sec_edgar"]["contact"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty()),
+        price_history: delta_services::analytics::data_health(&db)
+            .is_ok_and(|health| !health.latest_bar.is_empty()),
+    };
+    let mut screen = Screen::new(w, h);
+    draw_home_setup(&mut screen, &home, &setup);
+    apply_populated_focus(&mut screen);
+    paint_spend(
+        &mut screen,
+        delta_services::analytics::total_spend(&db, None),
+    );
+    screen
+}
+
 fn live_watchlist(state_name: &str, db_path: &Path, w: usize, h: usize) -> Screen {
     let db = delta_core::db::Db::open(db_path).expect("golden seed database");
     let bars = db.bars("US:AAPL").expect("seed AAPL bars");
@@ -242,7 +289,31 @@ fn live_watchlist(state_name: &str, db_path: &Path, w: usize, h: usize) -> Scree
         }),
     };
     let mut screen = Screen::new(w, h);
-    if w < 100 {
+    if state_name.starts_with("live-watchlist-add") {
+        let (query, search) = match state_name {
+            "live-watchlist-add-pending" => ("ap", AddSearchState::Pending),
+            "live-watchlist-add-online" => ("ap", AddSearchState::Online),
+            "live-watchlist-add-offline" => ("ap", AddSearchState::Offline),
+            _ => ("", AddSearchState::Ready),
+        };
+        if search == AddSearchState::Online {
+            let hit = delta_plugins::yahoo::SearchResult {
+                symbol: "AAPL".into(),
+                name: "AAPL".into(),
+                market: "us".into(),
+                currency: "USD".into(),
+                exchange: String::new(),
+                asset_class: "equity".into(),
+            };
+            draw_watchlist_add_results(&mut screen, &data, query, search, &[hit], 0);
+        } else {
+            draw_watchlist_add(&mut screen, &data, query, search);
+        }
+    } else if state_name == "live-watchlist-glossary" {
+        draw_glossary_overlay(&mut screen, &data);
+    } else if state_name == "live-watchlist-filter" {
+        draw_watchlist_filter(&mut screen, &data, "a");
+    } else if w < 100 {
         if state_name == "live-watchlist" {
             draw_watchlist_narrow_list(&mut screen, &data);
         } else {
@@ -269,10 +340,16 @@ fn apply_populated_focus(screen: &mut Screen) {
             Some(crate::screen::color::BLUE) => Some("#898989"),
             Some(crate::screen::color::GREEN) => Some("#9b9b9b"),
             Some(crate::screen::color::AMBER) => Some("#a6a6a6"),
+            Some(crate::screen::color::RED) => Some("#8e8e8e"),
+            Some("#24385f") => Some("#363636"),
+            Some("#623f04") => Some("#424242"),
+            Some("#0d4e25") => Some("#3e3e3e"),
             other => other,
         };
         if cell.bg == Some(crate::screen::color::BLUE_BG) {
             cell.bg = Some("#494949");
+        } else if cell.bg == Some("#0f1e3c") {
+            cell.bg = Some("#1d1d1d");
         }
     }
 }

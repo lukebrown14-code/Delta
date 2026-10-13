@@ -15,6 +15,7 @@ pub mod review;
 pub mod schemas;
 pub mod sentiment;
 pub mod setup;
+pub mod target_search;
 pub mod targets;
 pub mod theses;
 pub mod thesis_health;
@@ -63,6 +64,7 @@ pub use sentiment::{
 pub use setup::{
     configure_data_provider, data_provider_status, setup_checks, Check, DataProviderStatus,
 };
+pub use target_search::{merge_target_search, search_targets};
 pub use targets::{target_from_spec, WatchTarget, DEFAULT_KIND, KNOWN_KINDS, LEGACY_KIND};
 pub use theses::{
     accepted_items, add_evidence, create_thesis, ensure_tables, evidence_for, get_thesis,
