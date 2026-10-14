@@ -197,3 +197,37 @@ fn python_report_fixture_round_trips_byte_for_byte() {
     let actual_sidecar = std::fs::read_to_string(path.with_extension("json")).unwrap();
     assert_eq!(actual_sidecar, expected_sidecar);
 }
+
+#[tokio::test]
+async fn rust_report_generated_from_seed_matches_python_golden_bytes() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let fixture = root.join("fixtures/golden_reports/US:AAPL/2026-09-21.json");
+    let temp = tempfile::tempdir().unwrap();
+    let db_path = temp.path().join("seed.db");
+    std::fs::copy(root.join("fixtures/golden_seed.db"), &db_path).unwrap();
+    let mut db = Db::open(&db_path).unwrap();
+    let response: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(root.join("fixtures/llm/report/apple.json")).unwrap(),
+    )
+    .unwrap();
+    let mut report = build_report(
+        &mut db,
+        &client(&response["text"].to_string()),
+        &cfg(),
+        "US:AAPL",
+    )
+    .await
+    .unwrap();
+    // Both implementations use the current clock; pin only that value to
+    // compare the generated output against the frozen Python oracle.
+    report.as_of = "2026-09-21T09:30:00Z".to_string();
+    let path = write_report(&report, temp.path()).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        std::fs::read_to_string(fixture.with_extension("md")).unwrap()
+    );
+    assert_eq!(
+        std::fs::read_to_string(path.with_extension("json")).unwrap(),
+        std::fs::read_to_string(fixture).unwrap()
+    );
+}
