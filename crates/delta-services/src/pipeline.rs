@@ -47,7 +47,7 @@ fn to_utc(ts: NaiveDateTime) -> NaiveDateTime {
 }
 
 /// Ingest result: rows actually inserted per table (`IngestResult`).
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct IngestResult {
     pub counts: BTreeMap<String, usize>,
 }
@@ -341,48 +341,8 @@ where
     Ok(value)
 }
 
-/// The full evidence pipeline minus sentiment (`gather`); see findings #3.
-#[allow(clippy::too_many_arguments)]
-pub async fn gather(
-    db: &mut Db,
-    plugins: &[std::sync::Arc<dyn delta_plugins::DataPlugin>],
-    client: &delta_llm::client::LlmClient,
-    model: &str,
-    universe: &[Instrument],
-    market: Option<&str>,
-    tickers: Option<&str>,
-    since: Option<&str>,
-    workers: usize,
-    mut log: impl FnMut(&str),
-) -> Result<(IngestResult, ExtractResult), ServiceError> {
-    let ingested = ingest(
-        db, plugins, universe, market, tickers, since, workers, &mut log,
-    )
-    .await?;
-    let now = Utc::now().naive_utc();
-    let since_ts = match since {
-        Some(s) => {
-            parse_date(s).ok_or_else(|| ServiceError::invalid(format!("bad since {s:?}")))?
-        }
-        None => to_naive_utc(now) - Duration::days(14),
-    };
-    let events = extract_events(db, client, model, universe, since_ts, 20).await?;
-    let instruments = events
-        .iter()
-        .map(|e| e.instrument_id.clone())
-        .collect::<BTreeSet<_>>()
-        .len();
-    Ok((
-        ingested,
-        ExtractResult {
-            events: events.len(),
-            instruments,
-        },
-    ))
-}
-
 /// Outcome of the complete Python-compatible gather pipeline.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct GatherResult {
     pub ingested: IngestResult,
     pub extracted: ExtractResult,

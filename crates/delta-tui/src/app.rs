@@ -1895,19 +1895,39 @@ impl Component for App {
                     }
                 }
             }
-            Action::Ingested(counts) => {
-                // Per-source counts, RSS/SEC/bars each visible.
-                let parts: Vec<String> = counts
+            Action::Gathered(result) => {
+                // All three stages on one line: sources with rows, then
+                // events and stances — always shown, so a bars-only run
+                // says the model stages ran and landed nothing.
+                // `nothing new` only when the whole run landed nothing.
+                let parts: Vec<String> = result
+                    .ingested
+                    .counts
                     .iter()
                     .filter(|(_, n)| **n > 0)
                     .map(|(source, n)| format!("{source} {n}"))
                     .collect();
-                self.status = if parts.is_empty() {
-                    "ingest: nothing new".to_string()
-                } else {
-                    format!("ingest: {}", parts.join(" · "))
-                };
-                self.desk.last_ingest = Some(counts);
+                let mut status =
+                    if parts.is_empty() && result.extracted.events == 0 && result.sentiment == 0 {
+                        "gather: nothing new".to_string()
+                    } else {
+                        let mut line = String::from("gather: ");
+                        if !parts.is_empty() {
+                            line.push_str(&parts.join(" · "));
+                            line.push_str(" · ");
+                        }
+                        line.push_str(&format!(
+                            "{} events · {} stances",
+                            result.extracted.events, result.sentiment
+                        ));
+                        line
+                    };
+                // The first warning explains any stage that degraded.
+                if let Some(warning) = result.warnings.first() {
+                    status.push_str(&format!(" · warn: {warning}"));
+                }
+                self.status = status;
+                self.desk.last_ingest = Some(result.ingested.counts);
                 if let delta_tui::desk::Source::Real(db) = &self.desk.source {
                     let db = db.clone();
                     self.desk.reload_from(&db);
@@ -2035,7 +2055,13 @@ fn start_workers(bus: mpsc::UnboundedSender<Action>, desk: &Desk) -> workers::Wo
         delta_tui::desk::Source::Offline => None,
     };
     let quotes_enabled = matches!(&desk.source, delta_tui::desk::Source::Real(_));
-    workers::spawn(bus, universe, db_path, quotes_enabled)
+    workers::spawn(
+        bus,
+        universe,
+        db_path,
+        desk.config_path.clone(),
+        quotes_enabled,
+    )
 }
 
 pub(crate) async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> std::io::Result<()> {
@@ -2162,9 +2188,16 @@ pub(crate) async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> st
                                         let config = app.desk.config_path.clone();
                                         let company = app.research.data.as_ref().map(|r| r.company.clone());
                                         let tx = research_tx.clone();
-                                        let runtime = tokio::runtime::Handle::current();
-                                        std::thread::spawn(move || {
-                                            let result = runtime.block_on(generate_research(config, company));
+                                        tokio::spawn(async move {
+                                            // `generate_research`'s future is
+                                            // not `Send`; host it on the
+                                            // blocking pool like the gather
+                                            // worker does.
+                                            let result = workers::host_non_send(|| {
+                                                generate_research(config, company)
+                                            })
+                                            .await
+                                            .unwrap_or_else(Err);
                                             let _ = tx.send(result);
                                         });
                                     }
@@ -2386,6 +2419,25 @@ mod tests {
 
     fn key(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    /// A finished gather with the given ingest counts, event/stance totals,
+    /// and stage warnings.
+    fn gather_result(
+        counts: BTreeMap<String, usize>,
+        events: usize,
+        stances: usize,
+        warnings: Vec<String>,
+    ) -> delta_services::pipeline::GatherResult {
+        delta_services::pipeline::GatherResult {
+            ingested: delta_services::pipeline::IngestResult { counts },
+            extracted: delta_services::pipeline::ExtractResult {
+                events,
+                instruments: 0,
+            },
+            sentiment: stances,
+            warnings,
+        }
     }
 
     fn ctrl(code: KeyCode) -> KeyEvent {
@@ -2666,10 +2718,51 @@ mod tests {
     fn gather_is_requested_and_statuses_update() {
         let mut a = app();
         assert_eq!(a.handle_key(key(KeyCode::Char('U'))), Some(Action::Gather));
+        // A full run: every source with rows, then events and stances.
         let mut counts = BTreeMap::new();
         counts.insert("bar".to_string(), 5);
-        a.update(Action::Ingested(counts));
-        assert_eq!(a.status, "ingest: bar 5");
+        counts.insert("rss".to_string(), 12);
+        a.update(Action::Gathered(gather_result(counts, 4, 6, Vec::new())));
+        assert_eq!(a.status, "gather: bar 5 · rss 12 · 4 events · 6 stances");
+        assert_eq!(a.desk.last_ingest.as_ref().unwrap()["rss"], 12);
+        // A run that landed nothing says so unambiguously.
+        a.update(Action::Gathered(gather_result(
+            BTreeMap::new(),
+            0,
+            0,
+            Vec::new(),
+        )));
+        assert_eq!(a.status, "gather: nothing new");
+        // Events and stances always show, even at zero, once anything
+        // landed: a bars-only run reports the empty model stages too.
+        let mut counts = BTreeMap::new();
+        counts.insert("bar".to_string(), 5);
+        a.update(Action::Gathered(gather_result(
+            counts.clone(),
+            0,
+            0,
+            Vec::new(),
+        )));
+        assert_eq!(a.status, "gather: bar 5 · 0 events · 0 stances");
+        // A news-only run with no source rows leads with the model stages.
+        a.update(Action::Gathered(gather_result(
+            BTreeMap::new(),
+            4,
+            2,
+            Vec::new(),
+        )));
+        assert_eq!(a.status, "gather: 4 events · 2 stances");
+        // A degraded stage appends the first warning to whatever landed.
+        a.update(Action::Gathered(gather_result(
+            counts,
+            0,
+            0,
+            vec!["extract: no provider key".to_string()],
+        )));
+        assert_eq!(
+            a.status,
+            "gather: bar 5 · 0 events · 0 stances · warn: extract: no provider key"
+        );
         // Metrics flow into the desk and out through the watch state.
         a.update(Action::Metrics {
             instrument: "US:AAPL".to_string(),

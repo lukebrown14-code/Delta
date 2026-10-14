@@ -45,7 +45,7 @@ pub use evidence::{
     PRIMARY_DISCLOSURE_SOURCES,
 };
 pub use pipeline::{
-    default_since, event_id, extract_events, gather, gather_configured, ingest, ExtractResult,
+    default_since, event_id, extract_events, gather_configured, ingest, ExtractResult,
     GatherResult, IngestResult,
 };
 pub use reports::{

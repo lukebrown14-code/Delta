@@ -98,4 +98,4 @@ Data plugins fetching source records into the local store.
 Turning news items into structured events.
 
 **Gather evidence**:
-The user action that runs ingest and extraction together.
+The user action that runs ingest, extraction, and sentiment classification together.
