@@ -2,6 +2,8 @@
 /data/*.db
 /data/*.db-wal
 /data/*.db-shm
+/fixtures/*.db-shm
+/fixtures/*.db-wal
 /data/model_catalog.json
 /reports/
 /target/
