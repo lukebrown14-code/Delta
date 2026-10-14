@@ -18,7 +18,7 @@ cargo build --release -p delta-tui    # release binary
 ## Layout and boundaries
 
 - `crates/delta-core`: config, IDs, domain models, SQLite, migrations, events.
-- `crates/delta-plugins`: markets, data sources, metrics, plugin registry.
+- `crates/delta-plugins`: markets, data sources, metrics, plugin registry (`[plugins.<name>]` keys are `plugin.name()` strings; registry in `src/plugin.rs`).
 - `crates/delta-llm`: model providers, routing, caching, versioned prompts.
 - `crates/delta-services`: application operations, evidence, reports, chat, theses, decisions.
 - `crates/delta-tui`: terminal screens, components, input, workers, headless CLI.
@@ -37,4 +37,16 @@ Do not read or search `.venv/`, caches, `data/*.db`, `reports/`, or generated TU
 
 If `agent/HANDOFF.md` exists, read its Next section at session start. Remove it after its task is complete. Keep replies short and lead with the result.
 
-Issues are tracked in GitHub Issues; see `docs/agents/issue-tracker.md`. Use `docs/agents/triage-labels.md` for triage labels and `docs/agents/domain.md` for domain terms.
+## Agent skills
+
+### Issue tracker
+
+Issues live in GitHub Issues, worked via the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five canonical triage labels are used as-is: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: `GLOSSARY.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.
