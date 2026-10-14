@@ -2,8 +2,8 @@
 
 **Not ready.** The Rust app and shared services are integrated on
 `spec/26-rust-v1` in draft PR #37. The Rust-only removal and 1.0.0 version are
-prepared on `spec/26-cutover`. Screen ownership/layout work, the real-database
-pass, and maintainer gates remain. The cutover is one PR into `main`; human
+prepared on `spec/26-cutover`. The real-database pass and maintainer gates
+remain. The cutover is one PR into `main`; human
 steps are marked **[gate]**.
 
 - [ ] Every R3 task card in `docs/rewrite/tasks/` is done and merged.
@@ -11,9 +11,9 @@ steps are marked **[gate]**.
       and dialog states (Tier A cell-for-cell, Tier B triaged, approved
       deviations only). The current 159 live and 40 static oracle frames pass
       locally; rerun after the Component/layout refactor.
-- [ ] Research, Theses, Ask, Decisions and Settings own data-driven screen
-      components and pane layouts (D2). Their live behavior is present, but
-      central App routing and some fixed-coordinate painters remain.
+- [x] Every tab renders through its data-driven component with Ratatui pane
+      layout (D2). Production draws directly into the frame buffer; the old
+      cell-grid painters remain as test oracles.
 - [ ] Service parity: every `delta/services.py` operation plus reports, chat,
       theses, decisions and review match Python on the shared seed.
 - [ ] End-of-phase adversarial reviewer pass, findings triaged.
