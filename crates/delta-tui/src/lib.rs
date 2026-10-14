@@ -117,8 +117,9 @@ pub enum Action {
         generation: u64,
         result: Result<Vec<delta_plugins::yahoo::SearchResult>, String>,
     },
-    /// Ingest finished; carries per-source row counts.
-    Ingested(BTreeMap<String, usize>),
+    /// Gather finished; carries the pipeline's full result (per-source
+    /// counts live in `ingested.counts`).
+    Gathered(delta_services::pipeline::GatherResult),
     /// Refreshed Home overview values (headline, pulse, upcoming, health).
     HomeRefresh(crate::screens::HomeFeed),
     /// Request a gather run (UI -> ingest worker).
