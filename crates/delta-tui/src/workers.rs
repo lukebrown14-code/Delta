@@ -252,27 +252,20 @@ async fn gather_worker(
             .filter(|inst| company.as_ref().is_none_or(|id| &inst.id == id))
             .cloned()
             .collect();
-        // `gather_configured`'s future is not `Send` (the sentiment stage
-        // threads a `&dyn Fn` log callback), so each run is hosted on the
-        // blocking pool through `host_non_send`; the worker stays a plain
-        // abortable task and just awaits the outcome.
+        // Services keep their worker-spawned futures `Send` (asserted in
+        // delta-services tests), so the worker awaits the pipeline directly
+        // and stays a plain abortable task.
         let status_tx = bus.clone();
-        let run = host_non_send(move || async move {
-            delta_services::gather_configured(&mut db, &cfg, &selected, |message| {
-                let _ = status_tx.send(Action::Status(message.to_string()));
-            })
-            .await
-            .map_err(|e| e.to_string())
-        });
-        match run.await {
-            Ok(Ok(result)) => {
+        let run = delta_services::gather_configured(&mut db, &cfg, &selected, |message| {
+            let _ = status_tx.send(Action::Status(message.to_string()));
+        })
+        .await;
+        match run {
+            Ok(result) => {
                 let _ = bus.send(Action::Gathered(result));
             }
-            Ok(Err(e)) => {
-                let _ = bus.send(Action::Status(format!("gather failed: {e}")));
-            }
             Err(e) => {
-                let _ = bus.send(Action::Status(format!("gather task failed: {e}")));
+                let _ = bus.send(Action::Status(format!("gather failed: {e}")));
             }
         }
     }

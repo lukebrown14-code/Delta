@@ -66,7 +66,7 @@ pub async fn ingest(
     tickers: Option<&str>,
     since: Option<&str>,
     workers: usize,
-    mut log: impl FnMut(&str),
+    mut log: impl FnMut(&str) + Send,
 ) -> Result<IngestResult, ServiceError> {
     let now = Utc::now().naive_utc();
     let since = since
@@ -359,7 +359,7 @@ pub async fn gather_configured(
     db: &mut Db,
     cfg: &AppConfig,
     universe: &[Instrument],
-    mut log: impl FnMut(&str),
+    mut log: impl FnMut(&str) + Send,
 ) -> Result<GatherResult, ServiceError> {
     let plugins = delta_plugins::configured_plugins(cfg);
     let workers = cfg
