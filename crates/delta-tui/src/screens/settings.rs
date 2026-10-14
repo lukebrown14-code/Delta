@@ -21,7 +21,7 @@ use super::status_bar::{
     draw_status_bar_wide_with_footer, pane_hints, settings_status_bar,
     status_bar_narrow_with_footer, Footer, NarrowTab,
 };
-use crate::screen::{color, Screen, Style};
+use crate::screen::{color, FrameCanvas, PaintCanvas, Screen, Style};
 use crate::theme::Palette;
 use crate::{Action, Component};
 
@@ -489,7 +489,7 @@ impl SettingsComponent {
         self.palette = palette;
     }
 
-    pub fn paint_into(&self, screen: &mut Screen) {
+    pub fn paint_into(&self, screen: &mut impl PaintCanvas) {
         let view = SettingsView {
             data: &self.data,
             state: &self.state,
@@ -577,15 +577,18 @@ impl Component for SettingsComponent {
 
     fn draw(&mut self, frame: &mut Frame, area: Rect) {
         self.viewport_width = area.width as usize;
-        let mut screen = Screen::themed(self.palette, area.width as usize, area.height as usize);
-        self.paint_into(&mut screen);
-        crate::screen::blit(frame, &screen, area);
+        let mut canvas = FrameCanvas::new(frame, area, self.palette);
+        self.paint_into(&mut canvas);
     }
 }
 
 impl crate::Screen for SettingsComponent {
     fn name(&self) -> &'static str {
         "config"
+    }
+
+    fn paint_into(&self, screen: &mut Screen) {
+        SettingsComponent::paint_into(self, screen);
     }
 
     fn handle_key(&mut self, key: KeyEvent) -> Option<Action> {
@@ -598,23 +601,23 @@ impl crate::Screen for SettingsComponent {
 }
 
 /// The Settings screen at the normal breakpoint (100..160 columns).
-pub fn draw_settings(screen: &mut Screen, view: &SettingsView) {
+pub fn draw_settings(screen: &mut impl PaintCanvas, view: &SettingsView) {
     paint(screen, view);
 }
 
 /// The Settings screen at the wide breakpoint (160+ columns).
-pub fn draw_settings_wide(screen: &mut Screen, view: &SettingsView) {
+pub fn draw_settings_wide(screen: &mut impl PaintCanvas, view: &SettingsView) {
     paint(screen, view);
 }
 
 /// The Settings screen below 100 columns: panes stack, diagnostics folds.
-pub fn draw_settings_narrow(screen: &mut Screen, view: &SettingsView) {
+pub fn draw_settings_narrow(screen: &mut impl PaintCanvas, view: &SettingsView) {
     paint(screen, view);
 }
 
-fn paint(screen: &mut Screen, view: &SettingsView) {
-    let w = screen.w;
-    let h = screen.h;
+fn paint(screen: &mut impl PaintCanvas, view: &SettingsView) {
+    let w = screen.width();
+    let h = screen.height();
     if w < 6 || h < 6 {
         return;
     }
@@ -677,19 +680,21 @@ fn paint(screen: &mut Screen, view: &SettingsView) {
         settings_status_bar(screen, view.footer);
     }
     if view.state.diagnostics_open.is_some() {
-        for cell in &mut screen.cells {
-            if cell.fg == Some(color::BLUE) {
-                cell.fg = Some("#898989");
-            } else if cell.fg == Some(color::AMBER) {
-                cell.fg = Some("#a6a6a6");
-            }
-            if cell.bg == Some(color::BLUE_BG) {
-                cell.bg = Some("#494949");
-            } else if cell.bg == Some("#13254b") {
-                cell.bg = Some("#242424");
-            } else if cell.bg == Some("#0f1e3c") {
-                cell.bg = Some("#1d1d1d");
-            }
+        for index in 0..screen.width() * screen.height() {
+            screen.edit(index, |cell| {
+                if cell.fg == Some(color::BLUE) {
+                    cell.fg = Some("#898989");
+                } else if cell.fg == Some(color::AMBER) {
+                    cell.fg = Some("#a6a6a6");
+                }
+                if cell.bg == Some(color::BLUE_BG) {
+                    cell.bg = Some("#494949");
+                } else if cell.bg == Some("#13254b") {
+                    cell.bg = Some("#242424");
+                } else if cell.bg == Some("#0f1e3c") {
+                    cell.bg = Some("#1d1d1d");
+                }
+            });
         }
     }
 }
@@ -697,7 +702,7 @@ fn paint(screen: &mut Screen, view: &SettingsView) {
 /// The provider & model, plugins, sources and markets panes; returns the
 /// first row after the stack (where narrow diagnostics folds).
 fn setup_column(
-    screen: &mut Screen,
+    screen: &mut impl PaintCanvas,
     view: &SettingsView,
     pane_right: usize,
     narrow: bool,
@@ -714,7 +719,7 @@ fn setup_column(
         1,
         0,
         pane_right + 1,
-        screen.h - 2,
+        screen.height() - 2,
         &[4, plugin_rows + 2, 0],
         &[pane_right],
     );
@@ -736,6 +741,7 @@ fn setup_column(
     provider_row(
         screen,
         provider_pane.1 + 1,
+        provider_pane.0,
         pane_right,
         provider_focused && state.provider_selected == 0,
         data,
@@ -743,6 +749,7 @@ fn setup_column(
     model_row(
         screen,
         provider_pane.1 + 2,
+        provider_pane.0,
         pane_right,
         provider_focused && state.provider_selected == 1,
         data,
@@ -773,7 +780,7 @@ fn setup_column(
     );
     if data.plugins.is_empty() {
         screen.text(
-            3,
+            plugins_pane.0 + 2,
             plugin_y + 1,
             "no plugins discovered",
             Style::fg(color::MUTED),
@@ -807,7 +814,7 @@ fn setup_column(
             table_row(
                 screen,
                 plugin_y + 1 + row,
-                pane_right,
+                (plugins_pane.0, pane_right),
                 &cells,
                 &cols,
                 index == state.plugin_selected,
@@ -819,7 +826,14 @@ fn setup_column(
     // Data sources & markets pane.
     let y = sources_pane.1;
     let mut cursor = y + 1;
-    section_heading(screen, cursor, pane_right, "sources", data.sources.len());
+    section_heading(
+        screen,
+        cursor,
+        sources_pane.0,
+        pane_right,
+        "sources",
+        data.sources.len(),
+    );
     cursor += 1;
     if !data.sources.is_empty() {
         let rows: Vec<[String; 3]> = data
@@ -845,6 +859,7 @@ fn setup_column(
         table_header(
             screen,
             cursor,
+            sources_pane.0,
             pane_right,
             &["Source", "Quality", "Status"],
             &cols,
@@ -855,7 +870,7 @@ fn setup_column(
             table_row(
                 screen,
                 cursor,
-                pane_right,
+                (sources_pane.0, pane_right),
                 cells,
                 &cols,
                 row == state.source_selected,
@@ -865,7 +880,14 @@ fn setup_column(
         }
     }
     cursor += 1; // #cfg-markets-head margin-top: 1
-    section_heading(screen, cursor, pane_right, "markets", data.markets.len());
+    section_heading(
+        screen,
+        cursor,
+        sources_pane.0,
+        pane_right,
+        "markets",
+        data.markets.len(),
+    );
     cursor += 1;
     let market_rows: Vec<[String; 4]> = data
         .markets
@@ -887,6 +909,7 @@ fn setup_column(
     table_header(
         screen,
         cursor,
+        sources_pane.0,
         pane_right,
         &["ID", "Market", "Currency", "Yahoo"],
         &market_cols,
@@ -897,7 +920,7 @@ fn setup_column(
         table_row(
             screen,
             cursor,
-            pane_right,
+            (sources_pane.0, pane_right),
             cells,
             &market_cols,
             row == state.market_selected,
@@ -921,8 +944,15 @@ fn setup_column(
     cursor + 1
 }
 
-fn section_heading(screen: &mut Screen, y: usize, pane_right: usize, label: &str, count: usize) {
-    screen.text(3, y, label, Style::fg(color::MUTED).bold());
+fn section_heading(
+    screen: &mut impl PaintCanvas,
+    y: usize,
+    pane_left: usize,
+    pane_right: usize,
+    label: &str,
+    count: usize,
+) {
+    screen.text(pane_left + 2, y, label, Style::fg(color::MUTED).bold());
     if count > 0 {
         screen.text_right(
             pane_right - 1,
@@ -950,15 +980,16 @@ fn columns<const N: usize>(headers: &[&str; N], rows: &[[String; N]]) -> [usize;
 
 /// A table header row: panel background, bold, full inner width.
 fn table_header(
-    screen: &mut Screen,
+    screen: &mut impl PaintCanvas,
     y: usize,
+    pane_left: usize,
     pane_right: usize,
     headers: &[&str],
     cols: &[usize],
 ) {
     let style = Style::fg(color::FG).bg(color::PANEL).bold();
-    screen.fill(2, y, pane_right, y + 1, style);
-    let mut x = 2usize;
+    screen.fill(pane_left + 1, y, pane_right, y + 1, style);
+    let mut x = pane_left + 1;
     for (index, header) in headers.iter().enumerate() {
         screen.put(x, y, ' ', style);
         screen.text(x + 1, y, header, style);
@@ -969,14 +1000,15 @@ fn table_header(
 /// One table row: full-width fill; the cursor row takes the blurred block
 /// cursor, a focused cursor the full block cursor.
 fn table_row(
-    screen: &mut Screen,
+    screen: &mut impl PaintCanvas,
     y: usize,
-    pane_right: usize,
+    pane: (usize, usize),
     cells: &[String],
     cols: &[usize],
     cursor: bool,
     focused: bool,
 ) {
+    let (pane_left, pane_right) = pane;
     let style = if focused {
         Style::fg(color::WHITE).bg(color::BLUE_BG).bold()
     } else if cursor {
@@ -984,8 +1016,8 @@ fn table_row(
     } else {
         Style::fg(color::FG)
     };
-    screen.fill(2, y, pane_right, y + 1, style);
-    let mut x = 2usize;
+    screen.fill(pane_left + 1, y, pane_right, y + 1, style);
+    let mut x = pane_left + 1;
     for (index, cell) in cells.iter().enumerate() {
         if x + 1 >= pane_right {
             break;
@@ -1000,15 +1032,16 @@ fn table_row(
 
 /// The `provider: …` row of the provider & model table.
 fn provider_row(
-    screen: &mut Screen,
+    screen: &mut impl PaintCanvas,
     y: usize,
+    pane_left: usize,
     pane_right: usize,
     selected: bool,
     data: &SettingsData,
 ) {
     if selected {
         let style = Style::fg(color::WHITE).bg(color::BLUE_BG).bold();
-        screen.fill(2, y, pane_right, y + 1, style);
+        screen.fill(pane_left + 1, y, pane_right, y + 1, style);
         let text = if data.provider.is_empty() {
             "provider: ○ none — press p".to_string()
         } else {
@@ -1022,16 +1055,21 @@ fn provider_row(
                 }
             )
         };
-        screen.text(3, y, &text, style);
+        screen.text(pane_left + 2, y, &text, style);
         return;
     }
     let base = Style::fg(color::FG);
-    screen.fill(2, y, pane_right, y + 1, base);
+    screen.fill(pane_left + 1, y, pane_right, y + 1, base);
     if data.provider.is_empty() {
-        screen.text(3, y, "provider: ○ none — press p", Style::fg(color::RED));
+        screen.text(
+            pane_left + 2,
+            y,
+            "provider: ○ none — press p",
+            Style::fg(color::RED),
+        );
         return;
     }
-    let x = screen.text(3, y, "provider: ", base.bold());
+    let x = screen.text(pane_left + 2, y, "provider: ", base.bold());
     let dot = if data.provider_connected {
         Style::fg(color::GREEN)
     } else {
@@ -1046,8 +1084,9 @@ fn provider_row(
 
 /// The `model: …` row.
 fn model_row(
-    screen: &mut Screen,
+    screen: &mut impl PaintCanvas,
     y: usize,
+    pane_left: usize,
     pane_right: usize,
     selected: bool,
     data: &SettingsData,
@@ -1055,17 +1094,17 @@ fn model_row(
     let base = Style::fg(color::FG);
     if selected {
         let style = Style::fg(color::WHITE).bg(color::BLUE_BG).bold();
-        screen.fill(2, y, pane_right, y + 1, style);
+        screen.fill(pane_left + 1, y, pane_right, y + 1, style);
         let text = if data.model.is_empty() {
             "model: not chosen — press m".to_string()
         } else {
             format!("model: {}", data.model)
         };
-        screen.text(3, y, &text, style);
+        screen.text(pane_left + 2, y, &text, style);
         return;
     }
-    screen.fill(2, y, pane_right, y + 1, base);
-    let x = screen.text(3, y, "model: ", base.bold());
+    screen.fill(pane_left + 1, y, pane_right, y + 1, base);
+    let x = screen.text(pane_left + 2, y, "model: ", base.bold());
     if data.model.is_empty() {
         screen.text(x, y, "not chosen — press m", Style::fg(color::AMBER));
     } else {
@@ -1077,7 +1116,7 @@ fn model_row(
 
 /// The diagnostics pane (expanded wide/full, folded narrow summary).
 fn diagnostics_pane(
-    screen: &mut Screen,
+    screen: &mut impl PaintCanvas,
     rect: (usize, usize, usize, usize),
     view: &SettingsView,
     expanded: bool,
@@ -1086,7 +1125,7 @@ fn diagnostics_pane(
     if x1 <= x0 + 2 || y1 <= y0 {
         return;
     }
-    let narrow = screen.w < 100;
+    let narrow = screen.width() < 100;
     let mut title = vec![("diagnostics ".to_string(), Style::fg(color::BLUE).bold())];
     if let Ok(diag) = &view.data.diagnostics {
         title.push((
@@ -1316,7 +1355,7 @@ impl DiagnosticsDocument {
 
     fn paint_line(
         &self,
-        screen: &mut Screen,
+        screen: &mut impl PaintCanvas,
         x0: usize,
         y: usize,
         fill: usize,
@@ -1450,7 +1489,7 @@ impl DiagLine {
 
 /// Header row inside the diagnostics pane (cells offset from pane x0).
 fn table_header_at(
-    screen: &mut Screen,
+    screen: &mut impl PaintCanvas,
     x0: usize,
     y: usize,
     fill: usize,
@@ -1470,7 +1509,7 @@ fn table_header_at(
 /// Data row inside the diagnostics pane (the cursor row is always the
 /// table's first data row; the diagnostics tables never take focus).
 fn table_row_at(
-    screen: &mut Screen,
+    screen: &mut impl PaintCanvas,
     x0: usize,
     y: usize,
     fill: usize,
@@ -1501,6 +1540,40 @@ fn table_row_at(
 mod tests {
     use super::*;
     use crossterm::event::KeyModifiers;
+    use ratatui::{backend::TestBackend, Terminal};
+
+    #[test]
+    fn direct_frame_matches_oracle_in_both_palettes() {
+        for palette in [Palette::Dark, Palette::Light] {
+            for diagnostics_open in [None, Some(true)] {
+                for (width, height) in [(80, 24), (120, 40), (200, 50)] {
+                    let mut settings = SettingsComponent::new(exporter_world(), Footer::default());
+                    settings.set_palette(palette);
+                    settings.state.diagnostics_open = diagnostics_open;
+                    let area = Rect::new(1, 1, width, height);
+                    let mut oracle = Screen::themed(palette, width as usize, height as usize);
+                    settings.paint_into(&mut oracle);
+                    let mut expected =
+                        Terminal::new(TestBackend::new(width + 2, height + 2)).unwrap();
+                    expected
+                        .draw(|frame| crate::screen::blit(frame, &oracle, area))
+                        .unwrap();
+                    let mut actual =
+                        Terminal::new(TestBackend::new(width + 2, height + 2)).unwrap();
+                    actual
+                        .draw(|frame| {
+                            <SettingsComponent as Component>::draw(&mut settings, frame, area)
+                        })
+                        .unwrap();
+                    assert_eq!(
+                        actual.backend().buffer(),
+                        expected.backend().buffer(),
+                        "{palette:?} {diagnostics_open:?} {width}x{height}"
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn component_owns_navigation_and_requests_service_actions() {

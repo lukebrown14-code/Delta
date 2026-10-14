@@ -2,7 +2,8 @@ use super::pane_layout;
 use super::status_bar::{
     draw_status_bar_wide, pane_hints, status_bar_narrow, status_bar_tabs, NarrowTab,
 };
-use crate::screen::{color, Screen, Style};
+use crate::screen::{color, FrameCanvas, PaintCanvas, Screen, Style};
+use crate::theme::Palette;
 use crate::{Action, Component};
 use crossterm::event::{KeyCode, KeyEvent};
 use delta_core::db::Db;
@@ -73,7 +74,7 @@ impl ThesesComponent {
         self.viewport_width = width;
     }
 
-    pub fn paint_into(&self, screen: &mut Screen) {
+    pub fn paint_into(&self, screen: &mut impl PaintCanvas) {
         draw_theses_live(screen, &self.state);
     }
 }
@@ -81,6 +82,10 @@ impl ThesesComponent {
 impl crate::Screen for ThesesComponent {
     fn name(&self) -> &'static str {
         "theses"
+    }
+
+    fn paint_into(&self, screen: &mut Screen) {
+        ThesesComponent::paint_into(self, screen);
     }
 
     fn handle_key(&mut self, key: KeyEvent) -> Option<Action> {
@@ -186,9 +191,8 @@ impl crate::Screen for ThesesComponent {
 
     fn draw(&mut self, frame: &mut ratatui::Frame, area: ratatui::layout::Rect) {
         self.viewport_width = area.width as usize;
-        let mut screen = Screen::new(area.width as usize, area.height as usize);
-        self.paint_into(&mut screen);
-        crate::screen::blit(frame, &screen, area);
+        let mut canvas = FrameCanvas::new(frame, area, Palette::Dark);
+        self.paint_into(&mut canvas);
     }
 }
 
@@ -293,7 +297,7 @@ fn mark(state: &str) -> &'static str {
 }
 
 /// Textual's compact thesis dialog, seeded with the selected thesis for edit.
-pub fn draw_thesis_form_live(screen: &mut Screen, state: &ThesesState, editing: bool) {
+pub fn draw_thesis_form_live(screen: &mut impl PaintCanvas, state: &ThesesState, editing: bool) {
     let thesis = editing.then(|| &state.fleet[state.selected].thesis);
     let values = [
         thesis.map_or("Claim".to_string(), |t| t.claim.clone()),
@@ -315,7 +319,7 @@ pub fn draw_thesis_form_live(screen: &mut Screen, state: &ThesesState, editing: 
 }
 
 /// Render the compact dialog for the interactive form using its current values.
-pub fn draw_thesis_form_runtime(screen: &mut Screen, form: &crate::form::Form) {
+pub fn draw_thesis_form_runtime(screen: &mut impl PaintCanvas, form: &crate::form::Form) {
     let editing = form.title == "edit thesis";
     let values: [String; 6] = std::array::from_fn(|index| {
         let field = &form.fields[index];
@@ -332,7 +336,7 @@ pub fn draw_thesis_form_runtime(screen: &mut Screen, form: &crate::form::Form) {
 }
 
 fn draw_thesis_form_values(
-    screen: &mut Screen,
+    screen: &mut impl PaintCanvas,
     values: &[String; 6],
     editing: bool,
     focus: usize,
@@ -353,13 +357,15 @@ fn draw_thesis_form_values(
         cx = screen.text(cx, y, &part, style.bg(color::SURFACE));
     }
 
-    let input = |screen: &mut Screen,
-                 x: usize,
-                 y: usize,
-                 width: usize,
-                 value: &str,
-                 focused: bool,
-                 placeholder: bool| {
+    fn input(
+        screen: &mut impl PaintCanvas,
+        x: usize,
+        y: usize,
+        width: usize,
+        value: &str,
+        focused: bool,
+        placeholder: bool,
+    ) {
         let bg = if focused { "#161616" } else { color::SURFACE };
         screen.fill(x, y, x + width, y + 1, Style::fg(color::FG).bg(bg));
         screen.put(
@@ -394,7 +400,7 @@ fn draw_thesis_form_values(
                 screen.put(x + 2, y, ch, Style::fg(color::BLACK).bg(color::FG));
             }
         }
-    };
+    }
     input(
         screen,
         x,
@@ -406,7 +412,7 @@ fn draw_thesis_form_values(
     );
     if editing && focus == 0 {
         screen.text(x + 2, y + 2, &values[0], Style::fg(color::FG).bg("#263251"));
-        if screen.w != 120 {
+        if screen.width() != 120 {
             screen.put(
                 x + 2 + values[0].chars().count(),
                 y + 2,
@@ -531,27 +537,27 @@ fn draw_thesis_form_values(
 
 /// Paint the live Theses base from the pane grammar at each breakpoint. The
 /// populated read model draws into these same panes below.
-fn paint_theses_base(screen: &mut Screen) {
-    let bottom = screen.h - 3;
-    let narrow = screen.w < 100;
-    let wide = screen.w >= 160;
+fn paint_theses_base(screen: &mut impl PaintCanvas) {
+    let bottom = screen.height() - 3;
+    let narrow = screen.width() < 100;
+    let wide = screen.width() >= 160;
     let columns = if narrow {
         pane_layout(
             1,
             0,
-            screen.w - 1,
+            screen.width() - 1,
             bottom + 1,
             &[bottom + 1],
-            &[screen.w - 2],
+            &[screen.width() - 2],
         )
     } else {
         pane_layout(
             1,
             0,
-            screen.w - 1,
+            screen.width() - 1,
             bottom + 1,
             &[bottom + 1],
-            &[36, screen.w - 78, 40],
+            &[36, screen.width() - 78, 40],
         )
     };
     let claims = columns[0][0];
@@ -578,11 +584,17 @@ fn paint_theses_base(screen: &mut Screen) {
         }),
     );
     if narrow {
-        paint_narrow_header(screen, 1, "#232323");
-        screen.fill(2, 2, claims.2 - 1, bottom - 1, Style::fg(color::FG));
+        paint_narrow_header(screen, claims, claims.1 + 1, "#232323");
+        screen.fill(
+            claims.0 + 1,
+            claims.1 + 2,
+            claims.2 - 1,
+            claims.3 - 2,
+            Style::fg(color::FG),
+        );
         screen.text(
-            3,
-            bottom - 1,
+            claims.0 + 2,
+            claims.3 - 2,
             "no theses yet — press n to create one",
             Style::fg(color::MUTED),
         );
@@ -618,26 +630,47 @@ fn paint_theses_base(screen: &mut Screen) {
         ],
         &pane_hints(&[("f", "find")]),
     );
-    screen.fill(2, 1, claims.2 - 1, bottom - 1, Style::fg(color::FG));
+    screen.fill(
+        claims.0 + 1,
+        claims.1 + 1,
+        claims.2 - 1,
+        claims.3 - 2,
+        Style::fg(color::FG),
+    );
     screen.text(
         detail.0 + 2,
-        1,
+        detail.1 + 1,
         "no theses yet — press n to create one",
         Style::fg(color::FG),
     );
-    screen.text(evidence.0 + 2, 1, "no evidence yet", Style::fg(color::FG));
+    screen.text(
+        evidence.0 + 2,
+        evidence.1 + 1,
+        "no evidence yet",
+        Style::fg(color::FG),
+    );
     let header_style = Style::fg(color::FG).bold().bg(color::PANEL);
-    screen.fill(evidence.0 + 1, 2, evidence.2 - 1, 3, header_style);
     screen.fill(
         evidence.0 + 1,
-        3,
+        evidence.1 + 2,
         evidence.2 - 1,
-        if wide { screen.h - 10 } else { 29 },
+        evidence.1 + 3,
+        header_style,
+    );
+    screen.fill(
+        evidence.0 + 1,
+        evidence.1 + 3,
+        evidence.2 - 1,
+        if wide {
+            evidence.3 - 8
+        } else {
+            evidence.1 + 29
+        },
         Style::fg(color::FG),
     );
     screen.text(
         evidence.0 + if wide { 1 } else { 2 },
-        2,
+        evidence.1 + 2,
         if wide {
             "    ±  age   note"
         } else {
@@ -645,7 +678,11 @@ fn paint_theses_base(screen: &mut Screen) {
         },
         header_style,
     );
-    let separator = if wide { screen.h - 11 } else { 29 };
+    let separator = if wide {
+        evidence.3 - 9
+    } else {
+        evidence.1 + 29
+    };
     for x in evidence.0 + 1..evidence.2 - 1 {
         screen.put(
             x,
@@ -671,24 +708,29 @@ fn paint_theses_base(screen: &mut Screen) {
         Style::fg(color::FG),
     );
     if wide {
-        draw_status_bar_wide(screen, screen.h - 1, screen.w, "4 Theses");
+        draw_status_bar_wide(screen, screen.height() - 1, screen.width(), "4 Theses");
     } else {
-        draw_status_bar_theses(screen, screen.h - 1, screen.w);
+        draw_status_bar_theses(screen, screen.height() - 1, screen.width());
     }
 }
 
-fn paint_narrow_header(screen: &mut Screen, y: usize, background: &'static str) {
+fn paint_narrow_header(
+    screen: &mut impl PaintCanvas,
+    pane: super::PaneRect,
+    y: usize,
+    background: &'static str,
+) {
     let style = Style::fg(color::FG).bold().bg(background);
-    screen.fill(2, y, screen.w - 2, y + 1, style);
-    screen.text(2, y, "   Claim", style);
-    screen.text(49, y, "Health", style);
-    screen.text(62, y, "Tilt", style);
-    screen.text(72, y, "Queue", style);
+    screen.fill(pane.0 + 1, y, pane.2 - 1, y + 1, style);
+    screen.text(pane.0 + 1, y, "   Claim", style);
+    screen.text(pane.0 + 48, y, "Health", style);
+    screen.text(pane.0 + 61, y, "Tilt", style);
+    screen.text(pane.0 + 71, y, "Queue", style);
 }
 
 /// Overlay real thesis rows on the layout-driven base.
-pub fn draw_theses_live(screen: &mut Screen, state: &ThesesState) {
-    if screen.w < 100 && state.view != ThesesPane::Claims {
+pub fn draw_theses_live(screen: &mut impl PaintCanvas, state: &ThesesState) {
+    if screen.width() < 100 && state.view != ThesesPane::Claims {
         draw_theses_narrow_detail(screen, state);
         status_bar_narrow(screen, NarrowTab::Theses);
         paint_spend(screen, &state.spend);
@@ -703,8 +745,8 @@ pub fn draw_theses_live(screen: &mut Screen, state: &ThesesState) {
     if !state.focus_active {
         paint_populated_status(screen);
     }
-    let narrow = screen.w < 100;
-    let bottom = screen.h - 3;
+    let narrow = screen.width() < 100;
+    let bottom = screen.height() - 3;
     let pending_total: usize = state.pending.values().sum();
     let badge = if pending_total == 0 {
         format!("· {}", state.fleet.len())
@@ -713,27 +755,28 @@ pub fn draw_theses_live(screen: &mut Screen, state: &ThesesState) {
     };
     let claims_focused = !state.focus_active
         || state.view == ThesesPane::Claims
-        || (state.view == ThesesPane::Detail && screen.w < 160);
-    let detail_focused = state.focus_active && state.view == ThesesPane::Detail && screen.w >= 160;
+        || (state.view == ThesesPane::Detail && screen.width() < 160);
+    let detail_focused =
+        state.focus_active && state.view == ThesesPane::Detail && screen.width() >= 160;
     let evidence_focused = state.focus_active && state.view == ThesesPane::Evidence;
     let evidence_toned = state.focus_active;
     let columns = if narrow {
         pane_layout(
             1,
             0,
-            screen.w - 1,
+            screen.width() - 1,
             bottom + 1,
             &[bottom + 1],
-            &[screen.w - 2],
+            &[screen.width() - 2],
         )
     } else {
         pane_layout(
             1,
             0,
-            screen.w - 1,
+            screen.width() - 1,
             bottom + 1,
             &[bottom + 1],
-            &[36, screen.w - 78, 40],
+            &[36, screen.width() - 78, 40],
         )
     };
     let claims = columns[0][0];
@@ -801,44 +844,69 @@ pub fn draw_theses_live(screen: &mut Screen, state: &ThesesState) {
     }
     let list_top = if state.filtering {
         if narrow {
-            paint_narrow_header(screen, 2, color::PANEL);
+            paint_narrow_header(screen, claims, claims.1 + 2, color::PANEL);
         }
         let right = claims.2 - 1;
-        screen.fill(2, 1, right, 2, Style::fg(color::FG).bg("#161616"));
-        screen.put(2, 1, '█', Style::fg(color::BLUE).bg("#161616"));
-        screen.put(3, 1, ' ', Style::DEFAULT.bg("#161616"));
-        screen.text(4, 1, &state.filter, Style::fg(color::FG).bg("#161616"));
+        screen.fill(
+            claims.0 + 1,
+            claims.1 + 1,
+            right,
+            claims.1 + 2,
+            Style::fg(color::FG).bg("#161616"),
+        );
         screen.put(
-            4 + state.filter.chars().count(),
-            1,
+            claims.0 + 1,
+            claims.1 + 1,
+            '█',
+            Style::fg(color::BLUE).bg("#161616"),
+        );
+        screen.put(
+            claims.0 + 2,
+            claims.1 + 1,
+            ' ',
+            Style::DEFAULT.bg("#161616"),
+        );
+        screen.text(
+            claims.0 + 3,
+            claims.1 + 1,
+            &state.filter,
+            Style::fg(color::FG).bg("#161616"),
+        );
+        screen.put(
+            claims.0 + 3 + state.filter.chars().count(),
+            claims.1 + 1,
             ' ',
             Style::fg(color::BLACK).bg(color::FG),
         );
-        screen.put(right - 1, 1, ' ', Style::DEFAULT.bg("#161616"));
+        screen.put(right - 1, claims.1 + 1, ' ', Style::DEFAULT.bg("#161616"));
         if narrow {
-            3
+            claims.1 + 3
         } else {
-            2
+            claims.1 + 2
         }
     } else if narrow {
-        2
+        claims.1 + 2
     } else {
-        1
+        claims.1 + 1
     };
-    if narrow {
-        screen.fill(2, list_top, claims.2 - 1, bottom, Style::fg(color::FG));
-    } else {
-        screen.fill(2, list_top, claims.2 - 1, bottom, Style::fg(color::FG));
+    screen.fill(
+        claims.0 + 1,
+        list_top,
+        claims.2 - 1,
+        bottom,
+        Style::fg(color::FG),
+    );
+    if !narrow {
         screen.fill(
             columns[0][1].0 + 1,
-            1,
+            columns[0][1].1 + 1,
             columns[0][1].2 - 1,
             bottom,
             Style::DEFAULT,
         );
         screen.fill(
             columns[0][2].0 + 1,
-            1,
+            columns[0][2].1 + 1,
             columns[0][2].2 - 1,
             bottom,
             Style::DEFAULT,
@@ -850,7 +918,7 @@ pub fn draw_theses_live(screen: &mut Screen, state: &ThesesState) {
             .to_lowercase()
             .contains(&state.filter.to_lowercase())
     });
-    for (i, row) in rows.enumerate().take(screen.h.saturating_sub(7)) {
+    for (i, row) in rows.enumerate().take(claims.3.saturating_sub(claims.1 + 5)) {
         let y = i + list_top;
         let health = row.state().as_str();
         let glyph = if row.thesis.status == "concluded" {
@@ -873,7 +941,7 @@ pub fn draw_theses_live(screen: &mut Screen, state: &ThesesState) {
             Style::fg(color::FG)
         };
         if selected {
-            screen.fill(2, y, if narrow { screen.w - 2 } else { 36 }, y + 1, style);
+            screen.fill(claims.0 + 1, y, claims.2 - 1, y + 1, style);
         }
         let max = if narrow { 44 } else { 32 };
         let text = format!("{glyph} {}", row.thesis.claim);
@@ -883,11 +951,11 @@ pub fn draw_theses_live(screen: &mut Screen, state: &ThesesState) {
             text
         };
         if selected {
-            screen.text(3, y, &text, style);
+            screen.text(claims.0 + 2, y, &text, style);
         } else {
-            screen.text(3, y, glyph, Style::fg(color::MUTED));
+            screen.text(claims.0 + 2, y, glyph, Style::fg(color::MUTED));
             screen.text(
-                5,
+                claims.0 + 4,
                 y,
                 text.strip_prefix(&format!("{glyph} ")).unwrap_or(&text),
                 style,
@@ -895,7 +963,7 @@ pub fn draw_theses_live(screen: &mut Screen, state: &ThesesState) {
         }
         if narrow {
             screen.text(
-                49,
+                claims.0 + 48,
                 y,
                 health,
                 if selected {
@@ -906,7 +974,7 @@ pub fn draw_theses_live(screen: &mut Screen, state: &ThesesState) {
             );
             if let Some(result) = &row.result {
                 if health != "emerging" {
-                    screen.text(62, y, &format!("{:+.2}", result.tilt), style);
+                    screen.text(claims.0 + 61, y, &format!("{:+.2}", result.tilt), style);
                 }
             }
             if let Some(pending) = state
@@ -915,7 +983,7 @@ pub fn draw_theses_live(screen: &mut Screen, state: &ThesesState) {
                 .filter(|count| **count > 0)
             {
                 screen.text(
-                    68,
+                    claims.0 + 67,
                     y,
                     &format!("{pending} pending"),
                     Style::fg(if state.focus_active {
@@ -931,17 +999,17 @@ pub fn draw_theses_live(screen: &mut Screen, state: &ThesesState) {
         return;
     };
     screen.fill(
-        2,
+        claims.0 + 1,
         bottom - 1,
-        if narrow { screen.w - 2 } else { 36 },
+        claims.2 - 1,
         bottom,
         Style::DEFAULT,
     );
     screen.text(
-        3,
+        claims.0 + 2,
         bottom - 1,
         &if state.filtering
-            || (state.focus_active && state.view == ThesesPane::Detail && screen.w == 120)
+            || (state.focus_active && state.view == ThesesPane::Detail && screen.width() == 120)
         {
             format!("{} theses · of {}", state.fleet.len(), state.fleet.len())
         } else {
@@ -953,16 +1021,18 @@ pub fn draw_theses_live(screen: &mut Screen, state: &ThesesState) {
     let health = row.state().as_str();
     if narrow {
         if !state.focus_active {
-            recolor_claims_focus(screen, screen.w - 2, bottom);
+            recolor_claims_focus(screen, claims);
         }
         return;
     }
-    let detail_x = 39;
-    let detail_width = screen.w.saturating_sub(43 + detail_x);
+    let detail = columns[0][1];
+    let evidence = columns[0][2];
+    let detail_x = detail.0 + 2;
+    let detail_width = detail.2.saturating_sub(detail_x + 2);
     let mut y = paint_wrapped(
         screen,
         detail_x,
-        1,
+        detail.1 + 1,
         detail_width,
         &row.thesis.claim,
         Style::fg(color::FG).bold(),
@@ -1158,13 +1228,19 @@ pub fn draw_theses_live(screen: &mut Screen, state: &ThesesState) {
             Style::fg(color::MUTED),
         );
     }
-    let evidence_x = screen.w.saturating_sub(40);
+    let evidence_x = evidence.0 + 1;
     let counts = result.map_or((0, 0, 0), |r| (r.support, r.against, r.neutral));
-    let separator = bottom - 8;
-    screen.fill(evidence_x, 3, screen.w - 2, separator, Style::fg(color::FG));
+    let separator = evidence.3 - 9;
+    screen.fill(
+        evidence_x,
+        evidence.1 + 3,
+        evidence.2 - 1,
+        separator,
+        Style::fg(color::FG),
+    );
     let x = screen.text(
         evidence_x + 1,
-        1,
+        evidence.1 + 1,
         &format!("+{}", counts.0),
         Style::fg(if evidence_toned {
             color::GREEN
@@ -1172,11 +1248,11 @@ pub fn draw_theses_live(screen: &mut Screen, state: &ThesesState) {
             "#9b9b9b"
         }),
     );
-    let x = screen.text(x, 1, " support", Style::fg(color::MUTED));
-    let x = screen.text(x, 1, "  ", Style::fg(color::FG));
+    let x = screen.text(x, evidence.1 + 1, " support", Style::fg(color::MUTED));
+    let x = screen.text(x, evidence.1 + 1, "  ", Style::fg(color::FG));
     let x = screen.text(
         x,
-        1,
+        evidence.1 + 1,
         &format!("−{}", counts.1),
         Style::fg(if evidence_toned {
             color::RED
@@ -1184,11 +1260,11 @@ pub fn draw_theses_live(screen: &mut Screen, state: &ThesesState) {
             "#8e8e8e"
         }),
     );
-    let x = screen.text(x, 1, " against", Style::fg(color::MUTED));
-    let x = screen.text(x, 1, "  ", Style::fg(color::FG));
+    let x = screen.text(x, evidence.1 + 1, " against", Style::fg(color::MUTED));
+    let x = screen.text(x, evidence.1 + 1, "  ", Style::fg(color::FG));
     let x = screen.text(
         x,
-        1,
+        evidence.1 + 1,
         &format!("?{}", counts.2),
         Style::fg(if evidence_toned {
             color::AMBER
@@ -1196,12 +1272,12 @@ pub fn draw_theses_live(screen: &mut Screen, state: &ThesesState) {
             "#a6a6a6"
         }),
     );
-    screen.text(x, 1, " neutral", Style::fg(color::MUTED));
+    screen.text(x, evidence.1 + 1, " neutral", Style::fg(color::MUTED));
     screen.fill(
         evidence_x,
-        2,
-        screen.w - 2,
-        3,
+        evidence.1 + 2,
+        evidence.2 - 1,
+        evidence.1 + 3,
         Style::fg(color::FG).bold().bg(if evidence_focused {
             "#232323"
         } else {
@@ -1210,7 +1286,7 @@ pub fn draw_theses_live(screen: &mut Screen, state: &ThesesState) {
     );
     screen.text(
         evidence_x + 1,
-        2,
+        evidence.1 + 2,
         "   ±  age   note",
         Style::fg(color::FG).bold().bg(if evidence_focused {
             "#232323"
@@ -1222,7 +1298,7 @@ pub fn draw_theses_live(screen: &mut Screen, state: &ThesesState) {
         .links
         .iter()
         .enumerate()
-        .take(screen.h.saturating_sub(14))
+        .take(evidence.3.saturating_sub(evidence.1 + 12))
     {
         let glyph = if link.accepted { "✓" } else { "•" };
         let side = match link.side.as_str() {
@@ -1250,7 +1326,13 @@ pub fn draw_theses_live(screen: &mut Screen, state: &ThesesState) {
             Style::fg(color::FG)
         };
         if i == state.evidence_selected {
-            screen.fill(evidence_x, i + 3, screen.w - 2, i + 4, style);
+            screen.fill(
+                evidence_x,
+                evidence.1 + i + 3,
+                evidence.2 - 1,
+                evidence.1 + i + 4,
+                style,
+            );
         }
         let note = if link.note.is_empty() {
             &link.evidence_id
@@ -1259,12 +1341,12 @@ pub fn draw_theses_live(screen: &mut Screen, state: &ThesesState) {
         };
         screen.text(
             evidence_x + 1,
-            i + 3,
+            evidence.1 + i + 3,
             &format!("{glyph}  {side}  {age:<4}  {}", truncate(note, 24)),
             style,
         );
     }
-    for x in evidence_x..screen.w - 2 {
+    for x in evidence_x..evidence.2 - 1 {
         screen.put(x, separator, '─', Style::fg(color::BORDER_BLURRED));
     }
     if let Some(link) = state.selected_link() {
@@ -1310,38 +1392,44 @@ pub fn draw_theses_live(screen: &mut Screen, state: &ThesesState) {
                 screen,
                 evidence_x + 1,
                 separator + 4,
-                36,
+                evidence.2.saturating_sub(evidence_x + 3),
                 &delta_services::cite(item),
                 Style::fg(color::MUTED),
             );
         }
     }
     if !state.focus_active {
-        recolor_claims_focus(screen, 36, bottom);
-        recolor_live_pane_chrome(screen, bottom);
+        recolor_claims_focus(screen, claims);
+        recolor_live_pane_chrome(screen, claims.2, evidence.2, bottom);
     }
 }
 
-fn recolor_live_pane_chrome(screen: &mut Screen, bottom: usize) {
+fn recolor_live_pane_chrome(
+    screen: &mut impl PaintCanvas,
+    start: usize,
+    end: usize,
+    bottom: usize,
+) {
     for y in [0, bottom] {
-        for x in 37..screen.w - 1 {
-            let cell = &mut screen.cells[y * screen.w + x];
-            if cell.fg == Some(color::BLUE) {
-                cell.fg = Some("#898989");
-            }
+        for x in start..end {
+            screen.edit(y * screen.width() + x, |cell| {
+                if cell.fg == Some(color::BLUE) {
+                    cell.fg = Some("#898989");
+                }
+            });
         }
     }
 }
 
-fn draw_theses_narrow_detail(screen: &mut Screen, state: &ThesesState) {
-    let bottom = screen.h - 3;
+fn draw_theses_narrow_detail(screen: &mut impl PaintCanvas, state: &ThesesState) {
+    let bottom = screen.height() - 3;
     let pane = pane_layout(
         1,
         0,
-        screen.w - 1,
+        screen.width() - 1,
         bottom + 1,
         &[bottom + 1],
-        &[screen.w - 2],
+        &[screen.width() - 2],
     )[0][0];
     let Some(row) = state.fleet.get(state.selected) else {
         return;
@@ -1379,33 +1467,35 @@ fn draw_theses_narrow_detail(screen: &mut Screen, state: &ThesesState) {
         ],
         &hints,
     );
-    screen.fill(2, 1, screen.w - 2, bottom, Style::DEFAULT);
+    let content_x = pane.0 + 2;
+    let content_width = pane.2.saturating_sub(content_x + 2);
+    screen.fill(pane.0 + 1, pane.1 + 1, pane.2 - 1, bottom, Style::DEFAULT);
     if !evidence {
-        let width = screen.w - 6;
+        let width = content_width;
         let mut y = paint_wrapped(
             screen,
-            3,
-            1,
+            content_x,
+            pane.1 + 1,
             width,
             &row.thesis.claim,
             Style::fg(color::FG).bold(),
         ) + 1;
         let tilt = result.map_or(String::new(), |r| format!(" · tilt {:+.2}", r.tilt));
         screen.text(
-            3,
+            content_x,
             y,
             &format!(" {} {health}{tilt} ", mark(health)),
             Style::fg(color::MUTED).bold().bg(color::PANEL),
         );
         screen.text(
-            3 + 3 + health.len() + tilt.len(),
+            content_x + 3 + health.len() + tilt.len(),
             y,
             &format!("  {accepted} accepted"),
             Style::fg(color::MUTED).bold(),
         );
         y += 1;
         screen.text(
-            3,
+            content_x,
             y,
             &format!(
                 "{} · horizon {} · opened {}",
@@ -1431,7 +1521,7 @@ fn draw_theses_narrow_detail(screen: &mut Screen, state: &ThesesState) {
                     .collect::<Vec<_>>()
                     .join(", ");
                 screen.text(
-                    3,
+                    content_x,
                     y,
                     &truncate(&format!("moved by  {names}"), width),
                     Style::fg(color::MUTED),
@@ -1442,19 +1532,19 @@ fn draw_theses_narrow_detail(screen: &mut Screen, state: &ThesesState) {
         y += 1;
         y = paint_field(
             screen,
-            3,
+            content_x,
             y,
             width,
             "targets",
             &row.thesis.targets.join(", "),
         );
         if !row.thesis.scope.is_empty() {
-            y = paint_field(screen, 3, y, width, "scope", &row.thesis.scope);
+            y = paint_field(screen, content_x, y, width, "scope", &row.thesis.scope);
         }
         if !row.thesis.assumptions.is_empty() {
             y = paint_field(
                 screen,
-                3,
+                content_x,
                 y,
                 width,
                 "holds if",
@@ -1464,7 +1554,7 @@ fn draw_theses_narrow_detail(screen: &mut Screen, state: &ThesesState) {
         if !row.thesis.falsifiers.is_empty() {
             y = paint_field(
                 screen,
-                3,
+                content_x,
                 y,
                 width,
                 "breaks if",
@@ -1472,40 +1562,63 @@ fn draw_theses_narrow_detail(screen: &mut Screen, state: &ThesesState) {
             );
         }
         y += 1;
-        screen.text(3, y, "summary", Style::fg(color::MUTED).bold());
+        screen.text(content_x, y, "summary", Style::fg(color::MUTED).bold());
         let summary = state
             .summary
             .as_ref()
             .map_or("no summary yet — press s to summarise", |s| {
                 s.summary.as_str()
             });
-        paint_wrapped(screen, 3, y + 1, width, summary, Style::fg(color::MUTED));
+        paint_wrapped(
+            screen,
+            content_x,
+            y + 1,
+            width,
+            summary,
+            Style::fg(color::MUTED),
+        );
     } else {
         let (support, against, neutral) =
             result.map_or((0, 0, 0), |r| (r.support, r.against, r.neutral));
-        let x = screen.text(3, 1, &format!("+{support}"), Style::fg(color::GREEN));
-        let x = screen.text(x, 1, " support", Style::fg(color::MUTED));
-        let x = screen.text(x, 1, "  ", Style::fg(color::FG));
-        let x = screen.text(x, 1, &format!("−{against}"), Style::fg(color::RED));
-        let x = screen.text(x, 1, " against", Style::fg(color::MUTED));
-        let x = screen.text(x, 1, "  ", Style::fg(color::FG));
-        let x = screen.text(x, 1, &format!("?{neutral}"), Style::fg(color::AMBER));
-        screen.text(x, 1, " neutral", Style::fg(color::MUTED));
+        let x = screen.text(
+            content_x,
+            pane.1 + 1,
+            &format!("+{support}"),
+            Style::fg(color::GREEN),
+        );
+        let x = screen.text(x, pane.1 + 1, " support", Style::fg(color::MUTED));
+        let x = screen.text(x, pane.1 + 1, "  ", Style::fg(color::FG));
+        let x = screen.text(x, pane.1 + 1, &format!("−{against}"), Style::fg(color::RED));
+        let x = screen.text(x, pane.1 + 1, " against", Style::fg(color::MUTED));
+        let x = screen.text(x, pane.1 + 1, "  ", Style::fg(color::FG));
+        let x = screen.text(
+            x,
+            pane.1 + 1,
+            &format!("?{neutral}"),
+            Style::fg(color::AMBER),
+        );
+        screen.text(x, pane.1 + 1, " neutral", Style::fg(color::MUTED));
         screen.fill(
-            2,
-            2,
-            screen.w - 2,
-            3,
+            pane.0 + 1,
+            pane.1 + 2,
+            pane.2 - 1,
+            pane.1 + 3,
             Style::fg(color::FG).bold().bg("#232323"),
         );
         screen.text(
-            3,
-            2,
+            content_x,
+            pane.1 + 2,
             "   ±  age   note",
             Style::fg(color::FG).bold().bg("#232323"),
         );
-        let separator = bottom - 8;
-        screen.fill(2, 4, screen.w - 2, separator, Style::fg(color::FG));
+        let separator = pane.3 - 9;
+        screen.fill(
+            pane.0 + 1,
+            pane.1 + 4,
+            pane.2 - 1,
+            separator,
+            Style::fg(color::FG),
+        );
         for (i, link) in state
             .links
             .iter()
@@ -1537,7 +1650,13 @@ fn draw_theses_narrow_detail(screen: &mut Screen, state: &ThesesState) {
                 Style::fg(color::FG)
             };
             if i == state.evidence_selected {
-                screen.fill(2, i + 3, screen.w - 2, i + 4, style);
+                screen.fill(
+                    pane.0 + 1,
+                    pane.1 + i + 3,
+                    pane.2 - 1,
+                    pane.1 + i + 4,
+                    style,
+                );
             }
             let note = if link.note.is_empty() {
                 &link.evidence_id
@@ -1545,16 +1664,16 @@ fn draw_theses_narrow_detail(screen: &mut Screen, state: &ThesesState) {
                 &link.note
             };
             screen.text(
-                3,
-                i + 3,
+                content_x,
+                pane.1 + i + 3,
                 &format!(
                     "{glyph}  {side}  {age:<4}  {}",
-                    truncate(note, screen.w - 24)
+                    truncate(note, pane.2 - pane.0 - 22)
                 ),
                 style,
             );
         }
-        for x in 2..screen.w - 2 {
+        for x in pane.0 + 1..pane.2 - 1 {
             screen.put(x, separator, '─', Style::fg(color::BORDER_BLURRED));
         }
         if let Some(link) = state.selected_link() {
@@ -1573,16 +1692,16 @@ fn draw_theses_narrow_detail(screen: &mut Screen, state: &ThesesState) {
             } else {
                 color::AMBER
             };
-            let x = screen.text(3, separator + 1, acceptance, Style::fg(tone).bold());
+            let x = screen.text(content_x, separator + 1, acceptance, Style::fg(tone).bold());
             let x = screen.text(x, separator + 1, " · ", Style::fg(color::MUTED));
             screen.text(x, separator + 1, side, Style::fg(tone));
-            screen.text(3, separator + 2, &link.note, Style::fg(color::FG));
+            screen.text(content_x, separator + 2, &link.note, Style::fg(color::FG));
             if let Some(item) = state.items.get(&link.evidence_id) {
                 paint_wrapped(
                     screen,
-                    3,
+                    content_x,
                     separator + 4,
-                    screen.w - 6,
+                    content_width,
                     &delta_services::cite(item),
                     Style::fg(color::MUTED),
                 );
@@ -1606,7 +1725,7 @@ fn truncate(text: &str, width: usize) -> String {
 }
 
 fn paint_field(
-    screen: &mut Screen,
+    screen: &mut impl PaintCanvas,
     x: usize,
     y: usize,
     width: usize,
@@ -1618,7 +1737,7 @@ fn paint_field(
 }
 
 fn paint_wrapped(
-    screen: &mut Screen,
+    screen: &mut impl PaintCanvas,
     x: usize,
     y: usize,
     width: usize,
@@ -1632,50 +1751,52 @@ fn paint_wrapped(
     y + lines.len()
 }
 
-fn recolor_claims_focus(screen: &mut Screen, right: usize, bottom: usize) {
-    for y in 0..=bottom {
-        for x in 1..=right {
-            let cell = &mut screen.cells[y * screen.w + x];
-            if cell.fg == Some(color::BLUE) {
-                cell.fg = Some("#898989");
-            }
+fn recolor_claims_focus(screen: &mut impl PaintCanvas, pane: super::PaneRect) {
+    for y in pane.1..pane.3 {
+        for x in pane.0..pane.2 {
+            screen.edit(y * screen.width() + x, |cell| {
+                if cell.fg == Some(color::BLUE) {
+                    cell.fg = Some("#898989");
+                }
+            });
         }
     }
 }
 
-fn paint_spend(screen: &mut Screen, spend: &str) {
+fn paint_spend(screen: &mut impl PaintCanvas, spend: &str) {
     if spend.is_empty() {
         return;
     }
-    let y = screen.h - 1;
+    let y = screen.height() - 1;
     let amount = "$0.00";
-    if let Some(start) = (0..screen.w.saturating_sub(amount.len())).find(|&x| {
+    if let Some(start) = (0..screen.width().saturating_sub(amount.len())).find(|&x| {
         (0..amount.len())
-            .all(|i| screen.cells[y * screen.w + x + i].ch == amount.as_bytes()[i] as char)
+            .all(|i| screen.read(y * screen.width() + x + i).ch == amount.as_bytes()[i] as char)
     }) {
         for (i, ch) in spend.chars().enumerate().take(amount.len()) {
-            screen.cells[y * screen.w + start + i].ch = ch;
+            screen.edit(y * screen.width() + start + i, |cell| cell.ch = ch);
         }
     }
 }
 
-fn paint_populated_status(screen: &mut Screen) {
-    let y = screen.h - 1;
-    for x in 0..screen.w {
-        let cell = &mut screen.cells[y * screen.w + x];
-        if cell.bg == Some(color::BLUE_BG) {
-            cell.bg = Some("#494949");
-        }
-        if cell.ch == '●' {
-            cell.fg = Some("#a6a6a6");
-        }
+fn paint_populated_status(screen: &mut impl PaintCanvas) {
+    let y = screen.height() - 1;
+    for x in 0..screen.width() {
+        screen.edit(y * screen.width() + x, |cell| {
+            if cell.bg == Some(color::BLUE_BG) {
+                cell.bg = Some("#494949");
+            }
+            if cell.ch == '●' {
+                cell.fg = Some("#a6a6a6");
+            }
+        });
     }
 }
 
 /// The Theses screen: fleet list, thesis detail, evidence table (all empty
 /// states; port of `delta/tui/screens/theses.py`, seeded golden layout).
-pub fn draw_theses(screen: &mut Screen) {
-    let content_bottom = screen.h - 3; // 37 at h=40
+pub fn draw_theses(screen: &mut impl PaintCanvas) {
+    let content_bottom = screen.height() - 3; // 37 at h=40
     screen.pane(
         1,
         0,
@@ -1743,11 +1864,11 @@ pub fn draw_theses(screen: &mut Screen) {
     );
     screen.text(81, 31, "candidates", Style::fg(color::FG));
 
-    draw_status_bar_theses(screen, screen.h - 1, screen.w);
+    draw_status_bar_theses(screen, screen.height() - 1, screen.width());
 }
 
 /// Status bar with the Theses tab active (`4 Theses`).
-fn draw_status_bar_theses(screen: &mut Screen, y: usize, w: usize) {
+fn draw_status_bar_theses(screen: &mut impl PaintCanvas, y: usize, w: usize) {
     status_bar_tabs(
         screen,
         y,
@@ -1760,9 +1881,9 @@ fn draw_status_bar_theses(screen: &mut Screen, y: usize, w: usize) {
 }
 
 /// Theses at 200x50: thesis list, detail, evidence panes.
-pub fn draw_theses_wide(screen: &mut Screen) {
-    let content_bottom = screen.h - 3; // 47 at h=50
-    let mid_bottom = screen.h - 10; // 40 at h=50
+pub fn draw_theses_wide(screen: &mut impl PaintCanvas) {
+    let content_bottom = screen.height() - 3; // 47 at h=50
+    let mid_bottom = screen.height() - 10; // 40 at h=50
     screen.pane(
         1,
         0,
@@ -1816,13 +1937,13 @@ pub fn draw_theses_wide(screen: &mut Screen) {
     let fg = Style::fg(color::FG);
     screen.text(161, mid_bottom, "no evidence yet — press f to find", fg);
     screen.text(161, mid_bottom + 1, "candidates", fg);
-    draw_status_bar_wide(screen, screen.h - 1, screen.w, "4 Theses");
+    draw_status_bar_wide(screen, screen.height() - 1, screen.width(), "4 Theses");
 }
 
 /// Theses at 80x24: one focused full-width pane.
-pub fn draw_theses_narrow(screen: &mut Screen) {
-    let x1 = screen.w - 2;
-    let bottom = screen.h - 3; // 21 at h=24
+pub fn draw_theses_narrow(screen: &mut impl PaintCanvas) {
+    let x1 = screen.width() - 2;
+    let bottom = screen.height() - 3; // 21 at h=24
     screen.pane(
         1,
         0,
@@ -1862,6 +1983,51 @@ pub fn draw_theses_narrow(screen: &mut Screen) {
 mod component_tests {
     use super::*;
     use crossterm::event::KeyModifiers;
+    use ratatui::{backend::TestBackend, layout::Rect, Terminal};
+
+    #[test]
+    fn direct_frame_matches_oracle_at_each_layout_size() {
+        for populated in [false, true] {
+            for (width, height) in [(80, 24), (120, 40), (200, 50)] {
+                let mut theses = ThesesComponent::default();
+                if populated {
+                    theses.state.fleet.push(ThesisHealth {
+                        thesis: delta_services::thesis_health::Thesis {
+                            id: "t1".into(),
+                            claim: "Revenue grows".into(),
+                            scope: "US:AAPL".into(),
+                            assumptions: vec!["demand holds".into()],
+                            falsifiers: vec!["demand falls".into()],
+                            targets: vec!["US:AAPL".into()],
+                            time_horizon: "5y".into(),
+                            created_at: chrono::NaiveDate::from_ymd_opt(2026, 9, 21)
+                                .unwrap()
+                                .and_hms_opt(0, 0, 0)
+                                .unwrap(),
+                            status: "active".into(),
+                        },
+                        result: None,
+                    });
+                }
+                let area = Rect::new(1, 1, width, height);
+                let mut oracle = Screen::new(width as usize, height as usize);
+                theses.paint_into(&mut oracle);
+                let mut expected = Terminal::new(TestBackend::new(width + 2, height + 2)).unwrap();
+                expected
+                    .draw(|frame| crate::screen::blit(frame, &oracle, area))
+                    .unwrap();
+                let mut actual = Terminal::new(TestBackend::new(width + 2, height + 2)).unwrap();
+                actual
+                    .draw(|frame| crate::Screen::draw(&mut theses, frame, area))
+                    .unwrap();
+                assert_eq!(
+                    actual.backend().buffer(),
+                    expected.backend().buffer(),
+                    "{populated} {width}x{height}"
+                );
+            }
+        }
+    }
 
     fn press(component: &mut ThesesComponent, code: KeyCode) -> Option<Action> {
         crate::Screen::handle_key(component, KeyEvent::new(code, KeyModifiers::NONE))

@@ -1,7 +1,8 @@
 use super::status_bar::{
     draw_status_bar_wide, pane_hints, status_bar_narrow, status_bar_tabs, NarrowTab,
 };
-use crate::screen::{color, Screen, Style};
+use crate::screen::{color, FrameCanvas, PaintCanvas, Screen, Style};
+use crate::theme::Palette;
 use crate::Action;
 use crossterm::event::{KeyCode, KeyEvent};
 use std::collections::{BTreeMap, BTreeSet};
@@ -156,6 +157,15 @@ impl crate::Screen for AskState {
         "chat"
     }
 
+    fn paint_into(&self, screen: &mut Screen) {
+        draw_ask_live(screen, self);
+    }
+
+    fn draw(&mut self, frame: &mut ratatui::Frame, area: ratatui::layout::Rect) {
+        let mut canvas = FrameCanvas::new(frame, area, Palette::Dark);
+        draw_ask_live(&mut canvas, self);
+    }
+
     fn handle_key(&mut self, key: KeyEvent) -> Option<Action> {
         if self.editing {
             match key.code {
@@ -271,12 +281,6 @@ impl crate::Screen for AskState {
             }
         }
     }
-
-    fn draw(&mut self, frame: &mut ratatui::Frame, area: ratatui::layout::Rect) {
-        let mut screen = Screen::new(area.width as usize, area.height as usize);
-        draw_ask_live(&mut screen, self);
-        crate::screen::blit(frame, &screen, area);
-    }
 }
 
 /// Rectangles are exclusive at the right and bottom edges. Panes convert
@@ -289,10 +293,10 @@ struct AskLayout {
 }
 
 impl AskLayout {
-    fn new(screen: &Screen, zoomed: bool) -> Self {
-        let bottom = screen.h.saturating_sub(2);
-        let end_x = screen.w.saturating_sub(1);
-        if screen.w < 100 || zoomed {
+    fn new(screen: &impl PaintCanvas, zoomed: bool) -> Self {
+        let bottom = screen.height().saturating_sub(2);
+        let end_x = screen.width().saturating_sub(1);
+        if screen.width() < 100 || zoomed {
             let grid = super::pane_layout(1, 0, end_x, bottom, &[bottom], &[end_x - 1]);
             Self {
                 conversation: grid[0][0],
@@ -300,7 +304,7 @@ impl AskLayout {
                 citations: None,
             }
         } else {
-            let left_width = screen.w - 38;
+            let left_width = screen.width() - 38;
             let side_top = bottom / 2;
             let columns = super::pane_layout(1, 0, end_x, bottom, &[bottom], &[left_width, 36]);
             let side = super::pane_layout(
@@ -340,7 +344,7 @@ fn ask_is_empty(state: &AskState) -> bool {
 
 /// Stateful Ask render. The transcript, target table and citation table each
 /// paint inside their own layout rectangle.
-pub fn draw_ask_live(screen: &mut Screen, state: &AskState) {
+pub fn draw_ask_live(screen: &mut impl PaintCanvas, state: &AskState) {
     let layout = AskLayout::new(screen, state.zoomed);
     let empty = ask_is_empty(state);
     if empty {
@@ -352,15 +356,15 @@ pub fn draw_ask_live(screen: &mut Screen, state: &AskState) {
     if !empty {
         paint_ask_dynamic(screen, state, layout);
     }
-    if screen.w >= 160 {
-        draw_status_bar_wide(screen, screen.h - 1, screen.w, "5 Ask");
-    } else if screen.w < 100 {
+    if screen.width() >= 160 {
+        draw_status_bar_wide(screen, screen.height() - 1, screen.width(), "5 Ask");
+    } else if screen.width() < 100 {
         status_bar_narrow(screen, NarrowTab::Ask);
     } else {
         status_bar_tabs(
             screen,
-            screen.h - 1,
-            screen.w,
+            screen.height() - 1,
+            screen.width(),
             13,
             "5 Ask",
             &[(2, "1"), (5, "2"), (8, "3"), (11, "4")],
@@ -369,12 +373,12 @@ pub fn draw_ask_live(screen: &mut Screen, state: &AskState) {
     }
 }
 
-fn paint_empty_conversation(screen: &mut Screen, layout: AskLayout) {
+fn paint_empty_conversation(screen: &mut impl PaintCanvas, layout: AskLayout) {
     let (x, y, _, _) = layout.conversation;
     let right = layout.right();
     let bottom = layout.bottom();
     let narrow = layout.targets.is_none();
-    let title = if screen.w >= 160 || narrow {
+    let title = if screen.width() >= 160 || narrow {
         vec![("5 ask", Style::fg(color::BLUE).bold())]
     } else {
         vec![
@@ -417,7 +421,11 @@ fn paint_empty_conversation(screen: &mut Screen, layout: AskLayout) {
     screen.fill(x + 35, bottom - 1, right, bottom, Style::fg(color::FG));
 }
 
-fn paint_side_panes(screen: &mut Screen, targets: super::PaneRect, citations: super::PaneRect) {
+fn paint_side_panes(
+    screen: &mut impl PaintCanvas,
+    targets: super::PaneRect,
+    citations: super::PaneRect,
+) {
     let tx = targets.0;
     let ty = targets.1;
     let tr = targets.2 - 1;
@@ -456,7 +464,7 @@ fn paint_side_panes(screen: &mut Screen, targets: super::PaneRect, citations: su
     screen.text(tx + 1, ty + 1, "    Target  Kind     Evidence", header);
     let selected = Style::fg(color::FG).bg("#13254b");
     screen.fill(tx + 1, ty + 2, tr, ty + 3, selected);
-    if screen.w >= 160 {
+    if screen.width() >= 160 {
         screen.text(tx + 1, ty + 2, " ●  apple   company  50+", selected);
     } else {
         screen.put(tx + 2, ty + 2, '●', selected);
@@ -472,7 +480,7 @@ fn paint_side_panes(screen: &mut Screen, targets: super::PaneRect, citations: su
         Style::fg(color::MUTED),
     );
     screen.fill(cx + 1, cy + 1, cr, cy + 2, header);
-    if screen.w >= 160 {
+    if screen.width() >= 160 {
         screen.text(cx + 1, cy + 1, " #    Evidence  Kind", header);
     } else {
         screen.text(cx + 2, cy + 1, "#    Evidence  Kind", header);
@@ -487,24 +495,24 @@ fn paint_side_panes(screen: &mut Screen, targets: super::PaneRect, citations: su
 }
 
 /// Compatibility entry points for the static golden scenarios.
-pub fn draw_ask(screen: &mut Screen) {
+pub fn draw_ask(screen: &mut impl PaintCanvas) {
     draw_ask_live(screen, &AskState::default());
 }
-pub fn draw_ask_wide(screen: &mut Screen) {
+pub fn draw_ask_wide(screen: &mut impl PaintCanvas) {
     draw_ask_live(screen, &AskState::default());
 }
-pub fn draw_ask_narrow(screen: &mut Screen) {
+pub fn draw_ask_narrow(screen: &mut impl PaintCanvas) {
     draw_ask_live(screen, &AskState::default());
 }
 
 /// Compatibility renderer for callers that already painted an empty frame.
 pub fn paint_ask_state(screen: &mut Screen, state: &AskState) {
-    *screen = Screen::themed(screen.palette, screen.w, screen.h);
+    *screen = Screen::themed(screen.palette, screen.width(), screen.height());
     draw_ask_live(screen, state);
 }
 
-fn paint_ask_dynamic(screen: &mut Screen, state: &AskState, layout: AskLayout) {
-    let narrow = screen.w < 100 || state.zoomed;
+fn paint_ask_dynamic(screen: &mut impl PaintCanvas, state: &AskState, layout: AskLayout) {
+    let narrow = screen.width() < 100 || state.zoomed;
     let (left, top, _, _) = layout.conversation;
     let right = layout.right();
     let bottom = layout.bottom();
@@ -627,16 +635,16 @@ fn paint_ask_dynamic(screen: &mut Screen, state: &AskState, layout: AskLayout) {
     // Textual fades the focused Ask pane while its transcript is selected.
     for y in top..=bottom {
         for x in [left, right] {
-            let cell = &mut screen.cells[y * screen.w + x];
-            cell.fg = Some("#898989");
+            screen.edit(y * screen.width() + x, |cell| cell.fg = Some("#898989"));
         }
     }
     for x in left + 1..right {
         for y in [top, bottom] {
-            let cell = &mut screen.cells[y * screen.w + x];
-            if cell.fg == Some(color::BLUE) {
-                cell.fg = Some("#898989");
-            }
+            screen.edit(y * screen.width() + x, |cell| {
+                if cell.fg == Some(color::BLUE) {
+                    cell.fg = Some("#898989");
+                }
+            });
         }
     }
     if narrow && state.targets_focus {
@@ -895,17 +903,19 @@ fn paint_ask_dynamic(screen: &mut Screen, state: &AskState, layout: AskLayout) {
         let side_right = targets.2 - 1;
         for y in [targets.1, targets.3 - 1, citations.1, citations.3 - 1] {
             for x in side_x + 2..side_right {
-                let cell = &mut screen.cells[y * screen.w + x];
-                if cell.fg == Some(color::BLUE) {
-                    cell.fg = Some("#898989");
-                }
+                screen.edit(y * screen.width() + x, |cell| {
+                    if cell.fg == Some(color::BLUE) {
+                        cell.fg = Some("#898989");
+                    }
+                });
             }
         }
         for x in side_x + 1..side_right {
-            let cell = &mut screen.cells[(targets.1 + 2) * screen.w + x];
-            if cell.bg == Some("#13254b") {
-                cell.bg = Some("#242424");
-            }
+            screen.edit((targets.1 + 2) * screen.width() + x, |cell| {
+                if cell.bg == Some("#13254b") {
+                    cell.bg = Some("#242424");
+                }
+            });
         }
         let cite_x = citations.0 + 1;
         let cite_y = top_y + 2;
@@ -996,6 +1006,36 @@ fn paint_ask_dynamic(screen: &mut Screen, state: &AskState, layout: AskLayout) {
 #[cfg(test)]
 mod state_tests {
     use super::*;
+    use ratatui::{backend::TestBackend, layout::Rect, Terminal};
+
+    #[test]
+    fn direct_frame_matches_oracle_for_empty_and_editing_states() {
+        for editing in [false, true] {
+            for (width, height) in [(80, 24), (120, 40), (200, 50)] {
+                let mut ask = AskState::default();
+                if editing {
+                    ask.input = "What changed?".into();
+                    ask.editing = true;
+                }
+                let area = Rect::new(1, 1, width, height);
+                let mut oracle = Screen::new(width as usize, height as usize);
+                crate::Screen::paint_into(&ask, &mut oracle);
+                let mut expected = Terminal::new(TestBackend::new(width + 2, height + 2)).unwrap();
+                expected
+                    .draw(|frame| crate::screen::blit(frame, &oracle, area))
+                    .unwrap();
+                let mut actual = Terminal::new(TestBackend::new(width + 2, height + 2)).unwrap();
+                actual
+                    .draw(|frame| crate::Screen::draw(&mut ask, frame, area))
+                    .unwrap();
+                assert_eq!(
+                    actual.backend().buffer(),
+                    expected.backend().buffer(),
+                    "editing={editing} {width}x{height}"
+                );
+            }
+        }
+    }
     use crossterm::event::KeyModifiers;
 
     fn key(code: KeyCode) -> KeyEvent {

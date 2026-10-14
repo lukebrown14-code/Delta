@@ -1,8 +1,8 @@
 use super::status_bar::{draw_status_bar_wide, pane_hints, status_bar_narrow, NarrowTab};
-use crate::screen::{color, Screen, Style};
+use crate::screen::{color, FrameCanvas, PaintCanvas, Screen, Style};
+use crate::theme::Palette;
 use crate::Action;
 use crossterm::event::{KeyCode, KeyEvent};
-use ratatui::{layout::Rect, Frame};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HomeCommand {
@@ -35,15 +35,15 @@ impl HomeComponent {
         self.selected = selected.min(rows.saturating_sub(1));
     }
 
-    pub fn paint_into(&self, screen: &mut Screen) {
+    pub fn paint_into(&self, screen: &mut impl PaintCanvas) {
         let Some(home) = &self.snapshot else { return };
         if let Some(setup) = &self.setup {
             render_home_setup(screen, home, setup);
         } else if let Some(live) = &self.live {
             render_home_live(screen, home, live);
-        } else if screen.w < 100 {
+        } else if screen.width() < 100 {
             render_home_empty_narrow(screen, home);
-        } else if screen.w >= 160 {
+        } else if screen.width() >= 160 {
             render_home_empty_wide(screen, home);
         } else {
             render_home_empty_normal(screen, home);
@@ -54,6 +54,15 @@ impl HomeComponent {
 impl crate::Screen for HomeComponent {
     fn name(&self) -> &'static str {
         "home"
+    }
+
+    fn paint_into(&self, screen: &mut Screen) {
+        HomeComponent::paint_into(self, screen);
+    }
+
+    fn draw(&mut self, frame: &mut ratatui::Frame, area: ratatui::layout::Rect) {
+        let mut canvas = FrameCanvas::new(frame, area, Palette::Dark);
+        HomeComponent::paint_into(self, &mut canvas);
     }
 
     fn handle_key(&mut self, key: KeyEvent) -> Option<Action> {
@@ -70,29 +79,23 @@ impl crate::Screen for HomeComponent {
             _ => None,
         }
     }
-
-    fn draw(&mut self, frame: &mut Frame, area: Rect) {
-        let mut screen = Screen::new(area.width as usize, area.height as usize);
-        self.paint_into(&mut screen);
-        crate::screen::blit(frame, &screen, area);
-    }
 }
 
-fn home_panes(screen: &Screen) -> Vec<Vec<super::PaneRect>> {
-    let bottom = screen.h.saturating_sub(3);
-    if screen.w < 100 {
+fn home_panes(screen: &impl PaintCanvas) -> Vec<Vec<super::PaneRect>> {
+    let bottom = screen.height().saturating_sub(3);
+    if screen.width() < 100 {
         let top = 14.min(bottom);
         super::pane_layout(
             1,
             1,
-            screen.w.saturating_sub(1),
+            screen.width().saturating_sub(1),
             bottom + 1,
             &[top, bottom - top],
-            &[screen.w.saturating_sub(2)],
+            &[screen.width().saturating_sub(2)],
         )
     } else {
         let upper = bottom.saturating_sub(7);
-        let top = if screen.w >= 160 {
+        let top = if screen.width() >= 160 {
             upper / 2
         } else {
             upper.saturating_sub(15)
@@ -100,41 +103,44 @@ fn home_panes(screen: &Screen) -> Vec<Vec<super::PaneRect>> {
         let mut panes = super::pane_layout(
             1,
             1,
-            screen.w - 1,
+            screen.width() - 1,
             bottom + 1,
             &[top, upper - top, 7],
-            &[screen.w / 2 - 1, screen.w - screen.w / 2 - 1],
+            &[
+                screen.width() / 2 - 1,
+                screen.width() - screen.width() / 2 - 1,
+            ],
         );
-        panes[2][0].2 = screen.w - 1;
+        panes[2][0].2 = screen.width() - 1;
         panes
     }
 }
 
-fn paint_home_header(screen: &mut Screen, home: &HomeState) {
+fn paint_home_header(screen: &mut impl PaintCanvas, home: &HomeState) {
     screen.put(0, 0, ' ', Style::DEFAULT);
     let chip = Style::fg(color::WHITE).bg(color::BLUE_BG).bold();
     screen.put(1, 0, ' ', chip);
     screen.text(2, 0, "DELTA", chip);
     screen.put(7, 0, ' ', chip);
     screen.text(10, 0, "overview", Style::fg(color::MUTED));
-    let clock_x = screen.w - 1 - home.clock.chars().count();
+    let clock_x = screen.width() - 1 - home.clock.chars().count();
     screen.text(clock_x, 0, &home.clock, Style::fg(color::MUTED));
 }
 
-fn paint_home_status(screen: &mut Screen) {
-    let y = screen.h - 1;
-    if screen.w < 100 {
+fn paint_home_status(screen: &mut impl PaintCanvas) {
+    let y = screen.height() - 1;
+    if screen.width() < 100 {
         status_bar_narrow(screen, NarrowTab::Home);
-    } else if screen.w >= 160 {
-        draw_status_bar_wide(screen, y, screen.w, "1 Home");
+    } else if screen.width() >= 160 {
+        draw_status_bar_wide(screen, y, screen.width(), "1 Home");
     } else {
-        draw_status_bar_home(screen, y, screen.w);
+        draw_status_bar_home(screen, y, screen.width());
     }
 }
 
 /// The populated view keeps the same selected watch row but paints each
 /// remaining pane directly from the live read model below.
-fn paint_home_live_watchlist(screen: &mut Screen, home: &HomeState) {
+fn paint_home_live_watchlist(screen: &mut impl PaintCanvas, home: &HomeState) {
     let pane = home_panes(screen)[0][0];
     screen.pane(
         pane.0,
@@ -149,8 +155,8 @@ fn paint_home_live_watchlist(screen: &mut Screen, home: &HomeState) {
         &pane_hints(&[("↑↓", "select"), ("enter", "open"), ("tab", "next box")]),
     );
     screen.text(
-        2,
-        2,
+        pane.0 + 1,
+        pane.1 + 1,
         " Symbol          close     chg%   age  40 closes",
         Style::fg(color::MUTED),
     );
@@ -158,23 +164,23 @@ fn paint_home_live_watchlist(screen: &mut Screen, home: &HomeState) {
     let white = Style::fg(color::WHITE).bg(color::BLUE_BG);
     let white_bold = white.bold();
     let end = pane.2 - 1;
-    screen.fill(2, 3, end, 4, blue);
-    screen.put(2, 3, ' ', blue);
-    let mut x = screen.text(3, 3, &home.symbol, white_bold);
-    x = screen.text(x + 11, 3, &home.last, white);
-    screen.put(x, 3, ' ', blue);
-    x = screen.text(x + 1, 3, "▲ ", white);
-    screen.text(x, 3, &home.chg_label, white);
-    let spark = if screen.w < 100 || screen.w >= 160 {
+    screen.fill(pane.0 + 1, pane.1 + 2, end, pane.1 + 3, blue);
+    screen.put(pane.0 + 1, pane.1 + 2, ' ', blue);
+    let mut x = screen.text(pane.0 + 2, pane.1 + 2, &home.symbol, white_bold);
+    x = screen.text(x + 11, pane.1 + 2, &home.last, white);
+    screen.put(x, pane.1 + 2, ' ', blue);
+    x = screen.text(x + 1, pane.1 + 2, "▲ ", white);
+    screen.text(x, pane.1 + 2, &home.chg_label, white);
+    let spark = if screen.width() < 100 || screen.width() >= 160 {
         crate::braille::BrailleGraph::filled(home.closes.clone()).rows(end - 42, 1)[0].clone()
     } else {
         home.spark.clone()
     };
-    screen.text(41, 3, &spark, white);
-    if screen.w >= 100 {
+    screen.text(pane.0 + 40, pane.1 + 2, &spark, white);
+    if screen.width() >= 100 {
         screen.text(
-            3,
-            5,
+            pane.0 + 2,
+            pane.1 + 4,
             "spark: 40 daily closes · chg%: move on the day",
             Style::fg(color::MUTED),
         );
@@ -281,21 +287,34 @@ pub struct HomeSetupData {
 }
 
 /// The first-run checklist takes the whole overview when no targets exist.
-fn render_home_setup(screen: &mut Screen, home: &HomeState, setup: &HomeSetupData) {
+fn render_home_setup(screen: &mut impl PaintCanvas, home: &HomeState, setup: &HomeSetupData) {
     paint_home_header(screen, home);
     paint_home_status(screen);
     screen.fill(
         0,
         1,
-        screen.w,
-        screen.h - 1,
+        screen.width(),
+        screen.height() - 1,
         Style::DEFAULT.bg(color::BLACK),
     );
     let muted = Style::fg(color::MUTED).bg(color::BLACK);
-    screen.text(2, 2, "setup", Style::fg(color::FG).bg(color::BLACK).bold());
+    let content = super::pane_layout(
+        0,
+        1,
+        screen.width(),
+        screen.height() - 1,
+        &[screen.height() - 2],
+        &[screen.width()],
+    )[0][0];
     screen.text(
-        2,
-        3,
+        content.0 + 2,
+        content.1 + 1,
+        "setup",
+        Style::fg(color::FG).bg(color::BLACK).bold(),
+    );
+    screen.text(
+        content.0 + 2,
+        content.1 + 2,
         "a few things before Delta can gather anything — each jumps to its fix",
         muted,
     );
@@ -338,17 +357,27 @@ fn render_home_setup(screen: &mut Screen, home: &HomeState, setup: &HomeSetupDat
         ),
     ];
     for (index, (key, label, fix, ok)) in checks.into_iter().enumerate() {
-        let y = index + 5;
-        screen.text(2, y, "▸", Style::fg(color::BLUE).bg(color::BLACK));
-        screen.text(4, y, key, Style::fg(color::BLUE).bg(color::BLACK).bold());
+        let y = content.1 + index + 4;
+        screen.text(
+            content.0 + 2,
+            y,
+            "▸",
+            Style::fg(color::BLUE).bg(color::BLACK),
+        );
+        screen.text(
+            content.0 + 4,
+            y,
+            key,
+            Style::fg(color::BLUE).bg(color::BLACK).bold(),
+        );
         let message = format!("{label} — {fix}");
-        let limit = screen.w.saturating_sub(11);
+        let limit = screen.width().saturating_sub(11);
         let clipped = message.chars().take(limit).collect::<String>();
-        screen.text(7, y, &clipped, muted);
+        screen.text(content.0 + 7, y, &clipped, muted);
         if message.chars().count() <= limit {
-            screen.text(7 + message.chars().count(), y, "  ", muted);
+            screen.text(content.0 + 7 + message.chars().count(), y, "  ", muted);
             screen.text(
-                7 + message.chars().count() + 2,
+                content.0 + 9 + message.chars().count(),
                 y,
                 if ok { "✓" } else { "✗" },
                 Style::fg(if ok { color::GREEN } else { color::RED }).bg(color::BLACK),
@@ -359,7 +388,7 @@ fn render_home_setup(screen: &mut Screen, home: &HomeState, setup: &HomeSetupDat
 
 /// Paint the populated Home frame once from the screen snapshot and the
 /// service-backed analytics, decisions, calendar and thesis rows.
-fn render_home_live(screen: &mut Screen, home: &HomeState, data: &HomeLiveData) {
+fn render_home_live(screen: &mut impl PaintCanvas, home: &HomeState, data: &HomeLiveData) {
     paint_home_header(screen, home);
     paint_home_live_watchlist(screen, home);
     paint_home_status(screen);
@@ -375,47 +404,67 @@ fn render_home_live(screen: &mut Screen, home: &HomeState, data: &HomeLiveData) 
     .filter(|(n, _)| *n > 0)
     .map(|(n, noun)| format!("{n} {noun}{}", if n == 1 { "" } else { "s" }))
     .collect::<Vec<_>>();
-    if screen.w < 100 {
-        screen.fill(3, 5, screen.w - 3, 7, muted);
-        screen.text(3, 5, &home.since_stamp, muted);
-        let mut x = 3 + home.since_stamp.len() + 2;
+    if screen.width() < 100 {
+        let panes = home_panes(screen);
+        let watch = panes[0][0];
+        let agenda = panes[1][0];
+        let summary_x = watch.0 + 2;
+        let summary_y = watch.1 + 4;
+        screen.fill(summary_x, summary_y, watch.2 - 2, summary_y + 2, muted);
+        screen.text(summary_x, summary_y, &home.since_stamp, muted);
+        let mut x = summary_x + home.since_stamp.len() + 2;
         for (i, label) in counts.iter().enumerate() {
             if i > 0 {
                 x += 1;
             }
-            x = screen.text(x, 5, label, muted.bold());
+            x = screen.text(x, summary_y, label, muted.bold());
         }
         if counts.is_empty() {
-            screen.text(x, 5, "nothing new", muted);
+            screen.text(x, summary_y, "nothing new", muted);
             x += "nothing new".len();
         }
         x += 3;
         if data.stale_sources > 0 {
             screen.text(
                 x,
-                5,
+                summary_y,
                 &format!("⚠ {} {}", home.symbol, data.stale_text),
                 warn,
             );
         }
-        screen.text(3, 6, "next  ", muted);
+        screen.text(summary_x, summary_y + 1, "next  ", muted);
         if let Some((symbol, kind, date, _, _)) = data.upcoming.first() {
-            screen.text(9, 6, &format!("{symbol} {kind} {date}"), muted);
+            screen.text(
+                summary_x + 6,
+                summary_y + 1,
+                &format!("{symbol} {kind} {date}"),
+                muted,
+            );
         } else {
-            screen.text(9, 6, "nothing scheduled", muted);
+            screen.text(summary_x + 6, summary_y + 1, "nothing scheduled", muted);
         }
         if !data.theses.is_empty() {
             screen.text(
-                32,
-                6,
+                summary_x + 29,
+                summary_y + 1,
                 &format!("● {} theses tracked", data.theses.len()),
                 muted,
             );
         }
-        screen.fill(55, 5, screen.w - 3, 6, Style::DEFAULT);
-        screen.fill(50, 6, screen.w - 3, 7, Style::DEFAULT);
-        let panes = home_panes(screen);
-        let agenda = panes[1][0];
+        screen.fill(
+            summary_x + 52,
+            summary_y,
+            watch.2 - 2,
+            summary_y + 1,
+            Style::DEFAULT,
+        );
+        screen.fill(
+            summary_x + 47,
+            summary_y + 1,
+            watch.2 - 2,
+            summary_y + 2,
+            Style::DEFAULT,
+        );
         screen.pane(
             agenda.0,
             agenda.1,
@@ -431,9 +480,9 @@ fn render_home_live(screen: &mut Screen, home: &HomeState, data: &HomeLiveData) 
             ],
             &pane_hints(&[("enter", "open"), ("tab", "next box")]),
         );
-        paint_home_agenda_rows(screen, 16);
-        paint_due_row(screen, 16, data.due_reviews);
-        paint_stale_row(screen, 19, data.stale_sources);
+        paint_home_agenda_rows(screen, agenda, agenda.1 + 1);
+        paint_due_row(screen, agenda, agenda.1 + 1, data.due_reviews);
+        paint_stale_row(screen, agenda, agenda.1 + 4, data.stale_sources);
         return;
     }
 
@@ -444,7 +493,7 @@ fn render_home_live(screen: &mut Screen, home: &HomeState, data: &HomeLiveData) 
     let agenda = panes[2][0];
     let (right, mid_top, mid_bottom, agenda_top) =
         (right_pane.0, middle_pane.1, middle_pane.3 - 1, agenda.1);
-    let rx1 = screen.w - 2;
+    let rx1 = right_pane.2 - 1;
     let inner = right + 2;
     let left_end = right - 1;
     let right_width = rx1 - inner - 1;
@@ -470,63 +519,87 @@ fn render_home_live(screen: &mut Screen, home: &HomeState, data: &HomeLiveData) 
         ],
         &pane_hints(&[("3", "research")]),
     );
-    screen.fill(inner, 2, rx1, 13, Style::DEFAULT);
+    screen.fill(
+        inner,
+        right_pane.1 + 1,
+        rx1,
+        right_pane.1 + 12,
+        Style::DEFAULT,
+    );
     let mut x = inner;
     for (i, label) in counts.iter().enumerate() {
         if i > 0 {
             x += 3;
         }
-        x = screen.text(x, 2, label, Style::fg(color::FG).bold());
+        x = screen.text(x, right_pane.1 + 1, label, Style::fg(color::FG).bold());
     }
     if counts.is_empty() {
-        screen.text(inner, 2, "nothing new since your last visit", muted);
+        screen.text(
+            inner,
+            right_pane.1 + 1,
+            "nothing new since your last visit",
+            muted,
+        );
     }
-    screen.text_right(rx1 - 1, 2, &home.since_stamp, muted);
-    screen.fill(inner + 10, 2, inner + 13, 3, Style::fg(color::FG));
+    screen.text_right(rx1 - 1, right_pane.1 + 1, &home.since_stamp, muted);
+    screen.fill(
+        inner + 10,
+        right_pane.1 + 1,
+        inner + 13,
+        right_pane.1 + 2,
+        Style::fg(color::FG),
+    );
     if data.pulse.iter().any(|n| *n > 0) {
         let values: Vec<f64> = data.pulse.iter().map(|n| *n as f64).collect();
         let graph = crate::braille::BrailleGraph::filled(values).rows(right_width, 2);
         for (offset, row) in graph.iter().enumerate() {
             screen.text(
                 inner,
-                4 + offset,
+                right_pane.1 + 3 + offset,
                 row,
                 Style::fg(if offset == 0 { color::BLUE } else { "#3d3d3d" }),
             );
         }
-        screen.text(inner, 6, "30 days ago", muted);
-        screen.text_right(rx1 - 1, 6, "today", muted);
+        screen.text(inner, right_pane.1 + 5, "30 days ago", muted);
+        screen.text_right(rx1 - 1, right_pane.1 + 5, "today", muted);
     }
     if let Some((symbol, n)) = &data.busiest {
-        screen.text(inner, 8, "busiest", muted);
-        screen.fill(inner + 7, 8, inner + 9, 9, Style::fg(color::FG));
-        screen.text(inner + 9, 8, symbol, Style::fg(color::FG));
-        screen.put(inner + 9 + symbol.len(), 8, ' ', Style::fg(color::FG));
-        screen.text(inner + 10 + symbol.len(), 8, &format!("({n})"), muted);
+        let y = right_pane.1 + 7;
+        screen.text(inner, y, "busiest", muted);
+        screen.fill(inner + 7, y, inner + 9, y + 1, Style::fg(color::FG));
+        screen.text(inner + 9, y, symbol, Style::fg(color::FG));
+        screen.put(inner + 9 + symbol.len(), y, ' ', Style::fg(color::FG));
+        screen.text(inner + 10 + symbol.len(), y, &format!("({n})"), muted);
     } else {
-        screen.text(inner, 8, "no activity in the last 30 days", muted);
+        screen.text(
+            inner,
+            right_pane.1 + 7,
+            "no activity in the last 30 days",
+            muted,
+        );
     }
     if let Some((title, age)) = &data.headline {
-        screen.text(inner, 9, "newest", muted);
-        screen.fill(inner + 6, 9, inner + 9, 10, Style::fg(color::FG));
+        let y = right_pane.1 + 8;
+        screen.text(inner, y, "newest", muted);
+        screen.fill(inner + 6, y, inner + 9, y + 1, Style::fg(color::FG));
         let available = rx1 - inner - age.len() - 12;
         let title = truncate_home(title, available);
-        screen.text(inner + 9, 9, &title, Style::fg(color::FG));
-        screen.text_right(rx1 - 1, 9, age, muted);
+        screen.text(inner + 9, y, &title, Style::fg(color::FG));
+        screen.text_right(rx1 - 1, y, age, muted);
     } else {
-        screen.text(inner, 9, "newest   no articles yet", muted);
+        screen.text(inner, right_pane.1 + 8, "newest   no articles yet", muted);
     }
     if data.stale_sources > 0 {
         screen.text(
             inner,
-            11,
+            right_pane.1 + 10,
             &format!("⚠ {} {}", home.symbol, data.stale_text),
             warn,
         );
     } else {
         screen.text(
             inner,
-            11,
+            right_pane.1 + 10,
             "✓ bars and reports fresh · all plugins on",
             muted,
         );
@@ -534,7 +607,7 @@ fn render_home_live(screen: &mut Screen, home: &HomeState, data: &HomeLiveData) 
     if data.due_reviews > 0 {
         screen.text(
             inner,
-            12,
+            right_pane.1 + 11,
             &format!(
                 "⚠ {} decision review{} due · {}",
                 data.due_reviews,
@@ -544,7 +617,12 @@ fn render_home_live(screen: &mut Screen, home: &HomeState, data: &HomeLiveData) 
             warn,
         );
     } else {
-        screen.text(inner, 12, "✓ no decision or evidence reviews due", muted);
+        screen.text(
+            inner,
+            right_pane.1 + 11,
+            "✓ no decision or evidence reviews due",
+            muted,
+        );
     }
 
     screen.pane(
@@ -560,32 +638,44 @@ fn render_home_live(screen: &mut Screen, home: &HomeState, data: &HomeLiveData) 
         &pane_hints(&[("enter", "open evidence")]),
     );
     if data.upcoming.is_empty() {
-        screen.fill(2, mid_top + 1, left_end, mid_bottom, Style::DEFAULT);
+        screen.fill(
+            middle_pane.0 + 1,
+            mid_top + 1,
+            left_end,
+            mid_bottom,
+            Style::DEFAULT,
+        );
         screen.text(
-            3,
+            middle_pane.0 + 2,
             mid_top + 1,
             "nothing scheduled — press 3, then U to gather evidence",
             muted,
         );
     } else {
-        screen.fill(2, mid_top + 1, left_end, mid_bottom, Style::fg(color::FG));
+        screen.fill(
+            middle_pane.0 + 1,
+            mid_top + 1,
+            left_end,
+            mid_bottom,
+            Style::fg(color::FG),
+        );
         screen.text(
-            3,
+            middle_pane.0 + 2,
             mid_top + 1,
             "Symbol   Event        Date    When     Detail",
             Style::fg(color::FG),
         );
         for (index, (symbol, kind, date, when, detail)) in data.upcoming.iter().enumerate() {
             let y = mid_top + 2 + index;
-            screen.text(3, y, symbol, Style::fg(color::FG).bold());
-            screen.text(12, y, kind, Style::fg(color::FG));
-            screen.text(25, y, date, Style::fg(color::FG));
-            screen.text(33, y, when, Style::fg(color::FG));
-            screen.text(42, y, detail, Style::fg(color::FG));
+            screen.text(middle_pane.0 + 2, y, symbol, Style::fg(color::FG).bold());
+            screen.text(middle_pane.0 + 11, y, kind, Style::fg(color::FG));
+            screen.text(middle_pane.0 + 24, y, date, Style::fg(color::FG));
+            screen.text(middle_pane.0 + 32, y, when, Style::fg(color::FG));
+            screen.text(middle_pane.0 + 41, y, detail, Style::fg(color::FG));
         }
     }
     screen.text(
-        3,
+        middle_pane.0 + 2,
         mid_bottom - 1,
         "calendar plugin: earnings & dividends only",
         muted,
@@ -675,22 +765,48 @@ fn render_home_live(screen: &mut Screen, home: &HomeState, data: &HomeLiveData) 
     }
 
     if !data.upcoming.is_empty() {
-        style_table_row(screen, 2, left_end, mid_top + 1, color::PANEL, true);
-        style_table_row(screen, 2, left_end, mid_top + 2, "#242424", false);
+        style_table_row(
+            screen,
+            middle_pane.0 + 1,
+            left_end,
+            mid_top + 1,
+            color::PANEL,
+            true,
+        );
+        style_table_row(
+            screen,
+            middle_pane.0 + 1,
+            left_end,
+            mid_top + 2,
+            "#242424",
+            false,
+        );
     }
     if !data.theses.is_empty() {
         style_table_row(screen, right + 1, rx1, mid_top + 3, color::PANEL, true);
         style_table_row(screen, right + 1, rx1, mid_top + 4, "#242424", false);
     }
-    screen.fill(45, mid_bottom - 1, left_end, mid_bottom, Style::DEFAULT);
-    screen.put(2, mid_bottom - 1, ' ', Style::DEFAULT);
+    screen.fill(
+        middle_pane.0 + 44,
+        mid_bottom - 1,
+        left_end,
+        mid_bottom,
+        Style::DEFAULT,
+    );
+    screen.put(middle_pane.0 + 1, mid_bottom - 1, ' ', Style::DEFAULT);
     if !data.theses.is_empty() {
         for x in inner..inner + 12 {
-            screen.cells[(mid_top + 1) * screen.w + x].fg = Some(color::MUTED);
+            screen.edit((mid_top + 1) * screen.width() + x, |cell| {
+                cell.fg = Some(color::MUTED)
+            });
         }
-        screen.cells[(mid_top + 5) * screen.w + inner].fg = Some(color::MUTED);
+        screen.edit((mid_top + 5) * screen.width() + inner, |cell| {
+            cell.fg = Some(color::MUTED)
+        });
         for x in rx1 - 12..rx1 - 1 {
-            screen.cells[(mid_top + 5) * screen.w + x].fg = Some(color::MUTED);
+            screen.edit((mid_top + 5) * screen.width() + x, |cell| {
+                cell.fg = Some(color::MUTED)
+            });
         }
     }
 
@@ -709,13 +825,13 @@ fn render_home_live(screen: &mut Screen, home: &HomeState, data: &HomeLiveData) 
         ],
         &pane_hints(&[("enter", "open"), ("tab", "next box")]),
     );
-    paint_home_agenda_rows(screen, agenda_top + 1);
-    paint_due_row(screen, agenda_top + 1, data.due_reviews);
-    paint_stale_row(screen, agenda_top + 4, data.stale_sources);
+    paint_home_agenda_rows(screen, agenda, agenda_top + 1);
+    paint_due_row(screen, agenda, agenda_top + 1, data.due_reviews);
+    paint_stale_row(screen, agenda, agenda_top + 4, data.stale_sources);
 }
 
 fn style_table_row(
-    screen: &mut Screen,
+    screen: &mut impl PaintCanvas,
     x0: usize,
     x1: usize,
     y: usize,
@@ -723,48 +839,54 @@ fn style_table_row(
     bold: bool,
 ) {
     for x in x0..x1 {
-        let cell = &mut screen.cells[y * screen.w + x];
-        cell.fg = Some(color::FG);
-        cell.bg = Some(bg);
-        cell.bold = bold || cell.bold;
+        screen.edit(y * screen.width() + x, |cell| {
+            cell.fg = Some(color::FG);
+            cell.bg = Some(bg);
+            cell.bold |= bold;
+        });
     }
 }
 
-fn paint_home_agenda_rows(screen: &mut Screen, first_row: usize) {
+fn paint_home_agenda_rows(screen: &mut impl PaintCanvas, pane: super::PaneRect, first_row: usize) {
     for (offset, key) in ["6", "4", "3", "2"].into_iter().enumerate() {
         let y = first_row + offset;
-        screen.text(3, y, "▸", Style::fg(color::BLUE));
-        screen.text(5, y, key, Style::fg(color::BLUE).bold());
+        screen.text(pane.0 + 2, y, "▸", Style::fg(color::BLUE));
+        screen.text(pane.0 + 4, y, key, Style::fg(color::BLUE).bold());
     }
     for (offset, message) in [" no falsifier hits", " no earnings in the next 7 days"]
         .into_iter()
         .enumerate()
     {
         let y = first_row + offset + 1;
-        screen.text(8, y, "✓", Style::fg(color::MUTED));
-        screen.text(9, y, message, Style::fg(color::MUTED));
+        screen.text(pane.0 + 7, y, "✓", Style::fg(color::MUTED));
+        screen.text(pane.0 + 8, y, message, Style::fg(color::MUTED));
     }
 }
 
-fn paint_due_row(screen: &mut Screen, y: usize, due: usize) {
-    screen.fill(8, y, screen.w - 4, y + 1, Style::DEFAULT);
+fn paint_due_row(screen: &mut impl PaintCanvas, pane: super::PaneRect, y: usize, due: usize) {
+    screen.fill(pane.0 + 7, y, pane.2 - 3, y + 1, Style::DEFAULT);
     if due > 0 {
         screen.text(
-            8,
+            pane.0 + 7,
             y,
             &format!("{due} decision review due"),
             Style::fg(color::MUTED).bold(),
         );
     } else {
-        screen.text(8, y, "✓ no decision reviews due", Style::fg(color::MUTED));
+        screen.text(
+            pane.0 + 7,
+            y,
+            "✓ no decision reviews due",
+            Style::fg(color::MUTED),
+        );
     }
 }
 
-fn paint_stale_row(screen: &mut Screen, y: usize, stale: usize) {
-    screen.fill(8, y, screen.w - 4, y + 1, Style::DEFAULT);
+fn paint_stale_row(screen: &mut impl PaintCanvas, pane: super::PaneRect, y: usize, stale: usize) {
+    screen.fill(pane.0 + 7, y, pane.2 - 3, y + 1, Style::DEFAULT);
     if stale > 0 {
         screen.text(
-            8,
+            pane.0 + 7,
             y,
             &format!(
                 "⚠ {stale} stale source{}",
@@ -773,7 +895,12 @@ fn paint_stale_row(screen: &mut Screen, y: usize, stale: usize) {
             Style::fg(color::AMBER),
         );
     } else {
-        screen.text(8, y, "✓ bars and reports fresh", Style::fg(color::MUTED));
+        screen.text(
+            pane.0 + 7,
+            y,
+            "✓ bars and reports fresh",
+            Style::fg(color::MUTED),
+        );
     }
 }
 
@@ -792,9 +919,8 @@ fn truncate_home(text: &str, width: usize) -> String {
 /// The Home screen: header chip + clock, watchlist / since-you-last-looked,
 /// upcoming / theses, the agenda, and the status bar with `1 Home` active
 /// (port of `delta/tui/screens/home.py` at the captured 120x40 layout).
-fn render_home_empty_normal(screen: &mut Screen, home: &HomeState) {
-    let w = screen.w;
-    let content_bottom = screen.h - 3; // 37 at h=40
+fn render_home_empty_normal(screen: &mut impl PaintCanvas, home: &HomeState) {
+    let w = screen.width();
     let panes = home_panes(screen);
     let top_left = panes[0][0];
     let top_right = panes[0][1];
@@ -802,15 +928,7 @@ fn render_home_empty_normal(screen: &mut Screen, home: &HomeState) {
     let middle_right = panes[1][1];
     let agenda = panes[2][0];
 
-    // Header row: inked DELTA chip, "overview", clock right-aligned.
-    screen.put(0, 0, ' ', Style::DEFAULT);
-    let chip = Style::fg(color::WHITE).bg(color::BLUE_BG).bold();
-    screen.put(1, 0, ' ', chip);
-    screen.text(2, 0, "DELTA", chip);
-    screen.put(7, 0, ' ', chip);
-    screen.text(10, 0, "overview", Style::fg(color::MUTED));
-    let clock_x = w - 1 - home.clock.chars().count();
-    screen.text(clock_x, 0, &home.clock, Style::fg(color::MUTED));
+    paint_home_header(screen, home);
 
     // Row 1: watchlist (focused) + since you last looked (blurred).
     screen.pane(
@@ -837,51 +955,67 @@ fn render_home_empty_normal(screen: &mut Screen, home: &HomeState) {
 
     // Watchlist table: muted header, selected row in $primary.
     let header = " Symbol          close     chg%   age  40 closes";
-    screen.text(2, 2, header, Style::fg(color::MUTED));
+    screen.text(
+        top_left.0 + 1,
+        top_left.1 + 1,
+        header,
+        Style::fg(color::MUTED),
+    );
     let blue = Style::DEFAULT.bg(color::BLUE_BG);
-    screen.fill(2, 3, 59, 4, blue);
+    screen.fill(
+        top_left.0 + 1,
+        top_left.1 + 2,
+        top_left.2 - 1,
+        top_left.1 + 3,
+        blue,
+    );
     let white = Style::fg(color::WHITE).bg(color::BLUE_BG);
     let white_bold = Style::fg(color::WHITE).bg(color::BLUE_BG).bold();
-    screen.put(2, 3, ' ', blue);
-    let mut x = screen.text(3, 3, &home.symbol, white_bold);
-    x = screen.text(x + 11, 3, &home.last, white);
-    screen.put(x, 3, ' ', blue);
-    x = screen.text(x + 1, 3, "▲ ", white);
-    x = screen.text(x, 3, &home.chg_label, white);
+    screen.put(top_left.0 + 1, top_left.1 + 2, ' ', blue);
+    let mut x = screen.text(top_left.0 + 2, top_left.1 + 2, &home.symbol, white_bold);
+    x = screen.text(x + 11, top_left.1 + 2, &home.last, white);
+    screen.put(x, top_left.1 + 2, ' ', blue);
+    x = screen.text(x + 1, top_left.1 + 2, "▲ ", white);
+    x = screen.text(x, top_left.1 + 2, &home.chg_label, white);
     let _ = x;
-    screen.text(41, 3, &home.spark, white);
+    screen.text(top_left.0 + 40, top_left.1 + 2, &home.spark, white);
     // Row 5: the spark legend.
     screen.text(
-        3,
-        5,
+        top_left.0 + 2,
+        top_left.1 + 4,
         "spark: 40 daily closes · chg%: move on the day",
         Style::fg(color::MUTED),
     );
 
     // Since-you-last-looked: empty-run summary, stale warnings.
     screen.text(
-        62,
-        2,
+        top_right.0 + 2,
+        top_right.1 + 1,
         HomeFeed::text(&home.feed.since_line, feed_seed::SINCE_LINE),
         Style::fg(color::MUTED),
     );
-    screen.text(102, 2, &home.since_stamp, Style::fg(color::MUTED));
     screen.text(
-        62,
-        4,
+        top_right.0 + 42,
+        top_right.1 + 1,
+        &home.since_stamp,
+        Style::fg(color::MUTED),
+    );
+    screen.text(
+        top_right.0 + 2,
+        top_right.1 + 3,
         HomeFeed::text(&home.feed.activity_line, feed_seed::ACTIVITY_LINE),
         Style::fg(color::MUTED),
     );
     screen.text(
-        62,
-        5,
+        top_right.0 + 2,
+        top_right.1 + 4,
         HomeFeed::text(&home.feed.newest_line, feed_seed::NEWEST_LINE),
         Style::fg(color::MUTED),
     );
     let warn = Style::fg(color::AMBER);
     screen.text(
-        62,
-        7,
+        top_right.0 + 2,
+        top_right.1 + 6,
         &format!(
             "⚠ {} {}",
             home.symbol,
@@ -889,7 +1023,12 @@ fn render_home_empty_normal(screen: &mut Screen, home: &HomeState) {
         ),
         warn,
     );
-    screen.text(62, 8, "⚠ 2 evidence prompts · 3 evidence", warn);
+    screen.text(
+        top_right.0 + 2,
+        top_right.1 + 7,
+        "⚠ 2 evidence prompts · 3 evidence",
+        warn,
+    );
 
     // Middle row: upcoming + theses.
     screen.pane(
@@ -911,26 +1050,26 @@ fn render_home_empty_normal(screen: &mut Screen, home: &HomeState) {
         &pane_hints(&[("enter", "open thesis"), ("4", "all")]),
     );
     screen.text(
-        3,
-        content_bottom - 20,
+        middle_left.0 + 2,
+        middle_left.1 + 1,
         HomeFeed::text(&home.feed.upcoming_line, feed_seed::UPCOMING_LINE),
         Style::fg(color::MUTED),
     );
     screen.text(
-        3,
-        content_bottom - 19,
+        middle_left.0 + 2,
+        middle_left.1 + 2,
         "calendar plugin: earnings & dividends only",
         Style::fg(color::MUTED),
     );
     screen.text(
-        62,
-        content_bottom - 20,
+        middle_right.0 + 2,
+        middle_right.1 + 1,
         "no theses yet",
         Style::fg(color::MUTED),
     );
     screen.text(
-        62,
-        content_bottom - 18,
+        middle_right.0 + 2,
+        middle_right.1 + 3,
         "4 opens the theses desk — n tracks a claim",
         Style::fg(color::MUTED),
     );
@@ -965,8 +1104,8 @@ fn render_home_empty_normal(screen: &mut Screen, home: &HomeState) {
         ("2", "⚠", " 1 stale source", Style::fg(color::AMBER)),
     ];
     for (index, (key, glyph, message, style)) in rows.into_iter().enumerate() {
-        let y = content_bottom - 5 + index;
-        let mut x = 3;
+        let y = agenda.1 + 1 + index;
+        let mut x = agenda.0 + 2;
         x = screen.text(x, y, "▸", Style::fg(color::BLUE));
         x += 1;
         x = screen.text(x, y, key, Style::fg(color::BLUE).bold());
@@ -975,11 +1114,11 @@ fn render_home_empty_normal(screen: &mut Screen, home: &HomeState) {
         screen.text(x, y, message, style);
     }
 
-    draw_status_bar_home(screen, screen.h - 1, w);
+    draw_status_bar_home(screen, screen.height() - 1, w);
 }
 
 /// Status bar with the Home tab active (`1 Home`).
-fn draw_status_bar_home(screen: &mut Screen, y: usize, w: usize) {
+fn draw_status_bar_home(screen: &mut impl PaintCanvas, y: usize, w: usize) {
     let panel = Style::DEFAULT.bg(color::PANEL);
     let muted = Style::fg(color::MUTED).bold().bg(color::PANEL);
     let active_fg = Style::fg(color::WHITE).bold().bg(color::BLUE_BG);
@@ -1019,10 +1158,8 @@ fn draw_status_bar_home(screen: &mut Screen, y: usize, w: usize) {
 }
 
 /// Home at 200x50: the 120 layout with the split at half width.
-fn render_home_empty_wide(screen: &mut Screen, home: &HomeState) {
-    let content_bottom = screen.h - 3; // 47 at h=50
-    let mid_bottom = screen.h - 10; // 40 at h=50
-    let w = screen.w;
+fn render_home_empty_wide(screen: &mut impl PaintCanvas, home: &HomeState) {
+    let w = screen.width();
     let panes = home_panes(screen);
     let top_left = panes[0][0];
     let top_right = panes[0][1];
@@ -1034,15 +1171,7 @@ fn render_home_empty_wide(screen: &mut Screen, home: &HomeState) {
     let rx1 = top_right.2 - 1;
     let inner = rx0 + 2; // right-hand content column
 
-    // Header row.
-    screen.put(0, 0, ' ', Style::DEFAULT);
-    let chip = Style::fg(color::WHITE).bg(color::BLUE_BG).bold();
-    screen.put(1, 0, ' ', chip);
-    screen.text(2, 0, "DELTA", chip);
-    screen.put(7, 0, ' ', chip);
-    screen.text(10, 0, "overview", Style::fg(color::MUTED));
-    let clock_x = w - 1 - home.clock.chars().count();
-    screen.text(clock_x, 0, &home.clock, Style::fg(color::MUTED));
+    paint_home_header(screen, home);
 
     // Watchlist + since-you-last-looked.
     screen.pane(
@@ -1068,25 +1197,30 @@ fn render_home_empty_wide(screen: &mut Screen, home: &HomeState) {
     );
 
     let header = " Symbol          close     chg%   age  40 closes";
-    screen.text(2, 2, header, Style::fg(color::MUTED));
+    screen.text(
+        top_left.0 + 1,
+        top_left.1 + 1,
+        header,
+        Style::fg(color::MUTED),
+    );
     let blue = Style::DEFAULT.bg(color::BLUE_BG);
     let white = Style::fg(color::WHITE).bg(color::BLUE_BG);
     let white_bold = Style::fg(color::WHITE).bg(color::BLUE_BG).bold();
-    screen.fill(2, 3, lx1, 4, blue);
-    screen.put(2, 3, ' ', blue);
-    let mut x = screen.text(3, 3, &home.symbol, white_bold);
-    x = screen.text(x + 11, 3, &home.last, white);
-    screen.put(x, 3, ' ', blue);
-    x = screen.text(x + 1, 3, "▲ ", white);
-    x = screen.text(x, 3, &home.chg_label, white);
+    screen.fill(top_left.0 + 1, top_left.1 + 2, lx1, top_left.1 + 3, blue);
+    screen.put(top_left.0 + 1, top_left.1 + 2, ' ', blue);
+    let mut x = screen.text(top_left.0 + 2, top_left.1 + 2, &home.symbol, white_bold);
+    x = screen.text(x + 11, top_left.1 + 2, &home.last, white);
+    screen.put(x, top_left.1 + 2, ' ', blue);
+    x = screen.text(x + 1, top_left.1 + 2, "▲ ", white);
+    x = screen.text(x, top_left.1 + 2, &home.chg_label, white);
     let _ = x;
     let spark_w = lx1 - 42;
     let spark =
         crate::braille::BrailleGraph::filled(home.closes.clone()).rows(spark_w, 1)[0].clone();
-    screen.text(41, 3, &spark, white);
+    screen.text(top_left.0 + 40, top_left.1 + 2, &spark, white);
     screen.text(
-        3,
-        5,
+        top_left.0 + 2,
+        top_left.1 + 4,
         "spark: 40 daily closes · chg%: move on the day",
         Style::fg(color::MUTED),
     );
@@ -1095,26 +1229,26 @@ fn render_home_empty_wide(screen: &mut Screen, home: &HomeState) {
     let warn = Style::fg(color::AMBER);
     screen.text(
         inner,
-        2,
+        top_right.1 + 1,
         HomeFeed::text(&home.feed.since_line, feed_seed::SINCE_LINE),
         muted,
     );
-    screen.text_right(rx1 - 1, 2, &home.since_stamp, muted);
+    screen.text_right(rx1 - 1, top_right.1 + 1, &home.since_stamp, muted);
     screen.text(
         inner,
-        4,
+        top_right.1 + 3,
         HomeFeed::text(&home.feed.activity_line, feed_seed::ACTIVITY_LINE),
         muted,
     );
     screen.text(
         inner,
-        5,
+        top_right.1 + 4,
         HomeFeed::text(&home.feed.newest_line, feed_seed::NEWEST_LINE),
         muted,
     );
     screen.text(
         inner,
-        7,
+        top_right.1 + 6,
         &format!(
             "⚠ {} {}",
             home.symbol,
@@ -1122,7 +1256,12 @@ fn render_home_empty_wide(screen: &mut Screen, home: &HomeState) {
         ),
         warn,
     );
-    screen.text(inner, 8, "⚠ 2 evidence prompts · 3 evidence", warn);
+    screen.text(
+        inner,
+        top_right.1 + 7,
+        "⚠ 2 evidence prompts · 3 evidence",
+        warn,
+    );
 
     // Upcoming + theses.
     screen.pane(
@@ -1144,16 +1283,26 @@ fn render_home_empty_wide(screen: &mut Screen, home: &HomeState) {
         &pane_hints(&[("enter", "open thesis"), ("4", "all")]),
     );
     screen.text(
-        3,
-        22,
+        middle_left.0 + 2,
+        middle_left.1 + 1,
         HomeFeed::text(&home.feed.upcoming_line, feed_seed::UPCOMING_LINE),
         muted,
     );
-    screen.text(3, 23, "calendar plugin: earnings & dividends only", muted);
-    screen.text(inner, 22, "no theses yet", muted);
     screen.text(
-        inner,
-        24,
+        middle_left.0 + 2,
+        middle_left.1 + 2,
+        "calendar plugin: earnings & dividends only",
+        muted,
+    );
+    screen.text(
+        middle_right.0 + 2,
+        middle_right.1 + 1,
+        "no theses yet",
+        muted,
+    );
+    screen.text(
+        middle_right.0 + 2,
+        middle_right.1 + 3,
         "4 opens the theses desk — n tracks a claim",
         muted,
     );
@@ -1178,36 +1327,27 @@ fn render_home_empty_wide(screen: &mut Screen, home: &HomeState) {
         ("2", "⚠", " 1 stale source", warn),
     ];
     for (index, (key, glyph, message, style)) in rows.into_iter().enumerate() {
-        let y = mid_bottom + 2 + index;
-        if y > content_bottom - 1 {
+        let y = agenda.1 + 1 + index;
+        if y >= agenda.3 - 1 {
             break; // keep agenda text inside the shrunken pane
         }
-        screen.text(3, y, "▸", Style::fg(color::BLUE));
-        screen.text(5, y, key, Style::fg(color::BLUE).bold());
-        screen.text(8, y, glyph, style);
-        screen.text(9, y, message, style);
+        screen.text(agenda.0 + 2, y, "▸", Style::fg(color::BLUE));
+        screen.text(agenda.0 + 4, y, key, Style::fg(color::BLUE).bold());
+        screen.text(agenda.0 + 7, y, glyph, style);
+        screen.text(agenda.0 + 8, y, message, style);
     }
 
-    draw_status_bar_wide(screen, screen.h - 1, w, "1 Home");
+    draw_status_bar_wide(screen, screen.height() - 1, w, "1 Home");
 }
 
 /// Home at 80x24: one watchlist pane (table + since-you-last-looked lines),
 /// the agenda pane, narrow header/status bar.
-fn render_home_empty_narrow(screen: &mut Screen, home: &HomeState) {
-    let w = screen.w;
+fn render_home_empty_narrow(screen: &mut impl PaintCanvas, home: &HomeState) {
     let panes = home_panes(screen);
     let watch = panes[0][0];
     let agenda = panes[1][0];
 
-    // Header row: inked DELTA chip, "overview", clock right-aligned.
-    screen.put(0, 0, ' ', Style::DEFAULT);
-    let chip = Style::fg(color::WHITE).bg(color::BLUE_BG).bold();
-    screen.put(1, 0, ' ', chip);
-    screen.text(2, 0, "DELTA", chip);
-    screen.put(7, 0, ' ', chip);
-    screen.text(10, 0, "overview", Style::fg(color::MUTED));
-    let clock_x = w - 1 - home.clock.chars().count();
-    screen.text(clock_x, 0, &home.clock, Style::fg(color::MUTED));
+    paint_home_header(screen, home);
 
     let x1 = watch.2 - 1;
     screen.pane(
@@ -1225,28 +1365,28 @@ fn render_home_empty_narrow(screen: &mut Screen, home: &HomeState) {
 
     // Table header and the selected row (blue ink), spark sized to the pane.
     let header = " Symbol          close     chg%   age  40 closes";
-    screen.text(2, 2, header, Style::fg(color::MUTED));
+    screen.text(watch.0 + 1, watch.1 + 1, header, Style::fg(color::MUTED));
     let blue = Style::DEFAULT.bg(color::BLUE_BG);
     let white = Style::fg(color::WHITE).bg(color::BLUE_BG);
     let white_bold = Style::fg(color::WHITE).bg(color::BLUE_BG).bold();
-    screen.fill(2, 3, x1, 4, blue);
-    screen.put(2, 3, ' ', blue);
-    let mut x = screen.text(3, 3, &home.symbol, white_bold);
-    x = screen.text(x + 11, 3, &home.last, white);
-    screen.put(x, 3, ' ', blue);
-    x = screen.text(x + 1, 3, "▲ ", white);
-    x = screen.text(x, 3, &home.chg_label, white);
+    screen.fill(watch.0 + 1, watch.1 + 2, x1, watch.1 + 3, blue);
+    screen.put(watch.0 + 1, watch.1 + 2, ' ', blue);
+    let mut x = screen.text(watch.0 + 2, watch.1 + 2, &home.symbol, white_bold);
+    x = screen.text(x + 11, watch.1 + 2, &home.last, white);
+    screen.put(x, watch.1 + 2, ' ', blue);
+    x = screen.text(x + 1, watch.1 + 2, "▲ ", white);
+    x = screen.text(x, watch.1 + 2, &home.chg_label, white);
     let _ = x;
     let spark_w = x1 - 42;
     let spark =
         crate::braille::BrailleGraph::filled(home.closes.clone()).rows(spark_w, 1)[0].clone();
-    screen.text(41, 3, &spark, white);
+    screen.text(watch.0 + 40, watch.1 + 2, &spark, white);
 
     // Since-you-last-looked, folded into the pane.
     let muted = Style::fg(color::MUTED);
     screen.text(
-        3,
-        5,
+        watch.0 + 2,
+        watch.1 + 4,
         &format!(
             "{}  {}   ",
             home.since_stamp,
@@ -1255,8 +1395,8 @@ fn render_home_empty_narrow(screen: &mut Screen, home: &HomeState) {
         muted,
     );
     screen.text(
-        34,
-        5,
+        watch.0 + 33,
+        watch.1 + 4,
         &format!(
             "⚠ {} {}",
             home.symbol,
@@ -1265,8 +1405,8 @@ fn render_home_empty_narrow(screen: &mut Screen, home: &HomeState) {
         Style::fg(color::AMBER),
     );
     screen.text(
-        3,
-        6,
+        watch.0 + 2,
+        watch.1 + 5,
         &format!(
             "next  {}",
             HomeFeed::text(&home.feed.upcoming_brief, feed_seed::UPCOMING_BRIEF)
@@ -1294,37 +1434,37 @@ fn render_home_empty_narrow(screen: &mut Screen, home: &HomeState) {
         ("2", "⚠", " 1 stale source", Style::fg(color::AMBER)),
     ];
     for (index, (key, glyph, message, style)) in rows.into_iter().enumerate() {
-        let y = 16 + index;
-        if y > screen.h - 4 {
+        let y = agenda.1 + 1 + index;
+        if y >= agenda.3 - 1 {
             break; // keep agenda text inside the shrunken pane
         }
-        screen.text(3, y, "▸", Style::fg(color::BLUE));
-        screen.text(5, y, key, Style::fg(color::BLUE).bold());
-        screen.text(8, y, glyph, style);
-        screen.text(9, y, message, style);
+        screen.text(agenda.0 + 2, y, "▸", Style::fg(color::BLUE));
+        screen.text(agenda.0 + 4, y, key, Style::fg(color::BLUE).bold());
+        screen.text(agenda.0 + 7, y, glyph, style);
+        screen.text(agenda.0 + 8, y, message, style);
     }
 
     status_bar_narrow(screen, NarrowTab::Home);
 }
 
 /// Oracle compatibility entry points. The running component uses the renderers directly.
-pub fn draw_home(screen: &mut Screen, home: &HomeState) {
+pub fn draw_home(screen: &mut impl PaintCanvas, home: &HomeState) {
     render_home_empty_normal(screen, home);
 }
 
-pub fn draw_home_wide(screen: &mut Screen, home: &HomeState) {
+pub fn draw_home_wide(screen: &mut impl PaintCanvas, home: &HomeState) {
     render_home_empty_wide(screen, home);
 }
 
-pub fn draw_home_narrow(screen: &mut Screen, home: &HomeState) {
+pub fn draw_home_narrow(screen: &mut impl PaintCanvas, home: &HomeState) {
     render_home_empty_narrow(screen, home);
 }
 
-pub fn draw_home_live(screen: &mut Screen, home: &HomeState, data: &HomeLiveData) {
+pub fn draw_home_live(screen: &mut impl PaintCanvas, home: &HomeState, data: &HomeLiveData) {
     render_home_live(screen, home, data);
 }
 
-pub fn draw_home_setup(screen: &mut Screen, home: &HomeState, setup: &HomeSetupData) {
+pub fn draw_home_setup(screen: &mut impl PaintCanvas, home: &HomeState, setup: &HomeSetupData) {
     render_home_setup(screen, home, setup);
 }
 
@@ -1333,6 +1473,46 @@ mod component_tests {
     use super::*;
     use crate::Screen as _;
     use crossterm::event::KeyModifiers;
+    use ratatui::{backend::TestBackend, layout::Rect, Terminal};
+
+    #[test]
+    fn direct_frame_matches_oracle_at_each_layout_size() {
+        for (width, height) in [(80, 24), (120, 40), (200, 50)] {
+            let mut home = HomeComponent::default();
+            home.set_snapshot(
+                HomeState {
+                    clock: "10:00".into(),
+                    symbol: "AAPL".into(),
+                    last: String::new(),
+                    chg_label: String::new(),
+                    spark: String::new(),
+                    since_stamp: String::new(),
+                    closes: Vec::new(),
+                    feed: HomeFeed::default(),
+                },
+                None,
+                None,
+                0,
+                0,
+            );
+            let area = Rect::new(1, 1, width, height);
+            let mut oracle = Screen::new(width as usize, height as usize);
+            home.paint_into(&mut oracle);
+            let mut expected = Terminal::new(TestBackend::new(width + 2, height + 2)).unwrap();
+            expected
+                .draw(|frame| crate::screen::blit(frame, &oracle, area))
+                .unwrap();
+            let mut actual = Terminal::new(TestBackend::new(width + 2, height + 2)).unwrap();
+            actual
+                .draw(|frame| crate::Screen::draw(&mut home, frame, area))
+                .unwrap();
+            assert_eq!(
+                actual.backend().buffer(),
+                expected.backend().buffer(),
+                "{width}x{height}"
+            );
+        }
+    }
 
     #[test]
     fn home_selection_and_open_are_screen_owned() {

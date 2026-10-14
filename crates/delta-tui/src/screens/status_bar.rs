@@ -1,4 +1,4 @@
-use crate::screen::{color, Screen, Style};
+use crate::screen::{color, PaintCanvas, Style};
 
 /// The status bar's live cells (`shell.py::StatusBar._refresh`): data age,
 /// provider, all-time spend. The default is the exporter-world footer the
@@ -26,9 +26,9 @@ impl Default for Footer {
 /// The Settings tab's normal-breakpoint bar: digit keys at 3-cell pitch
 /// and the active `c Settings` chip inside the live cluster (the layout
 /// the `settings-120x40` golden pins).
-pub(super) fn settings_status_bar(screen: &mut Screen, footer: &Footer) {
-    let y = screen.h - 1;
-    let w = screen.w;
+pub(super) fn settings_status_bar(screen: &mut impl PaintCanvas, footer: &Footer) {
+    let y = screen.height() - 1;
+    let w = screen.width();
     let panel = Style::DEFAULT.bg(color::PANEL);
     let muted = Style::fg(color::MUTED).bold().bg(color::PANEL);
     let active_fg = Style::fg(color::WHITE).bold().bg(color::BLUE_BG);
@@ -96,7 +96,7 @@ pub(super) fn pane_hints(pairs: &[(&str, &str)]) -> Vec<(String, Style)> {
 }
 
 /// Status bar with an arbitrary active tab label.
-pub(super) fn draw_status_bar_nav(screen: &mut Screen, y: usize, w: usize, active: &str) {
+pub(super) fn draw_status_bar_nav(screen: &mut impl PaintCanvas, y: usize, w: usize, active: &str) {
     let panel = Style::DEFAULT.bg(color::PANEL);
     let muted = Style::fg(color::MUTED).bold().bg(color::PANEL);
     let chip_bg = Style::DEFAULT.bg(color::BLUE_BG);
@@ -145,7 +145,7 @@ pub(super) fn draw_status_bar_nav(screen: &mut Screen, y: usize, w: usize, activ
     screen.put(w - 1, y, ' ', Style::DEFAULT.bg(color::BLACK));
 }
 
-fn x_active_label(screen: &mut Screen, y: usize, mut x: usize, label: &str) {
+fn x_active_label(screen: &mut impl PaintCanvas, y: usize, mut x: usize, label: &str) {
     // "n Label" with a trailing chip space (no leading one).
     let mut parts = label.chars();
     let key = parts.next().unwrap();
@@ -171,19 +171,19 @@ pub enum NarrowTab {
     Settings,
 }
 
-pub(super) fn status_bar_narrow(screen: &mut Screen, active: NarrowTab) {
+pub(super) fn status_bar_narrow(screen: &mut impl PaintCanvas, active: NarrowTab) {
     status_bar_narrow_with_footer(screen, active, &Footer::default());
 }
 
 /// The narrow bar with live footer cells (provider hidden below the
 /// minimal width, as Python hides it).
 pub(super) fn status_bar_narrow_with_footer(
-    screen: &mut Screen,
+    screen: &mut impl PaintCanvas,
     active: NarrowTab,
     footer: &Footer,
 ) {
-    let y = screen.h - 1;
-    let w = screen.w;
+    let y = screen.height() - 1;
+    let w = screen.width();
     let panel = Style::DEFAULT.bg(color::PANEL);
     let muted = Style::fg(color::MUTED).bold().bg(color::PANEL);
     let active_fg = Style::fg(color::WHITE).bold().bg(color::BLUE_BG);
@@ -273,7 +273,7 @@ pub(super) fn status_bar_narrow_with_footer(
 /// Shared tab-bar painter: inactive keys, an optional active chip, then the
 /// cluster.
 pub(super) fn status_bar_tabs(
-    screen: &mut Screen,
+    screen: &mut impl PaintCanvas,
     y: usize,
     w: usize,
     chip_x: usize,
@@ -335,13 +335,18 @@ pub(super) fn status_bar_tabs(
 }
 
 /// Wide status bar: every tab shows its label; `active` gets the chip.
-pub(super) fn draw_status_bar_wide(screen: &mut Screen, y: usize, w: usize, active: &str) {
+pub(super) fn draw_status_bar_wide(
+    screen: &mut impl PaintCanvas,
+    y: usize,
+    w: usize,
+    active: &str,
+) {
     draw_status_bar_wide_with_footer(screen, y, w, active, &Footer::default());
 }
 
 /// The wide bar with live footer cells (`data 1d`, provider, spend).
 pub(super) fn draw_status_bar_wide_with_footer(
-    screen: &mut Screen,
+    screen: &mut impl PaintCanvas,
     y: usize,
     w: usize,
     active: &str,
