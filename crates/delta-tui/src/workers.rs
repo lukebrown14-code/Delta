@@ -188,6 +188,28 @@ async fn send_metrics(
     });
 }
 
+/// Run a `!Send` async block to completion without leaving the `Send`
+/// world: `build` executes on a blocking-pool thread and returns the
+/// future there, so non-Send captures never cross into a spawned task;
+/// the future is driven on a dedicated single-threaded runtime. Async
+/// callers stay plain abortable tasks and just await the outcome.
+pub async fn host_non_send<T, F, Fut>(build: F) -> Result<T, String>
+where
+    F: FnOnce() -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = T>,
+    T: Send + 'static,
+{
+    tokio::task::spawn_blocking(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| format!("runtime failed: {e}"))?;
+        Ok(runtime.block_on(build()))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// Run the configured gather pipeline over the universe on `Gather`
 /// requests: ingest + Extraction + sentiment, with per-stage progress on
 /// the status line.
@@ -232,27 +254,16 @@ async fn gather_worker(
             .collect();
         // `gather_configured`'s future is not `Send` (the sentiment stage
         // threads a `&dyn Fn` log callback), so each run is hosted on the
-        // blocking pool with its own single-threaded runtime; the worker
-        // stays a plain abortable task and just awaits the outcome.
+        // blocking pool through `host_non_send`; the worker stays a plain
+        // abortable task and just awaits the outcome.
         let status_tx = bus.clone();
-        let run = tokio::task::spawn_blocking(
-            move || -> Result<delta_services::pipeline::GatherResult, String> {
-                let runtime = tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                    .map_err(|e| format!("gather runtime failed: {e}"))?;
-                runtime
-                    .block_on(delta_services::gather_configured(
-                        &mut db,
-                        &cfg,
-                        &selected,
-                        |message| {
-                            let _ = status_tx.send(Action::Status(message.to_string()));
-                        },
-                    ))
-                    .map_err(|e| e.to_string())
-            },
-        );
+        let run = host_non_send(move || async move {
+            delta_services::gather_configured(&mut db, &cfg, &selected, |message| {
+                let _ = status_tx.send(Action::Status(message.to_string()));
+            })
+            .await
+            .map_err(|e| e.to_string())
+        });
         match run.await {
             Ok(Ok(result)) => {
                 let _ = bus.send(Action::Gathered(result));
@@ -295,6 +306,21 @@ mod tests {
         "db_path = \"test.db\"\nreports_dir = \"reports\"\n\
          [llm]\nprovider = \"custom\"\nbase_url = \"http://127.0.0.1:9\"\n\
          model = \"test/model\"\n\
+         [plugins.rss]\nenabled = false\n\
+         [plugins.asx_announcements]\nenabled = false\n\
+         [plugins.sec_edgar]\nenabled = false\n\
+         [plugins.yfinance]\nenabled = false\n\
+         [plugins.yfinance_calendar]\nenabled = false\n"
+            .to_string()
+    }
+
+    /// The same offline config but with no `[llm] model` and no
+    /// `[llm.routing]`: model resolution for the extract and sentiment
+    /// stages fails before any client is built, so both stages degrade
+    /// into warnings without a single network call.
+    fn unrouted_llm_config() -> String {
+        "db_path = \"test.db\"\nreports_dir = \"reports\"\n\
+         [llm]\nprovider = \"custom\"\nbase_url = \"http://127.0.0.1:9\"\n\
          [plugins.rss]\nenabled = false\n\
          [plugins.asx_announcements]\nenabled = false\n\
          [plugins.sec_edgar]\nenabled = false\n\
@@ -363,6 +389,54 @@ mod tests {
             next(&mut bus_rx).await,
             Action::Status("offline desk: nothing to gather".to_string())
         );
+        drop(tx);
+        let _ = worker.await;
+    }
+
+    #[tokio::test]
+    async fn gather_worker_degrades_to_warnings_when_model_routing_is_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+        std::fs::write(&config_path, unrouted_llm_config()).unwrap();
+        let (bus_tx, mut bus_rx) = mpsc::unbounded_channel();
+        let (tx, rx) = mpsc::unbounded_channel::<Option<String>>();
+        let worker = tokio::spawn(gather_worker(
+            bus_tx,
+            vec![aapl()],
+            Some(dir.path().join("test.db")),
+            Some(config_path),
+            rx,
+        ));
+        tx.send(None).unwrap();
+        assert_eq!(
+            next(&mut bus_rx).await,
+            Action::Status("gathering…".to_string())
+        );
+        // The run still finishes; the unrouted model stages ride along as
+        // warnings on the gathered action, which the app composes the
+        // `· warn:` status suffix from.
+        match next(&mut bus_rx).await {
+            Action::Gathered(result) => {
+                assert!(result.ingested.counts.is_empty());
+                assert_eq!(result.extracted.events, 0);
+                assert_eq!(result.sentiment, 0);
+                assert_eq!(
+                    result.warnings.first().map(String::as_str),
+                    Some(
+                        "extract: no model routed for task \"extract\"; \
+                         set [llm] model or add [llm.routing].extract to config.toml"
+                    )
+                );
+                assert_eq!(
+                    result.warnings.get(1).map(String::as_str),
+                    Some(
+                        "sentiment: no model routed for task \"sentiment\"; \
+                         set [llm] model or add [llm.routing].sentiment to config.toml"
+                    )
+                );
+            }
+            other => panic!("expected Action::Gathered, got {other:?}"),
+        }
         drop(tx);
         let _ = worker.await;
     }
