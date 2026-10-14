@@ -14,7 +14,9 @@ use ratatui::Frame;
 use crate::components::KeyGrid;
 use crate::keymap::{all_items, binding_key};
 use crate::markdown;
-use crate::screen::{color, Screen, Style};
+#[cfg(test)]
+use crate::screen::Screen;
+use crate::screen::{color, PaintCanvas, Style};
 use crate::theme::Theme;
 use crate::Action;
 
@@ -64,14 +66,14 @@ pub fn centred_line(
 /// `(content_x, content_y, content_w, content_h)` for the body (inside the
 /// border and the `1 2` padding).
 pub fn dialog_frame(
-    screen: &mut Screen,
+    screen: &mut impl PaintCanvas,
     width: usize,
     height: usize,
 ) -> (usize, usize, usize, usize) {
-    let x0 = screen.w.saturating_sub(width) / 2;
-    let y0 = screen.h.saturating_sub(height) / 2;
-    let x1 = (x0 + width - 1).min(screen.w - 1);
-    let y1 = (y0 + height - 1).min(screen.h - 1);
+    let x0 = screen.width().saturating_sub(width) / 2;
+    let y0 = screen.height().saturating_sub(height) / 2;
+    let x1 = (x0 + width - 1).min(screen.width() - 1);
+    let y1 = (y0 + height - 1).min(screen.height() - 1);
     // The frame paints its own surface under the border (`background:
     // $surface` on `#dialog-frame`).
     let edge = Style::fg(color::BORDER_BLURRED).bg(color::SURFACE);
@@ -102,7 +104,7 @@ impl GoPicker {
         2 + 1 + 1 + 1 + 4 + 1 + 1 + 1
     }
 
-    pub fn draw_screen(screen: &mut Screen) {
+    pub fn draw_screen(screen: &mut impl PaintCanvas) {
         screen.dim();
         let (cx, cy, cw, _ch) = dialog_frame(screen, MODAL_WIDTH, Self::height());
         // Title, centred whole-line in bold blue (the title widget's colour).
@@ -139,7 +141,7 @@ fn centred_runs(runs: &[(String, Style)], width: usize, pad_style: Style) -> Vec
     out
 }
 
-fn paint_runs(screen: &mut Screen, x: usize, y: usize, runs: &[(String, Style)]) {
+fn paint_runs(screen: &mut impl PaintCanvas, x: usize, y: usize, runs: &[(String, Style)]) {
     let mut cx = x;
     for (text, style) in runs {
         cx = screen.text(cx, y, text, *style);
@@ -165,11 +167,11 @@ pub const TUTORIAL: &str = include_str!("help_tutorial.md");
 
 impl HelpDialog {
     /// The frame is 90% of the screen (`HelpScreen > #dialog-frame`).
-    fn height(screen: &Screen) -> usize {
-        (screen.h * 9 / 10).max(3)
+    fn height(screen: &impl PaintCanvas) -> usize {
+        (screen.height() * 9 / 10).max(3)
     }
 
-    pub fn draw_screen(&self, screen: &mut Screen) {
+    pub fn draw_screen(&self, screen: &mut impl PaintCanvas) {
         screen.dim();
         let height = Self::height(screen);
         let (cx, cy, cw, ch) = dialog_frame(screen, MODAL_WIDTH_WIDE, height);

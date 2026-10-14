@@ -1,5 +1,4 @@
-//! The app: desk data + active pane, painting through the golden `Screen`
-//! model so the live frame is cell-for-cell what the goldens capture. Owns
+//! The app: desk data + active pane, painting into a Ratatui frame. Owns
 //! the event loop, worker startup, the Python-matching bindings, the shell
 //! modals (Go, help, palette) and the theme switch.
 
@@ -19,7 +18,9 @@ use delta_tui::components::CommandPalette;
 use delta_tui::desk::Desk;
 use delta_tui::dialog::{GoPicker, HelpDialog};
 use delta_tui::form::Form;
-use delta_tui::screen::{color, Screen, Style};
+#[cfg(test)]
+use delta_tui::screen::Screen;
+use delta_tui::screen::{color, FrameCanvas, PaintCanvas, Style};
 use delta_tui::screens::decisions::{DecisionCommand, DecisionsData, DecisionsScreen};
 #[cfg(test)]
 use delta_tui::screens::SettingsFocus;
@@ -215,7 +216,7 @@ impl App {
         delta_tui::Screen::handle_key(&mut self.research, key)
     }
 
-    fn paint(&mut self, screen: &mut Screen) {
+    fn paint(&mut self, screen: &mut impl PaintCanvas) {
         match self.tab {
             Tab::Home => {
                 let setup = if self.desk.instruments.is_empty() && self.desk.config_path.is_some() {
@@ -244,23 +245,23 @@ impl App {
                     self.desk.selected,
                     self.desk.instruments.len(),
                 );
-                self.home.paint_into(screen);
+                HomeComponent::paint_into(&self.home, screen);
             }
             Tab::Watchlist => {
                 self.watchlist.set_snapshot(self.desk.watch_state());
-                self.watchlist.paint_into(screen);
+                WatchlistComponent::paint_into(&self.watchlist, screen);
             }
             Tab::Research => {
-                self.research.paint_into(screen);
+                ResearchComponent::paint_into(&self.research, screen);
             }
-            Tab::Theses => self.theses.paint_into(screen),
+            Tab::Theses => ThesesComponent::paint_into(&self.theses, screen),
             Tab::Ask => delta_tui::screens::draw_ask_live(screen, &self.ask),
-            Tab::Decisions => self.decisions.paint(screen),
+            Tab::Decisions => DecisionsScreen::paint(&self.decisions, screen),
             Tab::Settings => {
                 self.settings
                     .sync_data(&self.desk.settings, &self.desk.settings_footer);
                 self.settings.set_palette(self.palette);
-                self.settings.paint_into(screen);
+                SettingsComponent::paint_into(&self.settings, screen);
             }
         }
         match &mut self.overlay {
@@ -303,15 +304,19 @@ impl App {
                             0,
                         );
                     } else {
-                        let width = delta_tui::dialog::MODAL_WIDTH.min(screen.w.saturating_sub(4));
-                        let height = (modal.form.height(width) + 5).min(screen.h.saturating_sub(2));
+                        let width =
+                            delta_tui::dialog::MODAL_WIDTH.min(screen.width().saturating_sub(4));
+                        let height =
+                            (modal.form.height(width) + 5).min(screen.height().saturating_sub(2));
                         let (x, y, w, _) = delta_tui::dialog::dialog_frame(screen, width, height);
                         screen.text(x, y, &modal.form.title, Style::fg(color::BLUE).bold());
                         modal.form.draw_screen(screen, x, y + 2, w);
                     }
                 } else {
-                    let width = delta_tui::dialog::MODAL_WIDTH.min(screen.w.saturating_sub(4));
-                    let height = (modal.form.height(width) + 5).min(screen.h.saturating_sub(2));
+                    let width =
+                        delta_tui::dialog::MODAL_WIDTH.min(screen.width().saturating_sub(4));
+                    let height =
+                        (modal.form.height(width) + 5).min(screen.height().saturating_sub(2));
                     let (x, y, w, _h) = delta_tui::dialog::dialog_frame(screen, width, height);
                     screen.text(x, y, &modal.form.title, Style::fg(color::BLUE).bold());
                     modal.form.draw_screen(screen, x, y + 2, w);
@@ -325,8 +330,10 @@ impl App {
                         modal.form.fields[1].value(),
                     );
                 } else {
-                    let width = delta_tui::dialog::MODAL_WIDTH.min(screen.w.saturating_sub(4));
-                    let height = (modal.form.height(width) + 5).min(screen.h.saturating_sub(2));
+                    let width =
+                        delta_tui::dialog::MODAL_WIDTH.min(screen.width().saturating_sub(4));
+                    let height =
+                        (modal.form.height(width) + 5).min(screen.height().saturating_sub(2));
                     let (x, y, w, _) = delta_tui::dialog::dialog_frame(screen, width, height);
                     screen.text(x, y, &modal.form.title, Style::fg(color::BLUE).bold());
                     modal.form.draw_screen(screen, x, y + 2, w);
@@ -353,7 +360,7 @@ impl App {
                 );
             }
             Some(Overlay::TargetPicker(targets, selected)) => {
-                let height = (targets.len() + 7).min(screen.h.saturating_sub(2));
+                let height = (targets.len() + 7).min(screen.height().saturating_sub(2));
                 let (x, y, w, _) = delta_tui::dialog::dialog_frame(screen, 58, height);
                 screen.text(x, y, "targets", Style::fg(color::BLUE).bold());
                 if targets.is_empty() {
@@ -382,8 +389,8 @@ impl App {
 
     /// A right-aligned live badge on the last row: quotes, gather status and
     /// the data source. Painted after the status bar, so it wins the cells.
-    fn paint_status_overlay(&mut self, screen: &mut Screen) {
-        let y = screen.h.saturating_sub(1);
+    fn paint_status_overlay(&mut self, screen: &mut impl PaintCanvas) {
+        let y = screen.height().saturating_sub(1);
         let mut label = String::new();
         if !self.desk.live.is_empty() {
             label.push_str(&format!("● live {}  ", self.desk.live.len()));
@@ -398,7 +405,7 @@ impl App {
             label.push_str(&format!("  ·  {}", self.status));
         }
         let style = Style::fg(color::GREEN);
-        let start = screen.w.saturating_sub(label.chars().count());
+        let start = screen.width().saturating_sub(label.chars().count());
         screen.text(start, y, &label, style);
     }
 }
@@ -2012,9 +2019,8 @@ impl Component for App {
             return; // degenerate terminal; the painters assume a status bar
         }
         self.viewport = (area.width, area.height);
-        let mut screen = Screen::themed(self.palette, area.width as usize, area.height as usize);
-        self.paint(&mut screen);
-        delta_tui::screen::blit(frame, &screen, area);
+        let mut canvas = FrameCanvas::new(frame, area, self.palette);
+        self.paint(&mut canvas);
     }
 }
 
@@ -2923,6 +2929,66 @@ mod tests {
             terminal.draw(|f| a.draw(f, f.area())).unwrap();
             a.overlay = Some(Overlay::Palette(CommandPalette::new()));
             terminal.draw(|f| a.draw(f, f.area())).unwrap();
+        }
+    }
+
+    #[test]
+    fn direct_app_frame_matches_oracle_tabs_and_overlays() {
+        use ratatui::{
+            layout::Rect,
+            style::{Color, Modifier},
+        };
+        for palette in [Palette::Dark, Palette::Light] {
+            for (width, height) in [(80u16, 24u16), (120, 40), (200, 50)] {
+                for tab in [
+                    Tab::Home,
+                    Tab::Watchlist,
+                    Tab::Research,
+                    Tab::Theses,
+                    Tab::Ask,
+                    Tab::Decisions,
+                    Tab::Settings,
+                ] {
+                    for overlay in 0..=10 {
+                        if overlay > 0 && tab != Tab::Settings {
+                            continue;
+                        }
+                        let mut app = app();
+                        app.tab = tab;
+                        app.palette = palette;
+                        app.overlay = match overlay {
+                            1 => Some(Overlay::Go),
+                            2 => Some(Overlay::Help(HelpDialog::default())),
+                            3 => Some(Overlay::Palette(CommandPalette::new())),
+                            4 => Some(Overlay::ProviderPicker(0)),
+                            5 => Some(Overlay::SettingsForm(model_form("test-model"))),
+                            6 => Some(Overlay::SettingsForm(thesis_form(None))),
+                            7 => Some(Overlay::DecisionForm(review_form("d1"))),
+                            8 => Some(Overlay::DecisionFilter("AAPL".into())),
+                            9 => Some(Overlay::TargetPicker(vec!["apple".into()], 0)),
+                            10 => Some(Overlay::AddTarget(String::new())),
+                            _ => None,
+                        };
+                        let area = Rect::new(1, 1, width, height);
+                        let mut oracle = Screen::themed(palette, width as usize, height as usize);
+                        app.paint(&mut oracle);
+                        let mut terminal =
+                            Terminal::new(TestBackend::new(width + 2, height + 2)).unwrap();
+                        terminal.draw(|frame| app.draw(frame, area)).unwrap();
+                        let buffer = terminal.backend().buffer();
+                        for y in 0..height as usize {
+                            for x in 0..width as usize {
+                                let want = &oracle.cells[y * width as usize + x];
+                                let got = &buffer[(area.x + x as u16, area.y + y as u16)];
+                                let fg = want.fg.map_or(Color::Reset, delta_tui::screen::hex_color);
+                                let bg = want.bg.map_or(Color::Reset, delta_tui::screen::hex_color);
+                                assert!(got.symbol() == want.ch.to_string() && got.fg == fg && got.bg == bg && got.modifier.contains(Modifier::BOLD) == want.bold,
+                                    "{palette:?} {tab:?} overlay={overlay} {width}x{height} ({x},{y}): got {got:?}, want {want:?}");
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 

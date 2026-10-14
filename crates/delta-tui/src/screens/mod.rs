@@ -44,6 +44,8 @@ pub use watchlist::{
     WatchEntry, WatchlistCommand, WatchlistComponent, WatchlistState, GLOSSARY_EQUITY, RANGES,
 };
 
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
+
 /// A pane rectangle in golden-Screen coordinates: `(x0, y0, x1, y1)` with
 /// `x1`/`y1` exclusive.
 pub type PaneRect = (usize, usize, usize, usize);
@@ -53,9 +55,9 @@ pub type PaneRect = (usize, usize, usize, usize);
 /// the last row/column, matching Textual's `1fr` stacking). The zoom
 /// helper picks one rect for a full-screen pane.
 ///
-/// This is the D2 layout grammar for the rebuilt screens: compute the
-/// rects from the terminal size, then hand each pane its rect — never
-/// fixed coordinates.
+/// The screen painters use this adapter while moving to `Rect`. Ratatui
+/// determines the pane geometry; the returned coordinates preserve the
+/// existing exclusive-end convention used by the golden painters.
 pub fn pane_layout(
     x0: usize,
     y0: usize,
@@ -64,43 +66,45 @@ pub fn pane_layout(
     row_heights: &[usize],
     col_widths: &[usize],
 ) -> Vec<Vec<PaneRect>> {
-    let width = x1.saturating_sub(x0);
-    let height = y1.saturating_sub(y0);
-    let col_total: usize = col_widths.iter().sum();
-    let row_total: usize = row_heights.iter().sum();
-    let mut col_starts = Vec::with_capacity(col_widths.len() + 1);
-    let mut x = x0;
-    for (index, w) in col_widths.iter().enumerate() {
-        col_starts.push(x);
-        let w = if index + 1 == col_widths.len() {
-            width.saturating_sub(col_total - w)
-        } else {
-            *w
-        };
-        x += w;
+    if row_heights.is_empty() || col_widths.is_empty() {
+        return Vec::new();
     }
-    col_starts.push(x1);
-    let mut row_starts = Vec::with_capacity(row_heights.len() + 1);
-    let mut y = y0;
-    for (index, h) in row_heights.iter().enumerate() {
-        row_starts.push(y);
-        let h = if index + 1 == row_heights.len() {
-            height.saturating_sub(row_total - h)
-        } else {
-            *h
-        };
-        y += h;
-    }
-    row_starts.push(y1);
-    (0..row_heights.len())
-        .map(|r| {
-            (0..col_widths.len())
-                .map(|c| {
+    let area = Rect::new(
+        x0 as u16,
+        y0 as u16,
+        x1.saturating_sub(x0) as u16,
+        y1.saturating_sub(y0) as u16,
+    );
+    let constraints = |sizes: &[usize]| {
+        sizes
+            .iter()
+            .enumerate()
+            .map(|(index, size)| {
+                if index + 1 == sizes.len() {
+                    Constraint::Min(0)
+                } else {
+                    Constraint::Length((*size).min(u16::MAX as usize) as u16)
+                }
+            })
+            .collect::<Vec<_>>()
+    };
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints(constraints(row_heights))
+        .split(area);
+    rows.iter()
+        .map(|row| {
+            Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints(constraints(col_widths))
+                .split(*row)
+                .iter()
+                .map(|rect| {
                     (
-                        col_starts[c],
-                        row_starts[r],
-                        col_starts[c + 1],
-                        row_starts[r + 1],
+                        rect.x as usize,
+                        rect.y as usize,
+                        rect.right() as usize,
+                        rect.bottom() as usize,
                     )
                 })
                 .collect()

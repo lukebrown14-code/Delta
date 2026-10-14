@@ -9,8 +9,10 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
 
-use crate::screen::{color, Screen, Style as CellStyle};
-use crate::theme::Theme;
+#[cfg(test)]
+use crate::screen::Screen;
+use crate::screen::{color, FrameCanvas, PaintCanvas, Style as CellStyle};
+use crate::theme::{Palette, Theme};
 use crate::{is_quit_key, Action, Component};
 
 /// The empty state: a muted `✓`/`!` glyph line plus a hint
@@ -302,15 +304,15 @@ impl CommandPalette {
     /// `▔`/`▁` borders, the surface input row (block cursor + placeholder),
     /// and two rows per hit (bold title, muted description) with the first
     /// hit on the `$block-cursor-blurred` highlight.
-    pub fn draw_screen(&self, screen: &mut Screen) {
+    pub fn draw_screen(&self, screen: &mut impl PaintCanvas) {
         use crate::screen::color;
         // The palette is a modal screen: it resolves the default fg behind
         // itself and dims the content (the exported rows outside the
         // strip carry the 60% blend).
         screen.dim();
-        let w = screen.w;
-        let top = 3usize.min(screen.h.saturating_sub(14));
-        let bottom = (top + 13).min(screen.h.saturating_sub(1));
+        let w = screen.width();
+        let top = 3usize.min(screen.height().saturating_sub(14));
+        let bottom = (top + 13).min(screen.height().saturating_sub(1));
         let border_top = CellStyle::fg(color::SCRIM_FG).bg(color::SCRIM_BG);
         let border_bottom = CellStyle::fg("#000000").bg(color::SCRIM_BG);
         let scrim = CellStyle::fg("#00ff00").bg(color::SCRIM_BG);
@@ -441,9 +443,8 @@ impl Component for CommandPalette {
     fn update(&mut self, _action: Action) {}
 
     fn draw(&mut self, frame: &mut Frame, area: Rect) {
-        let mut screen = Screen::new(area.width as usize, area.height as usize);
-        self.draw_screen(&mut screen);
-        crate::screen::blit(frame, &screen, area);
+        let mut canvas = FrameCanvas::new(frame, area, Palette::Dark);
+        self.draw_screen(&mut canvas);
     }
 }
 
@@ -645,7 +646,7 @@ impl ActionChip {
 
     /// Paint at `(x, y)`; returns the x after the chip's trailing margin
     /// (`margin: 0 1 0 0`).
-    pub fn draw_screen(&self, screen: &mut Screen, x: usize, y: usize) -> usize {
+    pub fn draw_screen(&self, screen: &mut impl PaintCanvas, x: usize, y: usize) -> usize {
         use crate::screen::color;
         let (bg, label_fg) = match self.state {
             ChipState::Normal | ChipState::Primary => (color::PANEL, color::MUTED),
@@ -715,7 +716,7 @@ impl StatusDot {
         self.state = state;
     }
 
-    pub fn draw_screen(&self, screen: &mut Screen, x: usize, y: usize) {
+    pub fn draw_screen(&self, screen: &mut impl PaintCanvas, x: usize, y: usize) {
         screen.put(x, y, '●', CellStyle::fg(self.state.color()));
     }
 }
@@ -775,7 +776,7 @@ impl Pill {
         }
     }
 
-    pub fn draw_screen(&self, screen: &mut Screen, x: usize, y: usize) -> usize {
+    pub fn draw_screen(&self, screen: &mut impl PaintCanvas, x: usize, y: usize) -> usize {
         screen.text(x, y, &self.text, CellStyle::fg(self.fg()))
     }
 }
@@ -798,7 +799,7 @@ impl KeyGrid {
 
     /// One key chip: ` key ` on the panel background, key bold blue
     /// (the exported KeyHint cells).
-    fn chip(screen: &mut Screen, x: usize, y: usize, key: &str) {
+    fn chip(screen: &mut impl PaintCanvas, x: usize, y: usize, key: &str) {
         screen.put(x, y, ' ', CellStyle::DEFAULT.bg(color::PANEL));
         screen.text(
             x + 1,
@@ -810,7 +811,13 @@ impl KeyGrid {
     }
 
     /// Paint at `(x, y)` across `w` columns; returns the height used.
-    pub fn draw_screen(&self, screen: &mut Screen, x: usize, y: usize, w: usize) -> usize {
+    pub fn draw_screen(
+        &self,
+        screen: &mut impl PaintCanvas,
+        x: usize,
+        y: usize,
+        w: usize,
+    ) -> usize {
         const GUTTER: usize = 1;
         const KEY_TRACK: usize = 8;
         let rows = self.items.len().div_ceil(2);
@@ -851,7 +858,7 @@ impl Scrollbar {
     /// Paint a 2-cell scrollbar at columns `x0..x0+2`, rows `y0..y0+bar`.
     #[allow(clippy::too_many_arguments)]
     pub fn draw_screen(
-        screen: &mut Screen,
+        screen: &mut impl PaintCanvas,
         x0: usize,
         y0: usize,
         bar: usize,
@@ -894,8 +901,8 @@ mod widget_tests {
     use crate::screen::color;
 
     fn row(screen: &Screen, y: usize) -> String {
-        (0..screen.w)
-            .map(|x| screen.cells[y * screen.w + x].ch)
+        (0..screen.width())
+            .map(|x| screen.cells[y * screen.width() + x].ch)
             .collect()
     }
 
@@ -1020,7 +1027,14 @@ impl OptionList {
     /// The highlighted row paints `$block-cursor-background` /
     /// `$block-cursor-foreground` full width (Textual's OptionList
     /// highlight), like the watchlist's exported rows.
-    pub fn draw_screen(&self, screen: &mut Screen, x: usize, y: usize, w: usize, visible: usize) {
+    pub fn draw_screen(
+        &self,
+        screen: &mut impl PaintCanvas,
+        x: usize,
+        y: usize,
+        w: usize,
+        visible: usize,
+    ) {
         // The window keeps the highlight on screen without jumping.
         let start = self.selected.saturating_sub(visible.saturating_sub(1)).min(
             self.options

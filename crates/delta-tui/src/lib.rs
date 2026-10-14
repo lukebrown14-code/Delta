@@ -162,9 +162,8 @@ pub trait Component {
 /// its own state, painted data-driven into a rect, keys first answering
 /// `Option<Action>` up to the app.
 ///
-/// The golden `crate::screen::Screen` cell grid stays the painter's model:
-/// screens paint into a `Screen` and blit (see `screen::blit`), which keeps
-/// every frame cell-for-cell what the goldens capture.
+/// Screens paint into a Ratatui frame. The owned golden surface remains an
+/// oracle for parity checks through `paint_into`.
 pub trait Screen {
     /// The registry name (`home`, `targets`, ...); drives Go, the palette
     /// and the status-bar highlight.
@@ -181,7 +180,10 @@ pub trait Screen {
         let _ = action;
     }
 
-    /// Paint the screen into `area`.
+    /// Paint into the owned oracle surface for golden parity.
+    fn paint_into(&self, screen: &mut crate::screen::Screen);
+
+    /// Paint directly into the Ratatui frame.
     fn draw(&mut self, frame: &mut Frame, area: Rect);
 }
 

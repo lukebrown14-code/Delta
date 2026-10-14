@@ -13,7 +13,10 @@ use ratatui::layout::Rect;
 use ratatui::Frame;
 
 use crate::input::DeltaInput;
-use crate::screen::{color, Screen, Style};
+#[cfg(test)]
+use crate::screen::Screen;
+use crate::screen::{color, FrameCanvas, PaintCanvas, Style};
+use crate::theme::Palette;
 use crate::{Action, Component};
 
 /// A validation rule: `Err(message)` marks the field invalid.
@@ -156,7 +159,13 @@ impl Form {
 
     /// Golden-model paint: one label row + input box (3 rows) + one error
     /// row per field, then the hint.
-    pub fn draw_screen(&self, screen: &mut Screen, x: usize, y: usize, w: usize) -> usize {
+    pub fn draw_screen(
+        &self,
+        screen: &mut impl PaintCanvas,
+        x: usize,
+        y: usize,
+        w: usize,
+    ) -> usize {
         let mut y = y;
         for (index, field) in self.fields.iter().enumerate() {
             let focused = index == self.focus;
@@ -199,9 +208,8 @@ impl Component for Form {
     fn update(&mut self, _action: Action) {}
 
     fn draw(&mut self, frame: &mut Frame, area: Rect) {
-        let mut screen = Screen::new(area.width as usize, area.height as usize);
-        self.draw_screen(&mut screen, 0, 0, area.width as usize);
-        crate::screen::blit(frame, &screen, area);
+        let mut canvas = FrameCanvas::new(frame, area, Palette::Dark);
+        self.draw_screen(&mut canvas, 0, 0, area.width as usize);
     }
 }
 

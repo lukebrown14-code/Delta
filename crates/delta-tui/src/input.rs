@@ -12,7 +12,9 @@ use ratatui::style::Style as RStyle;
 use ratatui::widgets::{Block, BorderType, Borders};
 use tui_textarea::TextArea as Inner;
 
-use crate::screen::{color, Screen, Style};
+#[cfg(test)]
+use crate::screen::Screen;
+use crate::screen::{color, PaintCanvas, Style};
 use crate::theme::Theme;
 use crate::{Action, Component};
 
@@ -87,7 +89,14 @@ impl DeltaInput {
     /// value left-aligned inside `padding: 0 2`, placeholder in
     /// `$text-disabled`, and a block cursor over the character at the
     /// caret (styled by `input-cursor-*`: value colours inverted).
-    pub fn draw_screen(&self, screen: &mut Screen, x: usize, y: usize, w: usize, focused: bool) {
+    pub fn draw_screen(
+        &self,
+        screen: &mut impl PaintCanvas,
+        x: usize,
+        y: usize,
+        w: usize,
+        focused: bool,
+    ) {
         self.draw_screen_masked(screen, x, y, w, focused, false);
     }
 
@@ -95,7 +104,7 @@ impl DeltaInput {
     /// value remains available to the form on submit but never enters cells.
     pub fn draw_screen_masked(
         &self,
-        screen: &mut Screen,
+        screen: &mut impl PaintCanvas,
         x: usize,
         y: usize,
         w: usize,
@@ -230,7 +239,7 @@ impl DeltaTextArea {
 
     pub fn draw_screen(
         &self,
-        screen: &mut Screen,
+        screen: &mut impl PaintCanvas,
         x: usize,
         y: usize,
         w: usize,
