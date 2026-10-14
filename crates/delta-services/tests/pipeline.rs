@@ -1,6 +1,7 @@
 //! Pipeline tests: ingest over a wiremock-served RSS feed and event
 //! extraction through the scripted LLM path.
 
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
@@ -11,7 +12,7 @@ use delta_llm::client::LlmClient;
 use delta_llm::providers::{CompletionRequest, Provider, ProviderError, ProviderResult};
 use delta_plugins::plugin::DataPlugin;
 use delta_plugins::RssData;
-use delta_services::pipeline::{extract_events, ingest};
+use delta_services::pipeline::{extract_events, ingest, ExtractResult, GatherResult, IngestResult};
 
 fn inst(id: &str, market: &str, symbol: &str, name: Option<&str>) -> Instrument {
     Instrument {
@@ -287,4 +288,27 @@ async fn extract_enforces_the_canonical_event_batch_schema() {
             .all(|f| f == &delta_services::schemas::event_batch()),
         "every extract call must carry the canonical EventBatch schema"
     );
+}
+
+/// The gather result is a value: it compares equal to an identical run and
+/// unequal the moment any stage's numbers differ (the TUI carries it as an
+/// action payload, which requires by-value comparison).
+#[test]
+fn gather_result_compares_by_value() {
+    let result = GatherResult {
+        ingested: IngestResult {
+            counts: BTreeMap::from([("newsitem".to_string(), 2)]),
+        },
+        extracted: ExtractResult {
+            events: 3,
+            instruments: 1,
+        },
+        sentiment: 4,
+        warnings: Vec::new(),
+    };
+    assert_eq!(result, result.clone());
+
+    let mut differing = result.clone();
+    differing.ingested.counts.insert("newsitem".to_string(), 5);
+    assert_ne!(result, differing);
 }
