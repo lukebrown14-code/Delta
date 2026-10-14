@@ -1,5 +1,4 @@
-//! The app: desk data + active pane, painting through the golden `Screen`
-//! model so the live frame is cell-for-cell what the goldens capture. Owns
+//! The app: desk data + active pane, painting into a Ratatui frame. Owns
 //! the event loop, worker startup, the Python-matching bindings, the shell
 //! modals (Go, help, palette) and the theme switch.
 

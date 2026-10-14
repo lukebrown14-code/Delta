@@ -606,10 +606,8 @@ impl Screen {
     }
 }
 
-/// Blit the golden `Screen` cell grid into a ratatui buffer (the live-frame
-/// bridge: the golden painters target the cell model, the terminal takes
-/// the buffer). Colour/attr parity matches what the exporter records:
-/// fg, bg and bold.
+/// Copy the owned oracle surface into a Ratatui buffer for parity tests.
+/// Production rendering writes through [`FrameCanvas`] instead.
 #[cfg(test)]
 pub fn blit(frame: &mut ratatui::Frame, screen: &Screen, area: ratatui::layout::Rect) {
     use ratatui::style::{Modifier, Style as RStyle};
