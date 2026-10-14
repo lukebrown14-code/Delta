@@ -260,7 +260,7 @@ impl PriceChart {
                 kind: RunKind::Axis,
             },
             Run {
-                text: " ".repeat(width.saturating_sub(rule_row.len())),
+                text: " ".repeat(width.saturating_sub(rule_row.chars().count())),
                 kind: RunKind::Blank,
             },
         ]);

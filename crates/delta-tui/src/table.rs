@@ -97,3 +97,81 @@ mod tests {
         assert_eq!(grid[2][0], ratatui::style::Color::Rgb(0x26, 0x4b, 0x96));
     }
 }
+
+/// The DataTable scroll state the screens own (`widgets.py::DeltaTable`
+/// inherits Textual's scrolling; the Rust port keeps it in a `TableState`
+/// with these desk-default moves: clamped cursor, offset following the
+/// cursor, header row preserved).
+#[derive(Debug, Clone, Default)]
+pub struct TableScroll {
+    pub state: TableState,
+    pub len: usize,
+}
+
+impl TableScroll {
+    pub fn new(len: usize) -> Self {
+        Self {
+            state: TableState::default(),
+            len,
+        }
+    }
+
+    pub fn selected(&self) -> Option<usize> {
+        self.state.selected()
+    }
+
+    pub fn select(&mut self, index: usize) {
+        self.state
+            .select(Some(index.min(self.len.saturating_sub(1))));
+    }
+
+    /// Cursor down, clamped to the rows (a table with no rows stays
+    /// unselected).
+    pub fn next(&mut self) {
+        if self.len == 0 {
+            return;
+        }
+        let current = self.state.selected().map_or(0, |i| i + 1);
+        self.state.select(Some(current.min(self.len - 1)));
+    }
+
+    pub fn previous(&mut self) {
+        let current = self.state.selected().unwrap_or(0);
+        self.state.select(Some(current.saturating_sub(1)));
+    }
+
+    /// Keep the viewport showing the cursor: ratatui scrolls the offset
+    /// itself when rendering with the same `TableState`, so this is only
+    /// needed for offset checks in tests.
+    pub fn offset(&self) -> usize {
+        self.state.offset()
+    }
+}
+
+#[cfg(test)]
+mod scroll_tests {
+    use super::*;
+
+    #[test]
+    fn cursor_clamps_at_both_ends() {
+        let mut table = TableScroll::new(3);
+        table.next();
+        table.next();
+        table.next();
+        table.next();
+        assert_eq!(table.selected(), Some(2), "down clamps at the last row");
+        table.previous();
+        table.previous();
+        table.previous();
+        table.previous();
+        assert_eq!(table.selected(), Some(0), "up clamps at the first row");
+        assert_eq!(table.offset(), 0);
+    }
+
+    #[test]
+    fn empty_table_stays_none() {
+        let mut table = TableScroll::new(0);
+        table.next();
+        assert_eq!(table.selected(), None);
+    }
+}

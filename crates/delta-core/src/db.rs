@@ -26,7 +26,8 @@ fn encode_ts(ts: NaiveDateTime) -> String {
     ts.format("%Y-%m-%d %H:%M:%S%.6f").to_string()
 }
 
-fn decode_ts(raw: &str) -> Option<NaiveDateTime> {
+/// Parse the stored datetime format (used by the services crate's raw SQL).
+pub fn decode_ts(raw: &str) -> Option<NaiveDateTime> {
     NaiveDateTime::parse_from_str(raw, "%Y-%m-%d %H:%M:%S%.f").ok()
 }
 
@@ -559,6 +560,59 @@ impl Db {
             })?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(rows)
+    }
+
+    /// Read access to the connection for crate-local analytics SQL.
+    pub fn conn(&self) -> &Connection {
+        &self.conn
+    }
+
+    /// Every stored event (read-side analytics).
+    pub fn events_all(&self) -> Result<Vec<Event>, DbError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, instrument_id, ts, kind, summary, sentiment, evidence_ids, extracted_by, prompt_version              FROM event",
+        )?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(Event {
+                    id: row.get(0)?,
+                    instrument_id: row.get(1)?,
+                    ts: decode_ts(&row.get::<_, String>(2)?).unwrap_or_default(),
+                    kind: crate::models::EventKind::parse(&row.get::<_, String>(3)?)
+                        .unwrap_or(crate::models::EventKind::Other),
+                    summary: row.get(4)?,
+                    sentiment: row.get(5)?,
+                    evidence_ids: from_json(row.get::<_, Option<String>>(6)?.as_deref()),
+                    extracted_by: row.get(7)?,
+                    prompt_version: row.get(8)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Every event id (extract's dedupe set).
+    pub fn event_ids(&self) -> Result<std::collections::BTreeSet<String>, DbError> {
+        let mut stmt = self.conn.prepare("SELECT id FROM event")?;
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows.into_iter().collect())
+    }
+
+    /// The newest stored bar timestamp (`MAX(ts)`), or None when empty.
+    pub fn bars_all_max_ts(&self) -> Result<Option<NaiveDateTime>, DbError> {
+        // An empty bar table yields one row with NULL; decode through a plain
+        // nullable Value so that is a None, not a type error.
+        let raw: rusqlite::types::Value = self
+            .conn
+            .query_row("SELECT MAX(ts) FROM bar", [], |row| row.get(0))
+            .optional()?
+            .unwrap_or(rusqlite::types::Value::Null);
+        Ok(match raw {
+            rusqlite::types::Value::Text(text) => decode_ts(&text),
+            _ => None,
+        })
     }
 
     pub fn table_count(&self, table: &str) -> Result<usize, DbError> {

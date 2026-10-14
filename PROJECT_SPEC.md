@@ -7,7 +7,11 @@
 > **Status:** Research assistant. Watch targets, evidence pool, cited reports,
 > grounded chat, theses and thesis health are all built and tested.
 > **Owner:** Luke
-> **Last rewritten:** 2026-09-16
+> **Implementation:** Rust workspace. Domain and provenance rules below remain
+> authoritative; the Python module map and examples describe the frozen V1
+> reference implementation. See `README.md` and `crates/` for current commands
+> and code locations.
+> **Last implementation update:** 2026-10-13
 
 ---
 
@@ -75,6 +79,12 @@ should fail a test.
 ---
 
 ## 3. Architecture
+
+The current implementation is a Rust workspace: `delta-core` owns models,
+config and SQLite; `delta-plugins` owns markets and sources; `delta-llm` owns
+model calls and prompts; `delta-services` owns workflows; `delta-tui` owns the
+terminal app and headless commands. The Python map below is retained to explain
+the original domain contracts and frozen parity fixtures.
 
 ```
 delta/
@@ -293,8 +303,8 @@ validation failure.
 
 ## 7. Surfaces
 
-**TUI** (`uv run delta`) — `1`–`5` Watchlist, Data, Reports, Theses, Chat;
-`c` Config; `h` Home; `m` model picker; `?` help; `q` quit. What is watched
+**TUI** (`cargo run -p delta-tui`) — `1`–`6` Home, Watchlist, Research,
+Theses, Ask, Decisions; `c` Settings; `?` help; `q` quit. What is watched
 is managed on the Watchlist panel; the command palette has a **Gather
 evidence** action (ingest + extract).
 
@@ -304,14 +314,13 @@ Reports are written to `reports/<target_id>/<YYYY-MM-DD>.md`.
 
 ## 8. Coding standards
 
-- Python 3.12+, type hints everywhere. `ruff` (line length 100) and
-  `mypy --strict` on `delta/core` and `delta/llm`.
+- Rust toolchain pinned in `rust-toolchain.toml`; use `cargo fmt --check` and
+  `cargo clippy --all-targets -- -D warnings`.
 - Async for I/O (fetching, LLM calls); sync for glue.
-- **No network in tests.** `respx` for HTTP, `FakeLLM` for the model provider.
+- **No network in tests.** Use frozen fixtures and mocked HTTP/model providers.
 - Conventional commits (`feat:`, `fix:`, `docs:`, `chore:`).
 - Never commit `.env`, `data/*.db` or `reports/`.
-- CI runs `ruff check`, `mypy --strict delta/core delta/llm` and `pytest` on
-  every push.
+- CI runs Rust format, Clippy and `cargo test --workspace` on every push.
 
 ---
 

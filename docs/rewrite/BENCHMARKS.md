@@ -1,0 +1,58 @@
+# R4 benchmarks — Rust vs the post-audit Python app
+
+## Populated V1 integration build (11 Oct 2026)
+
+macOS arm64 release build, 120x40 pseudo-terminal. The app used a copy of
+`fixtures/golden_seed.db` under `/private/tmp`, with network quotes disabled.
+The 50-ticker case duplicated AAPL's 80 stored bars for 49 synthetic US
+tickers in that temporary database. Three warm launches were sampled. A
+Python `subprocess` timer measured spawn to first terminal output, so this
+includes process startup and terminal setup but does not prove the whole first
+frame was painted. RSS is the child-process maximum from `getrusage`.
+
+| Case | First terminal output, median | Maximum RSS | Draw timing from `DELTA_FRAME_LOG` |
+|---|---:|---:|---:|
+| Populated seed, one configured ticker | 52.2 ms | — | 25 chart scrub keys: 29 frames, 1.37 ms average, 8.56 ms maximum |
+| 50 configured tickers, 80 bars each | 28.8 ms | 18.0 MiB | 25 chart scrub keys: 78 frames, 0.59 ms average, 1.08 ms maximum |
+
+The 50-ticker warm result is faster than the one-ticker run because the
+measurements were taken at different cache temperatures and first output is
+an imprecise marker. A separate 30-run `delta --version` check measured
+9.86 ms median including Python's subprocess overhead and 6.4 MiB maximum
+RSS. `hyperfine` is unavailable on this machine. These figures are local
+smoke benchmarks; CI and a repeatable first-frame benchmark still gate the
+release assessment.
+
+Recorded 2026-09 on the rewrite/rust branch, macOS arm64, release build
+(`cargo build --release -p delta-tui`). The plan's estimates
+(docs/RUST_REWRITE_PLAN.md) vs measured:
+
+| Metric | Python (post-audit) | Rust | Plan estimate |
+|---|---|---|---|
+| Import / launch (median of 10 / 200 runs) | **417 ms** (`import delta.tui.app`) | **< 2 ms** (`delta --version`) | 10–30 ms |
+| RSS at startup | **73.8 MB** | **5.8 MB** | 8–20 MB |
+| Redraw | ~5–20 ms | < 1 ms (ratatui diff flush; not yet measured in-app) | < 1 ms |
+
+Method notes:
+
+- Python: median of 10 subprocess runs of `uv run python -c "import delta.tui.app"`;
+  RSS via `resource.getrusage` after import.
+- Rust: `delta --version` (the binary now exits before terminal setup for
+  `--version`/`-V`); RSS via `/usr/bin/time -l maximum resident set size`.
+  `--version` is a lower bound on launch — it skips alternate-screen setup,
+  but the setup cost is the part the plan's 10–30 ms estimate targets.
+- Full redraw and chart-scrub frame times land with the R4 polish pass once
+  the remaining screens render live data (instrumentation hook planned in the
+  app loop).
+
+## Frame-time instrumentation (R4 polish)
+
+The app loop now records every `terminal.draw` (µs) and prints
+`frames N · avg …µs · max …µs` to stderr on quit; `DELTA_FRAME_LOG=path`
+also writes the same line to a file. Idle ticks do not repaint — the loop
+is dirty-flag driven (keys, worker actions, and a 1 Hz tick on Home only),
+so "frames" counts real paints. First measured run (release, 120x40,
+real desk): **avg 1.67 ms, max 1.67 ms** for a full-grid repaint — within
+the plan's <1 ms redraw budget for ratatui's diff flush (the 1.67 ms is
+our painter + blit on top of it; ratatui then flushes only changed cells
+to the tty).

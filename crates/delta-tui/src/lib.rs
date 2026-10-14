@@ -1,25 +1,73 @@
-//! Delta TUI: ratatui component-based terminal app (R0 skeleton + R1d widgets).
+//! Delta TUI: ratatui component-based terminal app (R0 skeleton + R1d
+//! widgets + R3.1a TUI foundations: Screen components, breakpoints, shell
+//! bindings, palette/help/Go modals, inputs, forms, markdown, light theme).
 
 pub mod axes;
 pub mod braille;
 pub mod chart;
 pub mod components;
+pub mod desk;
 pub mod dialog;
+pub mod form;
+pub mod input;
+pub mod keymap;
+pub mod markdown;
+pub mod screen;
+pub mod screens;
 pub mod table;
 pub mod theme;
+pub mod workers;
+pub mod wrap;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Rect;
 use ratatui::Frame;
 
+use std::collections::BTreeMap;
+
 /// Shared breakpoint carried over from `delta/tui/shell.py` (`NARROW_WIDTH`).
 pub const NARROW_WIDTH: u16 = 100;
+/// The wide breakpoint the shell painters use (>= 160 shows the wide
+/// layouts; the exported goldens pin this).
+pub const WIDE_WIDTH: u16 = 160;
+
+/// The shell breakpoints (`shell.py::NARROW_WIDTH` plus the wide layout the
+/// goldens capture): screens style against these, never their own width.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Breakpoint {
+    /// `width < NARROW_WIDTH`: panes stack, briefs replace lines.
+    Narrow,
+    /// `NARROW_WIDTH..WIDE_WIDTH`: the canonical 120x40 layout.
+    Normal,
+    /// `width >= WIDE_WIDTH`: panes grow, labels return to the status bar.
+    Wide,
+}
+
+impl Breakpoint {
+    pub fn from_width(width: u16) -> Self {
+        if width < NARROW_WIDTH {
+            Breakpoint::Narrow
+        } else if width >= WIDE_WIDTH {
+            Breakpoint::Wide
+        } else {
+            Breakpoint::Normal
+        }
+    }
+}
 
 /// A discrete app-level event flowing through the action bus.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Action {
     /// No state change.
     Noop,
+    /// Home selection or navigation, applied by the app to the desk.
+    Home(crate::screens::HomeCommand),
+    /// Watchlist navigation or a service-backed target operation.
+    Watchlist(crate::screens::WatchlistCommand),
+    /// A Decisions-screen intent; the app performs persistence and navigation.
+    Decision(crate::screens::decisions::DecisionCommand),
+    /// A Theses-screen intent; the app performs persistence or opens a form.
+    Theses(crate::screens::ThesesCommand),
     /// Shut the app down.
     Quit,
     /// Open a modal dialog by name.
@@ -28,12 +76,114 @@ pub enum Action {
     CloseDialog,
     /// Navigate to a screen by name.
     Goto(&'static str),
+    /// Navigate to a screen by registry name (the Go picker and palette).
+    GotoScreen(String),
+    /// Show the help modal (`?`).
+    ShowHelp,
+    /// Toggle light/dark (`f2`).
+    ToggleTheme,
+    /// Open the model picker (`m`; the picker screen lands with R3.2).
+    ShowModelPicker,
+    /// Open the provider picker (`p`; the picker screen lands with R3.2).
+    ShowProviderPicker,
+    /// A Settings screen request that needs an app-level service or modal.
+    SettingsCommand(crate::screens::SettingsCommand),
+    /// A form submitted successfully (carries the form title).
+    FormSubmitted(String),
+    /// Long-running thesis model calls are dispatched by the event loop.
+    ThesisFind(String),
+    ThesisSummarize(String),
+    ThesisFound(usize),
+    ThesisSummary(Box<delta_services::ThesisSummary>),
+    /// Live quote prices keyed by instrument id (from the quotes worker).
+    Quotes(BTreeMap<String, f64>),
+    /// Inspector metric rows (label, formatted value) for one instrument.
+    Metrics {
+        instrument: String,
+        rows: Vec<(String, String)>,
+    },
+    /// Asset-class-aware provider metrics and history for one instrument.
+    AssetMetrics {
+        range: String,
+        data: Box<delta_services::asset_metrics::AssetMetrics>,
+    },
+    /// Watchlist Add query; the event loop debounces and calls the search service.
+    TargetSearch {
+        generation: u64,
+        query: String,
+    },
+    /// Provider search completed; stale generations are ignored by the app.
+    TargetSearchResult {
+        generation: u64,
+        result: Result<Vec<delta_plugins::yahoo::SearchResult>, String>,
+    },
+    /// Ingest finished; carries per-source row counts.
+    Ingested(BTreeMap<String, usize>),
+    /// Refreshed Home overview values (headline, pulse, upcoming, health).
+    HomeRefresh(crate::screens::HomeFeed),
+    /// Request a gather run (UI -> ingest worker).
+    Gather,
+    /// Gather evidence for one selected company.
+    GatherCompany(String),
+    /// Generate the selected company's cited report on a background task.
+    GenerateReport,
+    /// Open a selected evidence source URL in the system browser.
+    OpenSource(String),
+    /// One-line worker status for the status overlay.
+    Status(String),
+    AskQuestion {
+        generation: u64,
+        history: Vec<delta_services::chat::ChatMessage>,
+        targets: Vec<String>,
+    },
+    /// Ask requests app-owned worker cancellation after clearing or escape.
+    AskAbortWorker,
+    /// Ask requests a service-backed evidence lookup for the chosen citation.
+    AskOpenCitation(String),
+    /// Ask requests the app-owned thesis form for its latest answer.
+    AskSaveAnswer,
+    AskAnswered {
+        generation: u64,
+        result: Result<delta_services::chat::ChatMessage, String>,
+        citation_labels: BTreeMap<String, String>,
+        sidebar_labels: BTreeMap<String, String>,
+    },
 }
 
 /// Ratatui component template (see `docs/RUST_REWRITE_PLAN.md`).
 pub trait Component {
     fn handle_key(&mut self, key: KeyEvent) -> Option<Action>;
     fn update(&mut self, action: Action);
+    fn draw(&mut self, frame: &mut Frame, area: Rect);
+}
+
+/// The screen-level component the R3.1a framework builds on
+/// (`docs/rewrite/tasks/r3-tui-foundations.md` item 1): a named screen with
+/// its own state, painted data-driven into a rect, keys first answering
+/// `Option<Action>` up to the app.
+///
+/// Screens paint into a Ratatui frame. The owned golden surface remains an
+/// oracle for parity checks through `paint_into`.
+pub trait Screen {
+    /// The registry name (`home`, `targets`, ...); drives Go, the palette
+    /// and the status-bar highlight.
+    fn name(&self) -> &'static str;
+
+    /// Handle a key before the app's own bindings; `None` falls through.
+    fn handle_key(&mut self, key: KeyEvent) -> Option<Action> {
+        let _ = key;
+        None
+    }
+
+    /// Apply a bus action.
+    fn update(&mut self, action: Action) {
+        let _ = action;
+    }
+
+    /// Paint into the owned oracle surface for golden parity.
+    fn paint_into(&self, screen: &mut crate::screen::Screen);
+
+    /// Paint directly into the Ratatui frame.
     fn draw(&mut self, frame: &mut Frame, area: Rect);
 }
 

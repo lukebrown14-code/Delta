@@ -1,0 +1,144 @@
+{
+  "summary": "Microsoft's cloud keeps compounding, but the capex bill is coming due.",
+  "bull_summary": "Cloud growth stays durable through the cycle.",
+  "bull": [
+    {
+      "text": "Cloud growth re-accelerated on the latest enterprise demand read.",
+      "evidence_ids": [
+        "news:news-msft-cloud"
+      ]
+    }
+  ],
+  "bear_summary": "Capex guidance compresses free-cash margins.",
+  "bear": [
+    {
+      "text": "Data-centre capex steps up faster than revenue into next year.",
+      "evidence_ids": [
+        "news:news-msft-capex"
+      ]
+    }
+  ],
+  "risks_summary": "The earnings print lands inside the horizon.",
+  "risks": [
+    {
+      "text": "Results can reprice the capex narrative either way.",
+      "evidence_ids": [
+        "event:event-msft-earnings"
+      ]
+    }
+  ],
+  "catalysts_summary": "Earnings inside the horizon.",
+  "catalysts": [
+    {
+      "text": "Results are scheduled inside the horizon.",
+      "evidence_ids": [
+        "event:event-msft-earnings"
+      ]
+    }
+  ],
+  "unknowns": [
+    "Capex payback timeline"
+  ],
+  "sentiment": 0.1,
+  "sentiment_reasons_summary": "Durable cloud demand offsets the capex step-up.",
+  "sentiment_reasons": [
+    {
+      "text": "Demand read and capex warnings roughly balance.",
+      "evidence_ids": [
+        "news:news-msft-cloud",
+        "news:news-msft-capex"
+      ]
+    }
+  ],
+  "target_id": "US:MSFT",
+  "as_of": "2026-09-21T09:30:00Z",
+  "prompt_version": "report_v2",
+  "citations": {
+    "event:event-msft-earnings": "[test] earnings: Q1 FY27 results",
+    "bar:160": "[test] US:MSFT close 113.48",
+    "bar:159": "[test] US:MSFT close 112.55",
+    "bar:158": "[test] US:MSFT close 111.29",
+    "bar:157": "[test] US:MSFT close 109.80",
+    "news:news-msft-cloud": "[rss] Enterprise cloud demand re-accelerates, channel checks say <https://example.com/news/msft-cloud>",
+    "bar:156": "[test] US:MSFT close 108.22",
+    "bar:155": "[test] US:MSFT close 106.70",
+    "bar:154": "[test] US:MSFT close 105.38",
+    "bar:153": "[test] US:MSFT close 104.38",
+    "bar:152": "[test] US:MSFT close 103.77",
+    "bar:151": "[test] US:MSFT close 103.60",
+    "news:news-msft-capex": "[rss] Microsoft steps up data-centre capex into next year <https://example.com/news/msft-capex>",
+    "bar:150": "[test] US:MSFT close 103.87",
+    "bar:149": "[test] US:MSFT close 104.50",
+    "bar:148": "[test] US:MSFT close 105.41",
+    "bar:147": "[test] US:MSFT close 106.46",
+    "bar:146": "[test] US:MSFT close 107.53",
+    "bar:145": "[test] US:MSFT close 108.45",
+    "bar:144": "[test] US:MSFT close 109.10",
+    "bar:143": "[test] US:MSFT close 109.38",
+    "bar:142": "[test] US:MSFT close 109.23",
+    "bar:141": "[test] US:MSFT close 108.65",
+    "bar:140": "[test] US:MSFT close 107.67",
+    "bar:139": "[test] US:MSFT close 106.36",
+    "bar:138": "[test] US:MSFT close 104.85",
+    "bar:137": "[test] US:MSFT close 103.27",
+    "bar:136": "[test] US:MSFT close 101.78",
+    "bar:135": "[test] US:MSFT close 100.50",
+    "bar:134": "[test] US:MSFT close 99.55",
+    "bar:133": "[test] US:MSFT close 99.01",
+    "bar:132": "[test] US:MSFT close 98.90",
+    "bar:131": "[test] US:MSFT close 99.23",
+    "bar:130": "[test] US:MSFT close 99.91",
+    "bar:129": "[test] US:MSFT close 100.85",
+    "bar:128": "[test] US:MSFT close 101.92",
+    "bar:127": "[test] US:MSFT close 102.96",
+    "bar:126": "[test] US:MSFT close 103.85",
+    "bar:125": "[test] US:MSFT close 104.45",
+    "bar:124": "[test] US:MSFT close 104.67",
+    "bar:123": "[test] US:MSFT close 104.46",
+    "bar:122": "[test] US:MSFT close 103.82",
+    "bar:121": "[test] US:MSFT close 102.78",
+    "bar:120": "[test] US:MSFT close 101.43",
+    "bar:119": "[test] US:MSFT close 99.90",
+    "bar:118": "[test] US:MSFT close 98.33",
+    "bar:117": "[test] US:MSFT close 96.85",
+    "bar:116": "[test] US:MSFT close 95.62",
+    "bar:115": "[test] US:MSFT close 94.73",
+    "bar:114": "[test] US:MSFT close 94.25",
+    "bar:113": "[test] US:MSFT close 94.21",
+    "bar:112": "[test] US:MSFT close 94.60",
+    "bar:111": "[test] US:MSFT close 95.32",
+    "bar:110": "[test] US:MSFT close 96.29",
+    "bar:109": "[test] US:MSFT close 97.37",
+    "bar:108": "[test] US:MSFT close 98.40",
+    "bar:107": "[test] US:MSFT close 99.25",
+    "bar:106": "[test] US:MSFT close 99.80",
+    "bar:105": "[test] US:MSFT close 99.96",
+    "bar:104": "[test] US:MSFT close 99.68",
+    "bar:103": "[test] US:MSFT close 98.97",
+    "bar:102": "[test] US:MSFT close 97.88",
+    "bar:101": "[test] US:MSFT close 96.50",
+    "bar:100": "[test] US:MSFT close 94.95",
+    "bar:99": "[test] US:MSFT close 93.38",
+    "bar:98": "[test] US:MSFT close 91.94",
+    "bar:97": "[test] US:MSFT close 90.75",
+    "bar:96": "[test] US:MSFT close 89.91",
+    "bar:95": "[test] US:MSFT close 89.50",
+    "bar:94": "[test] US:MSFT close 89.53",
+    "bar:93": "[test] US:MSFT close 89.97",
+    "bar:92": "[test] US:MSFT close 90.74",
+    "bar:91": "[test] US:MSFT close 91.74",
+    "bar:90": "[test] US:MSFT close 92.81",
+    "bar:89": "[test] US:MSFT close 93.83",
+    "bar:88": "[test] US:MSFT close 94.64",
+    "bar:87": "[test] US:MSFT close 95.14",
+    "bar:86": "[test] US:MSFT close 95.23",
+    "bar:85": "[test] US:MSFT close 94.89",
+    "bar:84": "[test] US:MSFT close 94.12",
+    "bar:83": "[test] US:MSFT close 92.97",
+    "bar:82": "[test] US:MSFT close 91.56",
+    "bar:81": "[test] US:MSFT close 90.00",
+    "fundamental:4": "[yahoo] Market cap: 3100000000000.00 (2026-06-30, yahoo)",
+    "fundamental:5": "[yahoo] P/E: 33.90 (2026-06-30, yahoo)",
+    "fundamental:6": "[yahoo] Gross margin: 69.80 (2026-06-30, yahoo)"
+  }
+}

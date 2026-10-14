@@ -1,6 +1,6 @@
 //! Offline plugin tests over `wiremock`, mirroring the Python plugin suites:
 //! `tests/test_rss.py`, `tests/test_sec_edgar.py`, `test_asx_announcements.py`
-//! reuse the same fixtures in `tests/fixtures/`.
+//! reuse the frozen Python reference fixtures in `fixtures/python_reference/`.
 
 use std::path::PathBuf;
 
@@ -13,7 +13,8 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 
 fn fixture(name: &str) -> Vec<u8> {
     std::fs::read(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!("../../tests/fixtures/{name}")),
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join(format!("../../fixtures/python_reference/{name}")),
     )
     .expect("fixture")
 }

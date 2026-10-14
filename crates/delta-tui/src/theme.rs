@@ -1,8 +1,12 @@
-//! Delta theme: resolved `delta-dark` tokens (port of `delta/tui/theme.py`).
+//! Delta theme: resolved `delta-dark` + `delta-light` tokens
+//! (port of `delta/tui/theme.py`).
 //!
 //! The plan requires widgets to take styles only from `Theme` — no inline
-//! colours. Values are the literal hex definitions from the Python theme
-//! (dark-only for the rewrite; the light variant is a post-cutover question).
+//! colours. Values are the literal hex definitions from the Python themes.
+//! Painters write the dark hexes (the constants below); [`Palette::Light`]
+//! remaps them at paint time through `delta-light`'s resolved table
+//! (`delta-light` pins text-muted/text-disabled and derives the rest —
+//! see `findings/rust-widgets.md` for the exported pair table).
 
 use ratatui::style::Color;
 
@@ -173,6 +177,87 @@ impl Theme {
             _ => hex_color(fallback),
         }
     }
+}
+
+/// One of the two installed themes (`THEMES` in `theme.py`): the app boots on
+/// dark and `f2` toggles.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Palette {
+    /// `delta-dark` (default).
+    #[default]
+    Dark,
+    /// `delta-light`.
+    Light,
+}
+
+/// Light-theme resolved hexes (`DELTA_LIGHT` in `delta/tui/theme.py` plus the
+/// tokens Textual derives for a light background). Keyed by the dark hex the
+/// painters write; see the pair table in `findings/rust-widgets.md`.
+const LIGHT_REMAP: &[(&str, &str)] = &[
+    // Ink + text pairs.
+    ("#264b96", "#0f7d93"), // primary/secondary/accent
+    ("#15803d", "#3f8f2b"), // success
+    ("#d97706", "#8e6a00"), // warning
+    ("#b91c1c", "#bf392b"), // error
+    ("#d4d4d4", "#22252a"), // foreground
+    ("#000000", "#f4f4ef"), // background
+    ("#0d0d0d", "#e9e9e1"), // surface
+    ("#1a1a1a", "#dddbcf"), // panel
+    ("#5b8def", "#095261"), // text-primary/secondary/accent (derived)
+    ("#22c55e", "#295e1c"), // text-success (derived)
+    ("#f87171", "#7e251c"), // text-error (derived)
+    ("#f59e0b", "#5e4500"), // text-warning (derived)
+    ("#8a8a8a", "#6b6e74"), // text-muted (pinned)
+    ("#5c5c5c", "#9a9da3"), // text-disabled (pinned)
+    ("#333333", "#e1e1d9"), // border-blurred (derived)
+    ("#ffffff", "#dfeef0"), // block-cursor-foreground (derived)
+    ("#5ccfe6", "#0f6d80"), // kind-news (pinned)
+    ("#ffd580", "#8a5a00"), // kind-filing (pinned)
+    ("#d7a1ff", "#7d3fa8"), // kind-event (pinned)
+    ("#7ee0c0", "#0a6b52"), // kind-fundamental (pinned)
+    ("#a8b2c8", "#5a6474"), // kind-price (pinned)
+];
+
+impl Palette {
+    /// The theme's name as Python reports it (`f"Theme: {self.theme}"`).
+    pub fn name(self) -> &'static str {
+        match self {
+            Palette::Dark => "delta-dark",
+            Palette::Light => "delta-light",
+        }
+    }
+
+    /// The active foreground (modal `dim()` needs it for cells with no fg).
+    pub fn foreground(self) -> &'static str {
+        match self {
+            Palette::Dark => Theme::FOREGROUND.hex,
+            Palette::Light => "#22252a",
+        }
+    }
+
+    /// The active background.
+    pub fn background(self) -> &'static str {
+        match self {
+            Palette::Dark => Theme::BACKGROUND.hex,
+            Palette::Light => "#f4f4ef",
+        }
+    }
+
+    /// Remap a dark token hex into this palette (identity on dark).
+    pub fn remap(self, dark_hex: &'static str) -> &'static str {
+        match self {
+            Palette::Dark => dark_hex,
+            Palette::Light => light_hex(dark_hex),
+        }
+    }
+}
+
+/// `delta-light` hex for a dark token hex (see `LIGHT_REMAP`).
+fn light_hex(dark_hex: &'static str) -> &'static str {
+    LIGHT_REMAP
+        .iter()
+        .find(|(dark, _)| *dark == dark_hex)
+        .map_or(dark_hex, |(_, light)| *light)
 }
 
 #[cfg(test)]

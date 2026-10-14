@@ -24,3 +24,13 @@ Stream: `delta-plugins`. Reviewed against `delta/core/plugin.py`, `delta/plugins
 | 5 | gap | `yfinance_calendar.py` | Not ported: it maps pandas date objects from yfinance's calendar; it lands with R2 once the Yahoo quoteSummary `calendarEvents` module consumer (extract flow) is ported. `calendar_event_id` and the kind mapping are stable and small |
 | 6 | parity | `markets.rs` timezones | Python uses `ZoneInfo("America/New_York")` (DST-aware); the Rust port pins EST (-5) — wrong by an hour in summer. Fixed properly in R2/R3 with a tz database (add `jiff` or `chrono-tz` then; asking first per AGENTS.md dependency rule) |
 | 7 | parity | `rss.rs` IDs | `news_id` replicates Python `isoformat()` including the zero-micros omission; covered by the shared ID contract tests in delta-core |
+
+## Fixed
+
+- **#6 (timezones) — fixed in fea6a76** (R3.1c, decision D5): `markets.rs`
+  uses `chrono-tz` — US = `America/New_York`, ASX = `Australia/Sydney`. Both
+  `next_open`s do wall-clock day arithmetic like Python's `timedelta`, so the
+  local open survives each DST shift; ASX `next_open` also regains Python's
+  same-day open when queried before 10:00. Sessions and `next_open` are
+  tested on both sides of the 2026 US (Mar 8 / Nov 1) and Australian
+  (Apr 5 / Oct 4) transitions in `crates/delta-plugins/tests/markets_dst.rs`.

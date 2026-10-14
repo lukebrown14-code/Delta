@@ -135,26 +135,141 @@ pub fn load_toml(path: &Path) -> Result<BTreeMap<String, Value>, ConfigError> {
 /// Load `path`, let `mutator` change the raw TOML, and write it back.
 ///
 /// The one place a config change is persisted (matches `update_config` in
-/// Python, including the write-it-all-out format rather than preserving
-/// comments).
+/// Python). Unlike the Python writer (a full `tomli_w` rewrite, D6), the file
+/// is edited in place with `toml_edit`: comments and key order of untouched
+/// entries survive; only changed/added keys are re-formatted.
 pub fn update_config<F>(mutator: F, path: &Path) -> Result<BTreeMap<String, Value>, ConfigError>
 where
     F: FnOnce(&mut BTreeMap<String, Value>),
 {
-    let mut raw = load_toml(path)?;
-    mutator(&mut raw);
-    std::fs::write(
-        path,
-        toml::to_string_pretty(&raw).map_err(|e| ConfigError::Parse {
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(source) => {
+            return Err(ConfigError::Io {
+                path: path.to_path_buf(),
+                source,
+            });
+        }
+    };
+    let before = if text.is_empty() {
+        BTreeMap::new()
+    } else {
+        toml::from_str(&text).map_err(|e| ConfigError::Parse {
             path: path.to_path_buf(),
             message: e.to_string(),
-        })?,
-    )
-    .map_err(|source| ConfigError::Io {
+        })?
+    };
+    let mut raw = before.clone();
+    mutator(&mut raw);
+
+    // Replay only the diff onto the format-preserving document.
+    let mut doc: toml_edit::DocumentMut =
+        text.parse()
+            .map_err(|e: toml_edit::TomlError| ConfigError::Parse {
+                path: path.to_path_buf(),
+                message: e.to_string(),
+            })?;
+    apply_map(doc.as_table_mut(), &to_map(&before), &to_map(&raw));
+    std::fs::write(path, doc.to_string()).map_err(|source| ConfigError::Io {
         path: path.to_path_buf(),
         source,
     })?;
     Ok(raw)
+}
+
+fn to_map(map: &BTreeMap<String, Value>) -> serde_json::Map<String, Value> {
+    map.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
+}
+
+/// Replay the `before -> after` change set onto a `toml_edit` table, so
+/// untouched keys keep their comments and ordering. Both maps are the parsed
+/// `config.toml`; equal subtrees are skipped, changed values are written in
+/// place, removed keys are dropped, and new tables become standard tables.
+fn apply_map(
+    table: &mut toml_edit::Table,
+    before: &serde_json::Map<String, Value>,
+    after: &serde_json::Map<String, Value>,
+) {
+    for key in before.keys() {
+        if !after.contains_key(key) {
+            table.remove(key);
+        }
+    }
+    for (key, new) in after {
+        match (before.get(key), new) {
+            (Some(old), n) if old == n => {}
+            (Some(Value::Object(old_map)), Value::Object(new_map)) => match table.get_mut(key) {
+                Some(toml_edit::Item::Table(sub)) => apply_map(sub, old_map, new_map),
+                // Shape changed or the entry is an inline table/array-of-tables:
+                // replace wholesale.
+                Some(slot) => *slot = json_to_item(new),
+                None => {
+                    table.insert(key.as_str(), json_to_item(new));
+                }
+            },
+            // Existing value: swap in place, keeping the key's decor (the
+            // comment lines above it) and the value's spacing. Going through
+            // `Table::insert` would re-format the key and drop its comments.
+            (Some(_), _) => match table.get_mut(key) {
+                Some(slot @ toml_edit::Item::Value(_)) => {
+                    let replacement = json_to_item(new);
+                    let decor = slot.as_value().map(toml_edit::Value::decor).cloned();
+                    *slot = replacement;
+                    if let (Some(v), Some(decor)) = (slot.as_value_mut(), decor) {
+                        *v.decor_mut() = decor;
+                    }
+                }
+                Some(slot) => *slot = json_to_item(new),
+                None => unreachable!("key is present in `before`"),
+            },
+            (None, _) => {
+                table.insert(key.as_str(), json_to_item(new));
+            }
+        }
+    }
+}
+
+/// `serde_json::Value` -> `toml_edit` item; objects become standard tables
+/// (`[section]`), everything else keeps its natural scalar/array form.
+fn json_to_item(value: &Value) -> toml_edit::Item {
+    match value {
+        Value::Object(map) => {
+            let mut t = toml_edit::Table::new();
+            for (k, v) in map {
+                t.insert(k.as_str(), json_to_item(v));
+            }
+            toml_edit::Item::Table(t)
+        }
+        scalar => toml_edit::value(json_scalar(scalar)),
+    }
+}
+
+/// A non-object `Value` as a `toml_edit` value (arrays nest inline).
+fn json_scalar(value: &Value) -> toml_edit::Value {
+    match value {
+        Value::Null => toml_edit::Value::from(""),
+        Value::Bool(b) => toml_edit::Value::from(*b),
+        Value::Number(n) => n
+            .as_i64()
+            .map(toml_edit::Value::from)
+            .unwrap_or_else(|| toml_edit::Value::from(n.as_f64().unwrap_or_default())),
+        Value::String(s) => toml_edit::Value::from(s.as_str()),
+        Value::Array(items) => {
+            let mut array = toml_edit::Array::new();
+            for item in items {
+                array.push(json_scalar(item));
+            }
+            toml_edit::Value::from(array)
+        }
+        Value::Object(map) => {
+            let mut inline = toml_edit::InlineTable::new();
+            for (k, v) in map {
+                inline.insert(k.as_str(), json_scalar(v));
+            }
+            toml_edit::Value::from(inline)
+        }
+    }
 }
 
 /// Merge `[targets]` and legacy `[watchlists]` tables, then the `[universe]`
@@ -441,5 +556,94 @@ mod tests {
         let raw = load_toml(&path).unwrap();
         assert_eq!(raw["base_currency"], "AUD");
         assert_eq!(raw["plugins"]["sec_edgar"]["contact"], "a@b.c");
+    }
+
+    /// D6 (finding rust-core #3): writes are `toml_edit` edits, so comments
+    /// and key order of untouched entries survive the round trip.
+    #[test]
+    fn update_config_preserves_comments_and_key_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let original = "\
+# The reporting currency for every portfolio figure.
+base_currency = \"USD\"
+
+[llm]
+# Which provider serves the default route.
+provider = \"openrouter\"
+model = \"openai/gpt-4o-mini\"
+
+[plugins.sec_edgar]
+# SEC User-Agent rule: a real contact is required.
+contact = \"a@b.c\"
+";
+        std::fs::write(&path, original).unwrap();
+
+        update_config(
+            |raw| {
+                // Change an existing scalar under a comment.
+                if let Some(llm) = raw.get_mut("llm").and_then(Value::as_object_mut) {
+                    llm.insert("model".to_string(), Value::from("anthropic/claude"));
+                }
+                // Add a brand-new nested table.
+                raw.insert(
+                    "universe".to_string(),
+                    serde_json::json!({"us": ["AAPL", "MSFT"]}),
+                );
+            },
+            &path,
+        )
+        .unwrap();
+
+        let text = std::fs::read_to_string(&path).unwrap();
+        // Comments on untouched keys survive.
+        assert!(text.contains("# The reporting currency for every portfolio figure."));
+        assert!(text.contains("# Which provider serves the default route."));
+        assert!(text.contains("# SEC User-Agent rule: a real contact is required."));
+        // Untouched order preserved: base_currency before [llm] before plugins.
+        let base = text.find("base_currency").unwrap();
+        let llm = text.find("[llm]").unwrap();
+        let model = text.find("model = \"anthropic/claude\"").unwrap();
+        let sec = text.find("[plugins.sec_edgar]").unwrap();
+        assert!(base < llm && llm < model && model < sec);
+        // And the file still parses back to the expected values.
+        let raw = load_toml(&path).unwrap();
+        assert_eq!(raw["llm"]["model"], "anthropic/claude");
+        assert_eq!(raw["llm"]["provider"], "openrouter");
+        assert_eq!(raw["universe"]["us"][0], "AAPL");
+        assert_eq!(raw["base_currency"], "USD");
+    }
+
+    #[test]
+    fn update_config_removes_keys_and_new_file_writes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            "[markets]\n[markets.custom]\nlabel = \"Custom\"\ncurrency = \"EUR\"\n",
+        )
+        .unwrap();
+        update_config(
+            |raw| {
+                if let Some(markets) = raw.get_mut("markets").and_then(Value::as_object_mut) {
+                    markets.remove("custom");
+                }
+            },
+            &path,
+        )
+        .unwrap();
+        let raw = load_toml(&path).unwrap();
+        assert!(raw.get("markets").is_none_or(|m| m.get("custom").is_none()));
+
+        // A missing file is created.
+        let fresh = dir.path().join("fresh.toml");
+        update_config(
+            |raw| {
+                raw.insert("base_currency".to_string(), Value::from("AUD"));
+            },
+            &fresh,
+        )
+        .unwrap();
+        assert_eq!(load_toml(&fresh).unwrap()["base_currency"], "AUD");
     }
 }

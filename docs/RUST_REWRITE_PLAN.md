@@ -2,6 +2,8 @@
 
 _Written 23 September 2026. Not started: begins after `docs/UI_UX_AUDIT.md` is complete._
 
+_Status, 4 October 2026: R0–R2 ported, R3 partly done. Remaining work, decisions D1–D13 and task cards: `docs/rewrite/REMAINING.md`._
+
 ## Context
 Goal: make Delta beautiful and very performant. After investigating Go and Rust, **Rust + Ratatui** was chosen:
 - Go + Bubble Tea is quicker to build and has prettier forms, but it redraws the whole view as a string each frame.
