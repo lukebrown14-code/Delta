@@ -8,6 +8,7 @@ pub mod chart;
 pub mod components;
 pub mod desk;
 pub mod dialog;
+pub mod dossier_command;
 pub mod form;
 pub mod input;
 pub mod keymap;
