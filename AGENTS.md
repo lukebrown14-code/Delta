@@ -1,8 +1,8 @@
 # AGENTS
 
-Delta is a Rust terminal app for personal investment research. Data plugins gather evidence into SQLite; model services produce cited reports and answers; theses and decisions track longer-term ideas.
+Delta is a Rust terminal app: a personal store of AI-processed investment research organised by Space. An external harness (Claude Code, Codex) researches and writes through Delta's MCP server; Delta validates, stores and shows it.
 
-Read `PROJECT_SPEC.md` before changing domain contracts, plugin behavior, or provenance rules. `docs/rewrite/` records Rust migration decisions and frozen Python parity references.
+`PROJECT_SPEC.md` specifies this V2; the code in `crates/` is still V1 (targets, theses, in-app reports and chat), and spec §16 maps what survives. Read it before changing domain contracts, data sources, or provenance rules. `docs/rewrite/` records Rust migration decisions and frozen Python parity references.
 
 ## Commands
 
@@ -25,7 +25,7 @@ cargo build --release -p delta-tui    # release binary
 - `fixtures/`: frozen offline data and Python screen oracle. `docs/rewrite/`: cutover evidence.
 - `data/` and `reports/`: local generated output; never commit.
 
-Screens call services; providers and storage stay behind service boundaries. Network and model work runs asynchronously through workers. Keep evidence ID validation on report claims and chat answers. Thesis candidates require user acceptance before they affect health.
+Screens call services; providers and storage stay behind service boundaries. Network and model work runs asynchronously through workers. Every report write passes citation validation. Notes, trades and other user records are written by the user only.
 
 ## Testing and edits
 
